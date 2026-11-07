@@ -1,6 +1,6 @@
-# Self-healing support agent
+# Shipwright
 
-Lexsi AI Safety and Alignment Hackathon, Track 3, problem statement 8.
+A self-healing support agent. Lexsi AI Safety and Alignment Hackathon, Track 3, problem statement 8.
 
 A tool-calling support agent on Tiny Aya Global that finds its own failed runs, classifies why they
 failed, fixes the tool or retrains the model, and redeploys only when AuditKIT shows it is better.
