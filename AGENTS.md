@@ -12,7 +12,7 @@ and gate redeployment on measured accuracy."
 - Agent: a customer support tool-calling agent (tau2-bench retail / airline style).
 - Student model: Tiny Aya Global (`CohereLabs/tiny-aya-global`, 3.35B) with LoRA.
 - The loop: run, log, detect, classify, route (tool fix / weight fix / no fix), gate, promote or roll back.
-- Diagram: `system-design.html`. Background and research: `NOTES.md`. Cloud setup: `GCP_SETUP.md`.
+- Diagram: `docs/system-design.html`. Background and research: `docs/notes.md`. Cloud setup: `docs/gcp-setup.md`.
 
 ## Hard rules (break one and the submission can be disqualified)
 
@@ -40,7 +40,7 @@ and the tool-fix vs weight-fix comparison.
 - Three frozen task splits: **train pool** (the loop learns from it), **held-out** (the gate scores
   on it), **hidden** (opened once, for the final report). Never train on held-out or hidden tasks.
 - Frozen before round 1: failure label list, gate thresholds, k for pass^k, seeds, teacher and judge
-  model versions. To change one, write the change and the reason in `NOTES.md` first.
+  model versions. To change one, write the change and the reason in `docs/notes.md` first.
 - The gate never approves by default. Too few test runs means reject.
 - Every round appends one row to `metrics.jsonl`.
 
@@ -59,7 +59,7 @@ and the tool-fix vs weight-fix comparison.
 - Label every GCP resource `app=lexsi-hackathon`.
 - **Budget:** alerts every Rs 500. **At Rs 3000 per month, billing switches off for the whole project**
   and everything in it stops. Cost data lags hours, so stop GPU machines as soon as a job ends.
-- **New GCP projects have 0 GPU quota.** Request it before you plan a GPU run (see `GCP_SETUP.md`).
+- **New GCP projects have 0 GPU quota.** Request it before you plan a GPU run (see `docs/gcp-setup.md`).
 - Use Spot VMs for GPU work and save checkpoints often.
 - **HF Jobs** (paid from the HF credits): **a job stops after 30 minutes by default. Always pass a
   timeout** (`hf jobs run --timeout 2h ...`, or `timeout=` in Python). A job uses the credits of the
@@ -72,6 +72,16 @@ and the tool-fix vs weight-fix comparison.
 - Never commit a token or key. Use GCP Secret Manager or HF Job secrets.
 - `.env` is git-ignored. Keep it that way.
 - If a secret is pasted into chat, a commit or a log, rotate it.
+
+## Repo layout (keep the root clean)
+
+- Root: only `README.md`, `AGENTS.md`, `CLAUDE.md`, config files (`.gitignore`, `pyproject.toml`) and top-level dirs.
+- `docs/`: notes, guides, diagrams, the write-up draft.
+- `infra/`: cloud functions and setup scripts.
+- `src/`, `tests/`, `scripts/`: code, when it exists.
+- Never commit: generated data, model weights, checkpoints, `runs/` output, notebooks with large outputs,
+  `.env`, scratch files. Generated artifacts go to HF, not git. Add new patterns to `.gitignore`.
+- One topic per commit, with a message that says what changed. No "wip" or "fix" commits on `main`.
 
 ## Working style
 
@@ -98,7 +108,7 @@ This file corrects itself through you. In the same change as your work:
    with the date and the fix.
 3. **You made a decision that later agents must follow** (a frozen value, a file format, a split):
    add it to the section it belongs to.
-4. **You find a duplicate or a contradiction** between this file, `NOTES.md` and `GCP_SETUP.md`:
+4. **You find a duplicate or a contradiction** between this file, `docs/notes.md` and `docs/gcp-setup.md`:
    keep the fact in one place and point to it from the others.
 
 Keep entries short: one fact per line. Delete a trap when the cause is gone.
