@@ -3,163 +3,236 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Self-healing support agent - system design (draft)</title>
+<title>Self-healing support agent - system diagram (draft)</title>
 <style>
-  :root {
-    --bg: #f6f4ef; --ink: #1d1d1b; --muted: #6b6860; --line: #d8d3c7; --card: #fffdf8;
-    --run: #2f6f5e; --detect: #8a5a1f; --tool: #2b5d8a; --weight: #7a3b3b; --env: #6b6860; --gate: #3d3d8a;
-  }
+  :root { --bg:#f6f4ef; --ink:#1d1d1b; --muted:#6b6860; --line:#d8d3c7; --card:#fffdf8; }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink);
-         font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  main { max-width: 1120px; margin: 0 auto; padding: 40px 24px 80px; }
-  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; }
-  h2 { font-size: 17px; margin: 44px 0 12px; }
-  .sub { color: var(--muted); margin: 0 0 24px; }
-  .tag { display: inline-block; font: 600 11px/1 ui-monospace, Menlo, monospace; padding: 4px 6px;
-         border: 1px solid var(--line); border-radius: 4px; background: var(--card); margin-right: 4px; }
-  .lib { border-color: var(--ink); }
-  code { font: 13px ui-monospace, Menlo, monospace; background: #ece8de; padding: 1px 4px; border-radius: 3px; }
-
-  /* flow */
-  .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
-  .node { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--c, var(--ink));
-          border-radius: 6px; padding: 12px 14px; position: relative; }
-  .node h3 { margin: 0 0 4px; font-size: 14px; }
-  .node .n { font: 600 11px ui-monospace, Menlo, monospace; color: var(--c, var(--muted)); }
-  .node p { margin: 4px 0 8px; font-size: 13px; color: #3a3935; }
-  .arrow { text-align: center; color: var(--muted); font: 13px ui-monospace, Menlo, monospace; margin: 8px 0; }
-
-  .router { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-  .branch { background: var(--card); border: 1px solid var(--line); border-top: 4px solid var(--c); border-radius: 6px; padding: 12px 14px; }
-  .branch h3 { margin: 0 0 6px; font-size: 14px; color: var(--c); }
-  .branch ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
-
-  .gate { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--gate);
-          border-radius: 6px; padding: 14px 16px; display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; }
-  .gate h3 { margin: 0 0 6px; color: var(--gate); font-size: 14px; }
-  .gate ul { margin: 0; padding-left: 18px; font-size: 13px; }
-  .loopback { border: 1px dashed var(--muted); border-radius: 6px; padding: 10px 14px; margin-top: 14px;
-              font-size: 13px; color: var(--muted); }
-
-  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); font-size: 13px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { background: #efebe2; font-weight: 600; }
-  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  .box { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; font-size: 13px; }
-  .box h3 { margin: 0 0 6px; font-size: 14px; }
-  .box ul { margin: 0; padding-left: 18px; }
-  .note { font-size: 12px; color: var(--muted); margin-top: 8px; }
-  @media (max-width: 860px) { .flow, .router, .two, .gate { grid-template-columns: 1fr; } }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.5 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width:1180px; margin:0 auto; padding:32px 20px 64px; }
+  h1 { font-size:24px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:36px 0 10px; }
+  .sub { color:var(--muted); margin:0 0 18px; }
+  svg { width:100%; height:auto; display:block; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  svg text { font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; fill:#2a2925; font-size:12.5px; }
+  svg .t { font-weight:650; font-size:13.5px; fill:var(--ink); }
+  svg .k { font:600 10.5px ui-monospace,Menlo,monospace; letter-spacing:.04em; }
+  svg .lib { font:600 10.5px ui-monospace,Menlo,monospace; fill:var(--muted); }
+  svg .lbl { font-size:11.5px; fill:var(--muted); }
+  .box { stroke-width:1.2; rx:7; }
+  .wire { fill:none; stroke:#8d897f; stroke-width:1.4; marker-end:url(#a); }
+  .dash { stroke-dasharray:5 4; }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); font-size:13px; }
+  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { background:#efebe2; }
+  ul { margin:0; padding-left:18px; font-size:13.5px; }
 </style>
 </head>
 <body>
 <main>
-
 <h1>Self-healing support agent</h1>
-<p class="sub">Lexsi hackathon, Track 3, problem statement 8. Draft system design, 2026-11-08. Nothing here is built yet.</p>
-<p>
-  <span class="tag lib">AgentTune</span><span class="tag lib">AuditKIT</span><span class="tag">CuratorKIT (optional)</span>
-  <span class="tag">Tiny Aya Global 3.35B + LoRA</span><span class="tag">tau2-bench retail / airline</span>
-</p>
+<p class="sub">Lexsi hackathon, Track 3, problem statement 8. Draft, 2026-11-08. Nothing is built yet.</p>
 
-<h2>1. One loop round</h2>
-<div class="flow">
-  <div class="node" style="--c: var(--run)"><div class="n">01 RUN</div><h3>Agent runs tasks</h3>
-    <p>Tiny Aya + current LoRA works through the training task pool with the support tools.</p>
-    <span class="tag">AgentTune Project</span></div>
-  <div class="node" style="--c: var(--run)"><div class="n">02 LOG</div><h3>Trace store</h3>
-    <p>One <code>audit.jsonl</code> record per tool call: args, result, status, outcome.</p>
-    <span class="tag">EventLog</span><span class="tag">HF dataset</span></div>
-  <div class="node" style="--c: var(--detect)"><div class="n">03 DETECT</div><h3>Pass or fail</h3>
-    <p>Outcome oracle checks the final DB state. Rules catch loops, bad JSON, unknown tools.</p>
-    <span class="tag">FailureDetector</span><span class="tag">AuditKIT oracle</span></div>
-  <div class="node" style="--c: var(--detect)"><div class="n">04 CLASSIFY</div><h3>Why it failed</h3>
-    <p>Rules first, then an LLM judge. One label per failure from a fixed list.</p>
-    <span class="tag">FailureClassifier</span></div>
-</div>
+<svg viewBox="0 0 1120 1230" role="img" aria-label="System diagram of the self-healing loop">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8d897f"/>
+    </marker>
+  </defs>
 
-<div class="arrow">the label picks the fix</div>
+  <!-- section labels -->
+  <text x="20" y="22" class="k" fill="#2f6f5e">RUN AND OBSERVE</text>
+  <text x="20" y="292" class="k" fill="#8a5a1f">ROUTE BY FAILURE TYPE</text>
+  <text x="20" y="772" class="k" fill="#3d3d8a">GATE AND REDEPLOY</text>
+  <text x="20" y="1092" class="k" fill="#6b6860">INFRASTRUCTURE</text>
 
-<h2>2. Route by failure type</h2>
-<div class="router">
-  <div class="branch" style="--c: var(--tool)"><h3>Tool fault: patch the tool</h3>
-    <ul><li>Unclear tool description, loose schema, missing argument check.</li>
-        <li>Fix: edit the tool spec or add validation. No training.</li>
-        <li>Every patch goes in a ledger with a before/after snapshot, so the gate can roll it back.</li>
-        <li>Cheapest fix, so it runs first. Failures that remain go right.</li></ul></div>
-  <div class="branch" style="--c: var(--weight)"><h3>Model fault: retrain</h3>
-    <ul><li>Wrong tool, bad argument format, wrong order, loop, policy break, invented answer.</li>
-        <li>Teacher (Claude / GPT) replays the task from the first wrong step and writes a fixed run.</li>
-        <li>Keep only fixed runs that pass the oracle. Drop the rest.</li>
-        <li>Curate: dedupe, balance by label, mix in old passing runs (replay).</li>
-        <li>AgentTune <code>create_distill_trainer</code> trains a new LoRA.</li></ul></div>
-  <div class="branch" style="--c: var(--env)"><h3>Environment fault: no fix</h3>
-    <ul><li>Timeout, API error, missing data, user-simulator mistake.</li>
-        <li>Retry or skip. Never train on it.</li>
-        <li>Experiment: show that training on these runs lowers pass^k.</li></ul></div>
-</div>
+  <!-- Row A -->
+  <rect class="box" x="20" y="36" width="170" height="84" fill="#eef5f2" stroke="#2f6f5e"/>
+  <text x="34" y="60" class="t">Task pool</text>
+  <text x="34" y="80">tau2-bench retail /</text>
+  <text x="34" y="96">airline, train split</text>
 
-<h2>3. Gate before redeploy</h2>
-<div class="gate">
-  <div><h3>AuditKIT compares candidate vs current</h3>
-    <ul><li>Held-out task set, never used for training.</li>
-        <li>Ship only if: the targeted failure label drops AND pass^k does not drop AND BFCL v3 stays within the margin.</li>
-        <li>No default approve. Too few test runs means reject.</li>
-        <li>A planted bad model in round 2 must be rejected. That proves the gate works.</li></ul></div>
-  <div><h3>On pass / on fail</h3>
-    <ul><li>Pass: push adapter to HF Hub with a round tag, promote it, keep the tool patch.</li>
-        <li>Fail: keep the old adapter, roll back the tool patch, log why.</li>
-        <li>Each round writes one row to <code>metrics.jsonl</code>.</li></ul></div>
-</div>
-<div class="loopback">Loop: the promoted model starts round N+1 at step 01. Target: 3 or more rounds with numbers.</div>
+  <rect class="box" x="230" y="36" width="220" height="84" fill="#eef5f2" stroke="#2f6f5e"/>
+  <text x="244" y="56" class="k" fill="#2f6f5e">01 RUN</text>
+  <text x="244" y="76" class="t">Agent</text>
+  <text x="244" y="94">Tiny Aya Global + LoRA, tools</text>
+  <text x="244" y="110" class="lib">AgentTune Project</text>
 
-<h2>4. Metrics, frozen before round 1</h2>
+  <rect class="box" x="490" y="36" width="200" height="84" fill="#eef5f2" stroke="#2f6f5e"/>
+  <text x="504" y="56" class="k" fill="#2f6f5e">02 LOG</text>
+  <text x="504" y="76" class="t">Trace store</text>
+  <text x="504" y="94">audit.jsonl per round</text>
+  <text x="504" y="110" class="lib">EventLog to HF dataset</text>
+
+  <rect class="box" x="730" y="36" width="200" height="84" fill="#f8f1e7" stroke="#8a5a1f"/>
+  <text x="744" y="56" class="k" fill="#8a5a1f">03 DETECT</text>
+  <text x="744" y="76" class="t">Pass or fail</text>
+  <text x="744" y="94">outcome oracle + loop rules</text>
+  <text x="744" y="110" class="lib">FailureDetector</text>
+
+  <path class="wire" d="M190,78 H228"/>
+  <path class="wire" d="M450,78 H488"/>
+  <path class="wire" d="M690,78 H728"/>
+
+  <!-- Classify -->
+  <rect class="box" x="730" y="170" width="200" height="84" fill="#f8f1e7" stroke="#8a5a1f"/>
+  <text x="744" y="190" class="k" fill="#8a5a1f">04 CLASSIFY</text>
+  <text x="744" y="210" class="t">Why it failed</text>
+  <text x="744" y="228">rules, then LLM judge</text>
+  <text x="744" y="244" class="lib">FailureClassifier</text>
+  <path class="wire" d="M830,120 V168"/>
+  <text x="838" y="150" class="lbl">failed runs</text>
+
+  <!-- passing runs to replay mix -->
+  <path class="wire dash" d="M930,70 H1100 V630 H722"/>
+  <text x="944" y="62" class="lbl">passing runs (replay mix)</text>
+
+  <!-- Branch headers -->
+  <rect class="box" x="40" y="310" width="270" height="74" fill="#ecf2f8" stroke="#2b5d8a"/>
+  <text x="54" y="332" class="t" style="fill:#2b5d8a">Tool fault</text>
+  <text x="54" y="350">unclear description, loose schema,</text>
+  <text x="54" y="366">no argument check</text>
+
+  <rect class="box" x="420" y="310" width="280" height="74" fill="#f6eded" stroke="#7a3b3b"/>
+  <text x="434" y="332" class="t" style="fill:#7a3b3b">Model fault</text>
+  <text x="434" y="350">wrong tool, bad args, wrong order,</text>
+  <text x="434" y="366">loop, policy break, invented answer</text>
+
+  <rect class="box" x="810" y="310" width="270" height="74" fill="#f0efec" stroke="#6b6860"/>
+  <text x="824" y="332" class="t" style="fill:#6b6860">Environment fault</text>
+  <text x="824" y="350">timeout, API error, missing data,</text>
+  <text x="824" y="366">simulated-customer mistake</text>
+
+  <path class="wire" d="M760,254 L175,308"/>
+  <path class="wire" d="M800,254 L560,308"/>
+  <path class="wire" d="M880,254 L945,308"/>
+
+  <!-- Tool branch -->
+  <rect class="box" x="40" y="430" width="270" height="100" fill="#ecf2f8" stroke="#2b5d8a"/>
+  <text x="54" y="452" class="t">Patch the tool</text>
+  <text x="54" y="472">edit spec or add validation,</text>
+  <text x="54" y="488">no training, runs first</text>
+  <text x="54" y="506">ledger: before/after snapshot,</text>
+  <text x="54" y="522">one-step rollback</text>
+  <path class="wire" d="M175,384 V428"/>
+  <text x="186" y="560" class="lbl">rest go to retrain</text>
+  <path class="wire dash" d="M310,480 H418"/>
+
+  <!-- Model branch -->
+  <rect class="box" x="420" y="430" width="280" height="64" fill="#f6eded" stroke="#7a3b3b"/>
+  <text x="434" y="452" class="t">Teacher replays the task</text>
+  <text x="434" y="472">from the first wrong step, writes a fix</text>
+  <path class="wire" d="M560,384 V428"/>
+
+  <rect class="box" x="420" y="520" width="280" height="56" fill="#f6eded" stroke="#7a3b3b"/>
+  <text x="434" y="542" class="t">Verify the fix</text>
+  <text x="434" y="562">keep only fixes the oracle passes</text>
+  <path class="wire" d="M560,494 V518"/>
+
+  <rect class="box" x="420" y="602" width="280" height="56" fill="#f6eded" stroke="#7a3b3b"/>
+  <text x="434" y="624" class="t">Curate</text>
+  <text x="434" y="644">dedupe, balance by label, replay mix</text>
+  <path class="wire" d="M560,576 V600"/>
+
+  <rect class="box" x="420" y="684" width="280" height="56" fill="#f6eded" stroke="#7a3b3b"/>
+  <text x="434" y="706" class="t">Train new LoRA</text>
+  <text x="434" y="726" class="lib">AgentTune create_distill_trainer</text>
+  <path class="wire" d="M560,658 V682"/>
+
+  <!-- Env branch -->
+  <rect class="box" x="810" y="430" width="270" height="64" fill="#f0efec" stroke="#6b6860"/>
+  <text x="824" y="452" class="t">Retry or skip</text>
+  <text x="824" y="472">never used as training data</text>
+  <path class="wire" d="M945,384 V428"/>
+
+  <!-- Teacher API -->
+  <rect class="box" x="810" y="520" width="270" height="56" fill="#fff" stroke="#b9b3a5"/>
+  <text x="824" y="542" class="t">Teacher and judge models</text>
+  <text x="824" y="562">Claude / GPT via API</text>
+  <path class="wire dash" d="M810,540 L702,470"/>
+
+  <!-- Gate -->
+  <rect class="box" x="300" y="790" width="520" height="100" fill="#eeeef7" stroke="#3d3d8a"/>
+  <text x="316" y="812" class="k" fill="#3d3d8a">05 GATE</text>
+  <text x="316" y="832" class="t">AuditKIT: candidate vs current, on the held-out set</text>
+  <text x="316" y="852">ship only if the target failure label drops, pass^k does not drop,</text>
+  <text x="316" y="868">and BFCL v3 stays within the margin. Too few test runs means reject.</text>
+  <path class="wire" d="M175,530 V840 H298"/>
+  <path class="wire" d="M560,740 V788"/>
+
+  <!-- Frozen eval -->
+  <rect class="box" x="880" y="790" width="200" height="100" fill="#fff" stroke="#b9b3a5"/>
+  <text x="894" y="812" class="t">Frozen eval sets</text>
+  <text x="894" y="832">held-out (gate)</text>
+  <text x="894" y="848">hidden (final report)</text>
+  <text x="894" y="864">BFCL v3 (regression)</text>
+  <path class="wire dash" d="M880,840 H822"/>
+
+  <!-- Promote / Rollback -->
+  <rect class="box" x="300" y="930" width="240" height="70" fill="#eef5f2" stroke="#2f6f5e"/>
+  <text x="316" y="952" class="t" style="fill:#2f6f5e">Pass: promote</text>
+  <text x="316" y="970">adapter to HF Hub, round tag</text>
+  <text x="316" y="986">keep the tool patch</text>
+
+  <rect class="box" x="580" y="930" width="240" height="70" fill="#f6eded" stroke="#7a3b3b"/>
+  <text x="596" y="952" class="t" style="fill:#7a3b3b">Fail: roll back</text>
+  <text x="596" y="970">keep the old adapter</text>
+  <text x="596" y="986">revert the tool patch</text>
+
+  <path class="wire" d="M420,890 V928"/>
+  <path class="wire" d="M700,890 V928"/>
+
+  <!-- metrics + loop -->
+  <rect class="box" x="880" y="930" width="200" height="70" fill="#fff" stroke="#b9b3a5"/>
+  <text x="894" y="952" class="t">metrics.jsonl</text>
+  <text x="894" y="970">one row per round</text>
+  <text x="894" y="986">feeds the write-up charts</text>
+  <path class="wire dash" d="M820,965 H878"/>
+
+  <path class="wire" d="M420,1000 V1040 H14 V150 H340 V122"/>
+  <path class="wire" d="M700,1000 V1040 H420"/>
+  <text x="30" y="1060" class="lbl">next round starts from the promoted (or kept) model. Target: 3 or more rounds.</text>
+
+  <!-- Infra strip -->
+  <rect class="box" x="20" y="1104" width="340" height="110" fill="#fff" stroke="#b9b3a5"/>
+  <text x="34" y="1126" class="t">Compute</text>
+  <text x="34" y="1146">GCP lexsi-hackathon: Spot L4 VM</text>
+  <text x="34" y="1162">HF credits: HF Jobs for train / eval</text>
+  <text x="34" y="1178">Colab / Kaggle as backup</text>
+  <text x="34" y="1196" class="lbl">GCP cap Rs 3000, billing auto-off</text>
+
+  <rect class="box" x="390" y="1104" width="340" height="110" fill="#fff" stroke="#b9b3a5"/>
+  <text x="404" y="1126" class="t">Storage (public at the end)</text>
+  <text x="404" y="1146">traces: HF dataset, GCS working copy</text>
+  <text x="404" y="1162">adapters: HF Hub, one tag per round</text>
+  <text x="404" y="1178">two HF collections: models, data</text>
+  <text x="404" y="1196" class="lbl">Langfuse optional, failed runs only</text>
+
+  <rect class="box" x="760" y="1104" width="340" height="110" fill="#fff" stroke="#b9b3a5"/>
+  <text x="774" y="1126" class="t">Built on vs added</text>
+  <text x="774" y="1146">AgentTune: detector, classifier,</text>
+  <text x="774" y="1162">example generator, trainer</text>
+  <text x="774" y="1178">Ours: 3-way router, patch ledger,</text>
+  <text x="774" y="1196">AuditKIT gate, tool-vs-weight study</text>
+</svg>
+
+<h2>Metrics, frozen before round 1</h2>
 <table>
   <tr><th>Group</th><th>Metric</th><th>Used for</th></tr>
   <tr><td>Main</td><td>Task success (pass^1), reliability (pass^k), failure rate per label</td><td>Gate, headline result</td></tr>
-  <tr><td>Tool calls</td><td>Tool choice accuracy, schema-valid arguments, AuditKIT ToolCallF1, steps per task</td><td>Diagnosis, efficiency</td></tr>
+  <tr><td>Tool calls</td><td>Tool choice accuracy, schema-valid arguments, ToolCallF1, steps per task</td><td>Diagnosis, efficiency</td></tr>
   <tr><td>Regression</td><td>BFCL v3, non-target labels</td><td>Gate (no forgetting)</td></tr>
-  <tr><td>Loop</td><td>Teacher fix acceptance rate, failures fixed per round, cost and GPU hours per round</td><td>Write-up</td></tr>
-  <tr><td>Main claim</td><td>Gain from tool fixes vs gain from weight fixes, per GPU hour</td><td>Our finding (no paper compares these)</td></tr>
+  <tr><td>Loop</td><td>Fix acceptance rate, failures fixed per round, cost and GPU hours per round</td><td>Write-up</td></tr>
+  <tr><td>Main claim</td><td>Gain from tool fixes vs gain from weight fixes, per GPU hour</td><td>Our finding</td></tr>
 </table>
-<p class="note">Splits: training pool (the loop learns from it), held-out (the gate scores on it), hidden (opened once at the end). Also frozen: label list, gate thresholds, k, seeds, teacher and judge model versions.</p>
-
-<h2>5. Where things live</h2>
-<div class="two">
-  <div class="box"><h3>Compute</h3><ul>
-    <li>GCP project <code>lexsi-hackathon</code>: Spot GPU VM (L4 class) for training and eval.</li>
-    <li>Colab / Kaggle / HF credits as backup.</li>
-    <li>Teacher and judge: API calls (Claude / GPT).</li>
-    <li>Budget Rs 3000 per month, hard cap switches billing off.</li></ul></div>
-  <div class="box"><h3>Storage (all public at the end)</h3><ul>
-    <li>Traces: one JSONL per round in an HF dataset (GCS bucket as working copy).</li>
-    <li>Adapters: HF Hub, one tag per round.</li>
-    <li>Metrics: <code>metrics.jsonl</code>, charts in the write-up.</li>
-    <li>Two HF collections: models, data.</li></ul></div>
-</div>
-
-<h2>6. Built on, not rebuilt</h2>
-<div class="two">
-  <div class="box"><h3>From AgentTune (already exists)</h3><ul>
-    <li><code>Project.heal()</code>, <code>FailureDetector</code>, <code>SelfHealLoop</code></li>
-    <li><code>FailureClassifier</code>, <code>TrainingExampleGenerator</code></li>
-    <li><code>RetrainingTrigger</code>, <code>DeploymentGate</code>, <code>isolate_tools()</code></li></ul></div>
-  <div class="box"><h3>What we add</h3><ul>
-    <li>3-way router: tool fix, weight fix, no fix.</li>
-    <li>Tool patch ledger with rollback (idea from Hermes agent, MIT).</li>
-    <li>AuditKIT gate with pass^k and BFCL, no default approve.</li>
-    <li>Real support domain, measured rounds, the tool-vs-weight comparison.</li></ul></div>
-</div>
 
 <h2>Open questions</h2>
-<div class="box"><ul>
+<ul>
   <li>tau2-bench needs an LLM as the simulated customer. Which model, and what does a round cost?</li>
-  <li>How many tasks per split? Enough failures per label to train on, but cheap enough for 3+ rounds.</li>
+  <li>How many tasks per split: enough failures per label, cheap enough for 3 or more rounds?</li>
   <li>Hinglish split: in scope or a stretch goal?</li>
   <li>Is CuratorKIT worth adding, or does AgentTune's generator cover curation?</li>
-</ul></div>
-
+</ul>
 </main>
 </body>
 </html>
