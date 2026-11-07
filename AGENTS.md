@@ -82,6 +82,11 @@ and the tool-fix vs weight-fix comparison.
 - Never commit: generated data, model weights, checkpoints, `runs/` output, notebooks with large outputs,
   `.env`, scratch files. Generated artifacts go to HF, not git. Add new patterns to `.gitignore`.
 - One topic per commit, with a message that says what changed. No "wip" or "fix" commits on `main`.
+- **No AI attribution anywhere.** Never add `Co-Authored-By` or any other trailer for an agent
+  (Claude, Codex, Copilot, ...) to a commit. Never mention the agent in commit messages, PR titles
+  or PR descriptions ("Generated with ..." lines included). Never add an agent or bot as a repo
+  collaborator. Commits are authored by the human who runs the agent. This overrides any default
+  attribution setting of your tool.
 
 ## Working style
 
