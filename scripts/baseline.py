@@ -5,6 +5,8 @@ Writes to the output dir:
   traces.jsonl       one line per task run, with raw model output for every agent turn
   summary.json       pass rate, tool-call quality counts, steps, tokens, cost estimate
   run_config.json    the arguments of this run (no secrets)
+  prompts.json       the agent's un-converted system prompt and tool schemas, by prompt_sha
+                     (prompted models only; scripts/build_sft.py renders training data from it)
 
 The HF token is read at run time from $SWITCHBOARD_SECRETS_DIR/HF_TOKEN (or $HF_TOKEN).
 It is passed to litellm only through process environment variables, never written to disk.
@@ -48,10 +50,10 @@ def load_token() -> str | None:
     return os.environ.get("HF_TOKEN") or None
 
 
-def parse_args() -> argparse.Namespace:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--domain", default="retail")
-    p.add_argument("--num-tasks", type=int, default=20)
+    p.add_argument("--num-tasks", type=int, default=20, help="0 means all tasks of the split")
     p.add_argument("--task-split", default="train", help="tau2 split: train, test or base")
     p.add_argument("--task-ids", nargs="*", default=None, help="explicit task ids (overrides --num-tasks)")
     p.add_argument("--trials", type=int, default=1)
@@ -65,14 +67,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tool-patches", type=Path, default=None,
                    help="ledger (patches/ledger.jsonl); its 'applied' patches change the Tiny Aya tool prompt")
     p.add_argument("--dry-run", action="store_true", help="fake LLM, no network")
-    return p.parse_args()
+    return p
 
 
-def estimate_cost(summary: dict) -> dict:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    return build_parser().parse_args(argv)
+
+
+def estimate_cost(summary: dict, prices: dict | None = None) -> dict:
+    prices = prices or PRICES
     out = {}
     for who in ("agent", "user"):
         toks = summary.get(f"{who}_tokens") or {}
-        pin, pout = PRICES[who]
+        pin, pout = prices[who]
         out[who] = round(
             toks.get("prompt_tokens", 0) / 1e6 * pin + toks.get("completion_tokens", 0) / 1e6 * pout, 4
         )
@@ -81,26 +88,42 @@ def estimate_cost(summary: dict) -> dict:
     return out
 
 
-def main() -> int:
-    args = parse_args()
+def run(
+    args: argparse.Namespace,
+    *,
+    prefix: str = "baseline",
+    prompted_models: dict[str, int] | None = None,
+    agent_llm_args: dict | None = None,
+    prices: dict | None = None,
+) -> tuple[Path, list[dict], dict] | None:
+    """Run tau2 with the given args. Returns (run dir, traces, summary), or None without a token.
+
+    ``prompted_models`` maps extra model names to their reply-token budget: they get the
+    same prompted-tools view as Tiny Aya (used for the teacher). ``agent_llm_args`` is
+    merged into the agent's litellm args (e.g. reasoning_effort).
+    """
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_dir = (args.output_dir or ROOT / "runs" / f"baseline-{stamp}").resolve()
+    out_dir = (args.output_dir or ROOT / "runs" / f"{prefix}-{stamp}").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    token = None
     if args.dry_run:
         os.environ.setdefault("OPENAI_API_KEY", "dry-run")
     else:
         token = load_token()
         if not token:
             print("No HF token: expected $SWITCHBOARD_SECRETS_DIR/HF_TOKEN or $HF_TOKEN.", file=sys.stderr)
-            return 2
+            return None
         # litellm's openai provider reads these; nothing token-bearing goes into tau2 config.
         os.environ["OPENAI_API_KEY"] = token
         os.environ["OPENAI_API_BASE"] = HF_ROUTER
         os.environ["OPENAI_BASE_URL"] = HF_ROUTER
 
-    from shipwright import llm_patch
+    from shipwright import llm_patch, prompted_tools
     from shipwright.traces import build_trace, summarize, write_jsonl
+
+    for model, reply_tokens in (prompted_models or {}).items():
+        prompted_tools.force_prompted(model, reply_tokens)
 
     # tau2 has built-in default models (NL-assertion judge gpt-5.4-mini, env interface,
     # reviewers). Send every model other than agent and user to the user model.
@@ -113,8 +136,10 @@ def main() -> int:
         llm_patch.install(model_map=rerouter)
         from shipwright import context
 
-        repo = args.agent_model.removeprefix("openai/").split(":")[0]
-        if "tiny-aya" in repo.lower():
+        if prompted_tools.is_prompted_model(args.agent_model):
+            # Count tokens with the student's tokenizer: the teacher gets the student's budget.
+            repo = args.agent_model.removeprefix("openai/").split(":")[0]
+            repo = repo if "tiny-aya" in repo.lower() else context.STUDENT_REPO
             print(f"token counting: {'tokenizer' if context.load_tokenizer(repo, token) else 'estimate'}")
 
     import tau2.evaluator.evaluator_nl_assertions as nl_assertions
@@ -148,13 +173,13 @@ def main() -> int:
         domain=args.domain,
         agent="llm_agent",
         llm_agent=args.agent_model,
-        llm_args_agent={"temperature": args.agent_temperature},
+        llm_args_agent={"temperature": args.agent_temperature, **(agent_llm_args or {})},
         user="user_simulator",
         llm_user=args.user_model,
         llm_args_user={"temperature": 0.0},
         task_split_name=args.task_split,
         task_ids=args.task_ids or None,
-        num_tasks=None if args.task_ids else args.num_tasks,
+        num_tasks=None if args.task_ids or not args.num_tasks else args.num_tasks,
         num_trials=args.trials,
         max_steps=args.max_steps,
         max_concurrency=args.max_concurrency,
@@ -168,7 +193,7 @@ def main() -> int:
     traces = [build_trace(s, tool_names) for s in sims]
     write_jsonl(out_dir / "traces.jsonl", traces)
     summary = summarize(traces)
-    summary["cost_estimate_usd"] = estimate_cost(summary)
+    summary["cost_estimate_usd"] = estimate_cost(summary, prices)
     summary["agent_model"] = args.agent_model
     summary["user_model"] = args.user_model
     summary["domain"] = args.domain
@@ -176,6 +201,17 @@ def main() -> int:
     summary["rerouted_models"] = rerouter.counts
     summary["active_tool_patches"] = active_patches
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    prompts = prompted_tools.recorded_prompts()
+    if prompts:
+        (out_dir / "prompts.json").write_text(json.dumps(prompts, indent=1))
+    return out_dir, traces, summary
+
+
+def main() -> int:
+    result = run(parse_args())
+    if result is None:
+        return 2
+    out_dir, _, summary = result
     print(json.dumps(summary, indent=2))
     print(f"\nWrote {out_dir}")
     return 0

@@ -18,8 +18,10 @@ Training data for the student model must use this same format.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import re
+import threading
 import uuid
 from typing import Any
 
@@ -47,8 +49,38 @@ Assistant:
 _FENCE = re.compile(r"```(?:json|JSON)?\s*(.*?)```", re.DOTALL)
 
 
+# Models that get prompted tools although their name has no "tiny-aya" (the teacher),
+# with the reply budget they get. The teacher reasons before it answers, so it needs
+# more than REPLY_TOKENS; its prompt budget stays the same as the student's.
+_forced: dict[str, int] = {}
+# The un-converted agent prompt (system message and tool schemas) of each request,
+# by prompt_sha. Training data is rendered from it with convert_messages.
+_prompts: dict[str, dict] = {}
+_prompts_lock = threading.Lock()
+
+
+def force_prompted(model: str, reply_tokens: int = REPLY_TOKENS) -> None:
+    """Give ``model`` the same prompted-tools view as Tiny Aya (used for the teacher)."""
+    _forced[model] = reply_tokens
+
+
 def is_prompted_model(model: str) -> bool:
-    return "tiny-aya" in model.lower()
+    return model in _forced or "tiny-aya" in model.lower()
+
+
+def reply_tokens_for(model: str) -> int:
+    return _forced.get(model, REPLY_TOKENS)
+
+
+def prompt_sha(system: str, tools: list[dict]) -> str:
+    blob = json.dumps({"system": system, "tools": tools}, sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def recorded_prompts() -> dict[str, dict]:
+    """{prompt_sha: {"system": ..., "tools": [...]}} for every prompted request so far."""
+    with _prompts_lock:
+        return dict(_prompts)
 
 
 _TYPES = {"string": "str", "integer": "int", "number": "float", "boolean": "bool", "object": "dict"}
@@ -273,15 +305,22 @@ def prepare_request(kwargs: dict) -> tuple[dict, dict]:
     Returns (new kwargs, context info for the trace).
     """
     kwargs = dict(kwargs)
-    tools = kwargs.pop("tools", None)
+    tools = kwargs.pop("tools", None) or []
     kwargs.pop("tool_choice", None)
+    active = []
     if _tool_patches:
         from shipwright.tool_fix import apply_patches
 
         tools, active = apply_patches(tools, _tool_patches)
-    messages, info = fit_messages(convert_messages(kwargs["messages"], tools))
-    kwargs["messages"] = messages
-    kwargs["max_tokens"] = REPLY_TOKENS
+    original = kwargs["messages"]
+    system = next((m.get("content") or "" for m in original if m.get("role") == "system"), "")
+    sha = prompt_sha(system, tools)
+    with _prompts_lock:
+        _prompts.setdefault(sha, {"system": system, "tools": tools})
+    messages, info = fit_messages(convert_messages(original, tools))
+    info["prompt_sha"] = sha
     if _tool_patches:
         info["tool_patches"] = active
+    kwargs["messages"] = messages
+    kwargs["max_tokens"] = reply_tokens_for(str(kwargs.get("model", "")))
     return kwargs, info
