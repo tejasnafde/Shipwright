@@ -1,0 +1,1 @@
+{"id": "irrelevance_0", "question": [[{"role": "user", "content": "What is the capital of France?"}]], "function": [{"name": "math.factorial", "description": "Factorial.", "parameters": {"type": "dict", "properties": {"number": {"type": "integer", "description": "n"}}, "required": ["number"]}}]}

@@ -1,0 +1,4 @@
+# Round 1 "current": Tiny Aya Global as the baseline ran it, no adapter, no tool patches.
+name: base
+model: CohereLabs/tiny-aya-global
+route: none
