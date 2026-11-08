@@ -46,6 +46,8 @@ Other flags: `--task-split train|test|base` (default `train`, so held-out tasks 
 - `summary.json`: pass rate, tool calls, malformed tool calls, unknown tool names, tool errors,
   tool calls written as text, average turns, token usage, a cost estimate.
 - `run_config.json`: the arguments of the run.
+- `prompts.json`: the agent's un-converted system prompt and tool schemas, by `prompt_sha`
+  (prompted models only). Training data is rendered from it, see `docs/training.md`.
 
 ## Prompted tool calls (Tiny Aya)
 
@@ -135,3 +137,7 @@ The cost in `summary.json` is an estimate from token counts and assumed prices
   `loop`, `invented_answer`, `premature_transfer`, `tool_description_unclear`, `environment`.
 - ROUTE: fault layer `tool` goes to `tool_fix`, `model` to `weight_fix`, `environment` to `no_fix`.
 - Output in the run dir: `failures.jsonl` (one row per failed run) and `failure_summary.json`.
+
+## Weight fix (teacher data and LoRA training)
+
+See `docs/training.md`.
