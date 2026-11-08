@@ -13,3 +13,4 @@ wandb/
 *.gguf
 *.log
 .switchboard/
+third_party/
