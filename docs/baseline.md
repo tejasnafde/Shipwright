@@ -135,3 +135,27 @@ The cost in `summary.json` is an estimate from token counts and assumed prices
   `loop`, `invented_answer`, `premature_transfer`, `tool_description_unclear`, `environment`.
 - ROUTE: fault layer `tool` goes to `tool_fix`, `model` to `weight_fix`, `environment` to `no_fix`.
 - Output in the run dir: `failures.jsonl` (one row per failed run) and `failure_summary.json`.
+
+## Tool fixes (left path: patch tool descriptions, no GPU)
+
+```sh
+.venv/bin/python scripts/tool_fix.py runs/baseline-<timestamp>        # propose (rules + LLM)
+.venv/bin/python scripts/tool_fix.py --list
+.venv/bin/python scripts/tool_fix.py --apply-proposed                 # or --apply <id> ...
+.venv/bin/python scripts/baseline.py --num-tasks 20 --tool-patches patches/ledger.jsonl
+.venv/bin/python scripts/tool_fix.py --rollback <id>
+```
+
+- Input: `failures.jsonl` rows with route `tool_fix`, and the tau2 tool specs.
+- Rules: for `tool_example_copied`, concrete example ids in descriptions become placeholders
+  (`#W<7 digits>`, `<10 digits>`, `<first>_<last>_<digits>`, `gift_card_<digits>`).
+- LLM (`openai/gpt-oss-120b:cerebras`): gets one tool spec and up to 3 failure excerpts, and returns
+  `{"patches": [{tool, field, new_text, reason}]}`. Only `description` and
+  `parameters.<name>.description` can change. A patch with a concrete id is rejected (one retry).
+- Ledger: `patches/ledger.jsonl` (committed). One row per patch: id, round, tool, field, before,
+  after, reason, source, source failures, sha256 of before and after, status
+  (`proposed`, `applied`, `rolled_back`) and a status history.
+- Apply: only `applied` rows take effect, in ledger order, in the Tiny Aya prompted-tools layer
+  (tau2 is not edited). Each must match its `before` sha256, so a conflict fails at start.
+  Fields changed by LLM patches are shown in full in the tool list. Active patch ids go to
+  `run_config.json` and `summary.json`.
