@@ -22,7 +22,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 TRAIN_SCRIPT = ROOT / "scripts" / "train_lora.py"
 # USD per hour (AGENTS.md, 2026-11-08). Other flavors need --price-per-hour.
-PRICES = {"t4-small": 0.40, "l4x1": 0.80, "a10g-small": 1.00}
+PRICES = {"t4-small": 0.40, "l4x1": 0.80, "a10g-small": 1.00, "a10g-large": 1.50, "l40sx1": 1.80,
+          "a100-large": 2.50, "rtx-pro-6000": 2.75}
 
 
 def parse_timeout_hours(value: str) -> float:
