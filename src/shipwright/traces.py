@@ -120,6 +120,7 @@ def build_trace(sim: dict, tool_names: set[str]) -> dict:
                 "raw_output": prompted["raw_text"] if "raw_text" in prompted else raw.get("content", text),
                 "tool_call_parse": parse_status,
                 "prompt_tokens_est": prompted.get("prompt_tokens_est"),
+                "prompt_sha": prompted.get("prompt_sha"),
                 "context_dropped_messages": prompted.get("dropped_messages", 0),
                 "context_truncated_chars": prompted.get("truncated_chars", 0),
                 "context_trimmed": bool(prompted.get("dropped_messages") or prompted.get("truncated_chars")),

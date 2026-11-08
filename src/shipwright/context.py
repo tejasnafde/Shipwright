@@ -13,6 +13,7 @@ import math
 import threading
 from typing import Callable
 
+STUDENT_REPO = "CohereLabs/tiny-aya-global"
 CONTEXT_LIMIT = 8192
 REPLY_TOKENS = 700
 PER_MESSAGE_TOKENS = 8  # chat template overhead per turn
