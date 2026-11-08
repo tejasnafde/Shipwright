@@ -6,6 +6,9 @@ is lost. The wrapper replaces bad arguments with
 ``{MALFORMED_KEY: "<original string>"}``. tau2 then executes the call, the
 environment returns a tool error to the agent (as a real deployment would), and
 the original text stays in the trace.
+
+For Tiny Aya (no native tool calling) it also switches the call to prompted
+JSON tool calls, see ``shipwright.prompted_tools``.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ import json
 import threading
 from typing import Any, Callable
 
+from shipwright.prompted_tools import convert_response, is_prompted_model, prepare_request
 from shipwright.traces import MALFORMED_KEY
 
 _lock = threading.Lock()
@@ -58,7 +62,12 @@ def install(fake_completion: Callable[..., Any] | None = None) -> None:
         real = fake_completion or llm_utils.completion
 
         def wrapped(*args: Any, **kwargs: Any) -> Any:
+            prompted = is_prompted_model(str(kwargs.get("model", ""))) and bool(kwargs.get("tools"))
+            if prompted:
+                kwargs = prepare_request(kwargs)
             response = real(*args, **kwargs)
+            if prompted:
+                convert_response(response)
             sanitize_tool_calls(response)
             return response
 

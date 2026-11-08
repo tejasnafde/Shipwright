@@ -1,7 +1,8 @@
 """A scripted stand-in for litellm.completion, for the offline dry run.
 
 The agent script covers each trace case: a valid call, malformed arguments,
-an unknown tool name, then a plain text reply. The user stops after a few turns.
+an unknown tool name, then a plain text reply. A Tiny Aya agent gets no native
+tools (llm_patch removes them), so it gets the prompted-JSON script. The user stops after a few turns.
 """
 
 from __future__ import annotations
@@ -37,8 +38,22 @@ def _response(model: str, content: str | None, tool: tuple[str, str] | None) -> 
     )
 
 
+# Prompted format (Tiny Aya): the same script as plain text replies.
+PROMPTED_SCRIPT: list[str] = [
+    '```json\n{"name": "find_user_id_by_email", "arguments": {"email": "dry@run.test"}}\n```',
+    '```json\n{"name": "get_user_details", "arguments": {"user_id": "abc"\n```',  # parse fails
+    'Let me check. {"name": "refund_everything", "arguments": {}}',  # unknown tool, no fence
+    "Sorry, I could not find your account.",
+]
+
+
 def make_fake_completion(agent_model: str):
     def fake_completion(model: str, messages: list[dict], **kwargs: Any) -> ModelResponse:
+        if model == agent_model and not kwargs.get("tools"):
+            # tau2's fixed greeting is the first assistant turn; do not count it.
+            step = max(sum(1 for m in messages if m.get("role") == "assistant") - 1, 0)
+            text = PROMPTED_SCRIPT[min(step, len(PROMPTED_SCRIPT) - 1)]
+            return _response(model, text, None)
         if model == agent_model:
             step = sum(1 for m in messages if m.get("role") == "assistant")
             item = AGENT_SCRIPT[min(step, len(AGENT_SCRIPT) - 1)]

@@ -105,14 +105,19 @@ def build_trace(sim: dict, tool_names: set[str]) -> dict:
                 if res.get("error"):
                     errors.append(f"tool_error:{tc.get('name')}")
         text = msg.get("content")
-        text_tool_call = not parsed and _looks_like_text_tool_call(text)
+        prompted = (raw.get("provider_specific_fields") or {}).get("shipwright") or {}
+        parse_status = prompted.get("parse")  # tool_call | parse_failed | text | None (native)
+        if parse_status == "parse_failed":
+            errors.append("tool_call_parse_failed")
+        text_tool_call = not parsed and parse_status != "parse_failed" and _looks_like_text_tool_call(text)
         if text_tool_call:
             errors.append("tool_call_in_text")
         turns.append(
             {
                 "message_index": idx,
                 "turn_idx": msg.get("turn_idx"),
-                "raw_output": raw.get("content", text),
+                "raw_output": prompted["raw_text"] if "raw_text" in prompted else raw.get("content", text),
+                "tool_call_parse": parse_status,
                 "reasoning": raw.get("reasoning_content") or raw.get("reasoning"),
                 "raw_tool_calls": raw_tool_calls,
                 "parsed_tool_calls": parsed,
@@ -156,7 +161,7 @@ def summarize(traces: list[dict]) -> dict:
     n = len(traces)
     agent_tokens: Counter = Counter()
     user_tokens: Counter = Counter()
-    tool_calls = malformed = unknown = tool_errors = text_calls = 0
+    tool_calls = malformed = unknown = tool_errors = text_calls = parse_failed = 0
     agent_turns = 0
     unknown_names: Counter = Counter()
     for t in traces:
@@ -167,6 +172,7 @@ def summarize(traces: list[dict]) -> dict:
             agent_turns += 1
             _add_usage(agent_tokens, turn.get("usage"))
             text_calls += int(turn["text_tool_call"])
+            parse_failed += int(turn.get("tool_call_parse") == "parse_failed")
             for tc in turn["parsed_tool_calls"]:
                 tool_calls += 1
                 malformed += int(tc["malformed_arguments"])
@@ -194,6 +200,7 @@ def summarize(traces: list[dict]) -> dict:
         "unknown_tool_names": dict(unknown_names),
         "tool_errors": tool_errors,
         "tool_calls_in_text": text_calls,
+        "tool_call_parse_failures": parse_failed,
         "avg_agent_turns": agent_turns / n if n else None,
         "avg_messages": sum(t["num_messages"] for t in traces) / n if n else None,
         "termination_reasons": dict(Counter(t["termination_reason"] for t in traces)),

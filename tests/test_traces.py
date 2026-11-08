@@ -77,3 +77,17 @@ def test_sanitize_tool_calls():
     assert json.loads(calls[2].function.arguments) == {MALFORMED_KEY: "[1]"}
     assert calls[3].function.arguments == "{}"
     assert calls[0].id == ""
+
+
+def test_parse_status_in_trace():
+    msg = _assistant("```json\n{\"name\": \"x\"", [], [])
+    msg["raw_data"]["choices"][0]["message"]["provider_specific_fields"] = {
+        "shipwright": {"raw_text": msg["content"], "parse": "parse_failed"}
+    }
+    sim = {"id": "s", "task_id": "1", "reward_info": {"reward": 0.0}, "messages": [msg]}
+    t = build_trace(sim, TOOLS)
+    turn = t["agent_turns"][0]
+    assert turn["tool_call_parse"] == "parse_failed"
+    assert turn["raw_output"].startswith("```json")
+    assert "tool_call_parse_failed" in turn["errors"] and not turn["text_tool_call"]
+    assert summarize([t])["tool_call_parse_failures"] == 1
