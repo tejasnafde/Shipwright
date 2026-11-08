@@ -44,6 +44,12 @@ and the tool-fix vs weight-fix comparison.
 - The gate never approves by default. Too few test runs means reject.
 - Every round appends one row to `metrics.jsonl`.
 
+## Baseline harness
+
+- How to run: `docs/baseline.md`. tau2-bench is pinned in `scripts/setup_tau2.sh` and lives in `third_party/` (git-ignored).
+- Agent and user simulator run through HF Inference Providers (router `https://router.huggingface.co/v1`). The token is read at run time from `$SWITCHBOARD_SECRETS_DIR/HF_TOKEN`.
+- `scripts/baseline.py` defaults to the tau2 `train` split so held-out tasks stay unused until the splits are frozen.
+
 ## Traces
 
 - Source of truth: AgentTune `audit.jsonl`, one file per round, published to an HF dataset.
@@ -114,6 +120,8 @@ and the tool-fix vs weight-fix comparison.
 - 2026-11-07: AgentTune `to_audit_records()` drops the model's text. Log raw output separately.
 - 2026-11-08: HF Jobs default timeout is 30 minutes.
 - 2026-11-08: New GCP projects start with 0 GPU quota, and Google auto-denied our requests for L4 (Compute and Vertex AI training). Use HF Jobs for GPU work until a quota is granted.
+- 2026-11-08: tau2 runs `json.loads` on tool-call arguments, so one malformed call crashes the run. `src/shipwright/llm_patch.py` wraps bad arguments instead.
+- 2026-11-08: tau2 saves results under its own data dir unless `save_to` is an absolute path. `scripts/baseline.py` passes one.
 
 ## Keep this file correct
 
