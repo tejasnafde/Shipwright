@@ -12,3 +12,4 @@ wandb/
 *.bin
 *.gguf
 *.log
+.switchboard/

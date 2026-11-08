@@ -113,7 +113,7 @@ and the tool-fix vs weight-fix comparison.
 - 2026-11-07: Ishank's first repo used Command R7B, which is not an allowed model.
 - 2026-11-07: AgentTune `to_audit_records()` drops the model's text. Log raw output separately.
 - 2026-11-08: HF Jobs default timeout is 30 minutes.
-- 2026-11-08: New GCP projects start with 0 GPU quota.
+- 2026-11-08: New GCP projects start with 0 GPU quota, and Google auto-denied our requests for L4 (Compute and Vertex AI training). Use HF Jobs for GPU work until a quota is granted.
 
 ## Keep this file correct
 
