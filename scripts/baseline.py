@@ -62,6 +62,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-concurrency", type=int, default=4)
     p.add_argument("--seed", type=int, default=300)
     p.add_argument("--output-dir", type=Path, default=None)
+    p.add_argument("--tool-patches", type=Path, default=None,
+                   help="ledger (patches/ledger.jsonl); its 'applied' patches change the Tiny Aya tool prompt")
     p.add_argument("--dry-run", action="store_true", help="fake LLM, no network")
     return p.parse_args()
 
@@ -123,10 +125,23 @@ def main() -> int:
     from tau2.registry import registry
     from tau2.runner import run_domain
 
-    tool_names = {t.name for t in registry.get_env_constructor(args.domain)().get_tools()}
+    domain_tools = registry.get_env_constructor(args.domain)().get_tools()
+    tool_names = {t.name for t in domain_tools}
+
+    active_patches: list[str] = []
+    if args.tool_patches:
+        from shipwright.prompted_tools import set_tool_patches
+        from shipwright.tool_fix import apply_patches, load_ledger
+
+        ledger = load_ledger(args.tool_patches)
+        # Fail now, not mid-run, if an applied patch does not fit the current tools.
+        _, active_patches = apply_patches([t.openai_schema for t in domain_tools], ledger)
+        set_tool_patches(ledger)
+        print(f"tool patches active: {active_patches or 'none'}")
 
     run_config = {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()}
     run_config["output_dir"] = str(out_dir)
+    run_config["active_tool_patches"] = active_patches
     (out_dir / "run_config.json").write_text(json.dumps(run_config, indent=2))
 
     config = TextRunConfig(
@@ -159,6 +174,7 @@ def main() -> int:
     summary["domain"] = args.domain
     summary["task_split"] = args.task_split
     summary["rerouted_models"] = rerouter.counts
+    summary["active_tool_patches"] = active_patches
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
     print(f"\nWrote {out_dir}")

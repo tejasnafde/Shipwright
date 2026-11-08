@@ -70,9 +70,28 @@ def _first_sentence(text: str, limit: int = 140) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
+# Tool patches (rows with status "applied" from patches/ledger.jsonl), set by baseline.py.
+_tool_patches: list[dict] = []
+
+
+def set_tool_patches(rows: list[dict]) -> None:
+    global _tool_patches
+    _tool_patches = [r for r in rows if r.get("status") == "applied"]
+
+
+def _patched_fields(tool_name: str) -> set[str]:
+    """Fields to show in full. Placeholder-only patches (source "rules") already reach
+    the model through the compact "e.g." form, so they stay compact."""
+    return {r["field"] for r in _tool_patches if r["tool"] == tool_name and r.get("source") != "rules"}
+
+
 def compact_tool_line(tool: dict) -> str:
-    """One line per tool: name(arg: type e.g. 'x', opt?: type) - first sentence of the description."""
+    """One line per tool: name(arg: type e.g. 'x', opt?: type) - first sentence of the description.
+
+    A field changed by a tool patch is shown in full, so the patch reaches the model.
+    """
     fn = tool.get("function", tool)
+    patched = _patched_fields(fn.get("name", ""))
     params = fn.get("parameters") or {}
     required = set(params.get("required") or [])
     args = []
@@ -81,12 +100,19 @@ def compact_tool_line(tool: dict) -> str:
         desc = schema.get("description") or ""
         ex = _EXAMPLE.search(desc)
         choice = _CHOICE.search(desc)
-        if choice:
+        if f"parameters.{name}.description" in patched:
+            arg += f" ({' '.join(desc.split())})"
+        elif choice:
             arg += f" one of {choice.group(1)}|{choice.group(2)}"
         elif ex:
             arg += f" e.g. {ex.group(1)}"
         args.append(arg)
-    return f"{fn.get('name')}({', '.join(args)}) - {_first_sentence(fn.get('description', ''))}"
+    description = fn.get("description", "")
+    if "description" in patched:
+        description = " ".join(description.split())
+    else:
+        description = _first_sentence(description)
+    return f"{fn.get('name')}({', '.join(args)}) - {description}"
 
 
 def render_tools_prompt(tools: list[dict]) -> str:
@@ -249,7 +275,13 @@ def prepare_request(kwargs: dict) -> tuple[dict, dict]:
     kwargs = dict(kwargs)
     tools = kwargs.pop("tools", None)
     kwargs.pop("tool_choice", None)
+    if _tool_patches:
+        from shipwright.tool_fix import apply_patches
+
+        tools, active = apply_patches(tools, _tool_patches)
     messages, info = fit_messages(convert_messages(kwargs["messages"], tools))
     kwargs["messages"] = messages
     kwargs["max_tokens"] = REPLY_TOKENS
+    if _tool_patches:
+        info["tool_patches"] = active
     return kwargs, info
