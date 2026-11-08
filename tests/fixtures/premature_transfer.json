@@ -450,7 +450,7 @@
   },
   {
    "role": "user",
-   "content": "Okay, first—how many t‑shirt options is that exactly?  \n\nAnd I need to return the cleaner, the headphones, and the smartwatch. My name is Yusuf Rossi, zip 19122. I don’t remember the email I used on the order. What do you need to process the returns?"
+   "content": "Okay, first - how many t‑shirt options is that exactly?  \n\nAnd I need to return the cleaner, the headphones, and the smartwatch. My name is Yusuf Rossi, zip 19122. I don’t remember the email I used on the order. What do you need to process the returns?"
   },
   {
    "role": "assistant",
@@ -479,7 +479,7 @@
   },
   {
    "role": "user",
-   "content": "I don’t have the order number in front of me—can you pull it up with my name, Yusuf Rossi, zip 19122?  \n\nThe items I’m returning are:  \n\n- Cleaner – quantity 1  \n- Headphones – quantity 1  \n- Smartwatch – quantity 1  \n\nRefund to the original payment method (the Visa card I used).  \n\nAlso, how many t‑shirt options are actually listed on the site? I need the exact number."
+   "content": "I don’t have the order number in front of me - can you pull it up with my name, Yusuf Rossi, zip 19122?  \n\nThe items I’m returning are:  \n\n- Cleaner – quantity 1  \n- Headphones – quantity 1  \n- Smartwatch – quantity 1  \n\nRefund to the original payment method (the Visa card I used).  \n\nAlso, how many t‑shirt options are actually listed on the site? I need the exact number."
   },
   {
    "role": "assistant",
@@ -506,7 +506,7 @@
   },
   {
    "role": "user",
-   "content": "I still don’t have the order number—can you look it up with my name, Yusuf Rossi, and zip 19122?  \n\nAnd I need the exact count of t‑shirt options you just listed. How many distinct styles are on the site right now?  \n\nFor the return, I don’t have the product IDs. Can you pull those from the order you’ll locate and confirm the quantities (1 cleaner, 1 headphones, 1 smartwatch)?  \n\nRefund to the original Visa card, as before."
+   "content": "I still don’t have the order number - can you look it up with my name, Yusuf Rossi, and zip 19122?  \n\nAnd I need the exact count of t‑shirt options you just listed. How many distinct styles are on the site right now?  \n\nFor the return, I don’t have the product IDs. Can you pull those from the order you’ll locate and confirm the quantities (1 cleaner, 1 headphones, 1 smartwatch)?  \n\nRefund to the original Visa card, as before."
   },
   {
    "role": "assistant",
@@ -560,7 +560,7 @@
   },
   {
    "role": "user",
-   "content": "Yes, that’s correct—Order #W6247578, cleaner 1, headphones 1, smartwatch 1, Visa ending 2478.\n\nWhat’s the next step for the return? Do you need me to ship the items back now? If so, send a prepaid label to the address on file.\n\nAlso, how long will the refund take to appear on my card? I need this sorted today."
+   "content": "Yes, that’s correct - Order #W6247578, cleaner 1, headphones 1, smartwatch 1, Visa ending 2478.\n\nWhat’s the next step for the return? Do you need me to ship the items back now? If so, send a prepaid label to the address on file.\n\nAlso, how long will the refund take to appear on my card? I need this sorted today."
   },
   {
    "role": "assistant",
@@ -593,7 +593,7 @@
   },
   {
    "role": "user",
-   "content": "Okay, so the order I gave you can’t be returned because it never shipped. I don’t have any other order number—my purchase was the one with the cleaner, headphones and smartwatch. Can you double‑check the system using my name, Yusuf Rossi, zip 19122, and the Visa ending 2478? I need the correct order that actually got delivered so I can send the items back.\n\nIf you can’t find it, I want to speak to a supervisor who can sort this out and get a prepaid return label to me today. Also, once the return is processed, how fast will the refund hit my card? I need this fixed now."
+   "content": "Okay, so the order I gave you can’t be returned because it never shipped. I don’t have any other order number - my purchase was the one with the cleaner, headphones and smartwatch. Can you double‑check the system using my name, Yusuf Rossi, zip 19122, and the Visa ending 2478? I need the correct order that actually got delivered so I can send the items back.\n\nIf you can’t find it, I want to speak to a supervisor who can sort this out and get a prepaid return label to me today. Also, once the return is processed, how fast will the refund hit my card? I need this fixed now."
   },
   {
    "role": "assistant",
@@ -620,7 +620,7 @@
   },
   {
    "role": "user",
-   "content": "Yes, that’s the right order—#W9711842, cleaner 1, headphones 1, smartwatch 1, Visa ending 2478.\n\nSend me the prepaid return label right away. I need to ship these items today. Also, tell me exactly how long the refund will take to show up on my card once you receive the return. If there’s any delay, I want to speak to a supervisor now so this gets resolved today."
+   "content": "Yes, that’s the right order - #W9711842, cleaner 1, headphones 1, smartwatch 1, Visa ending 2478.\n\nSend me the prepaid return label right away. I need to ship these items today. Also, tell me exactly how long the refund will take to show up on my card once you receive the return. If there’s any delay, I want to speak to a supervisor now so this gets resolved today."
   },
   {
    "role": "assistant",

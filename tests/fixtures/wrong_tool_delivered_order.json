@@ -203,7 +203,7 @@
   },
   {
    "role": "user",
-   "content": "Hey, yeah I just got my order #W2378156. I need to exchange a couple of items.  \n\nFirst, the mechanical keyboard—I’d like the same model but with clicky switches. It should still be full‑size with RGB backlight. If you don’t have a clicky version that meets those specs, I’ll skip the keyboard exchange altogether.  \n\nSecond, the smart thermostat—I need one that works with Google Home instead of Apple HomeKit.  \n\nI don’t remember the email I used for the order, but the zip is 19122. Could we sort both exchanges in one go?"
+   "content": "Hey, yeah I just got my order #W2378156. I need to exchange a couple of items.  \n\nFirst, the mechanical keyboard - I’d like the same model but with clicky switches. It should still be full‑size with RGB backlight. If you don’t have a clicky version that meets those specs, I’ll skip the keyboard exchange altogether.  \n\nSecond, the smart thermostat - I need one that works with Google Home instead of Apple HomeKit.  \n\nI don’t remember the email I used for the order, but the zip is 19122. Could we sort both exchanges in one go?"
   },
   {
    "role": "assistant",

@@ -447,7 +447,7 @@
   },
   {
    "role": "user",
-   "content": "Hey, yeah, I’m looking to see exactly how many t‑shirt options you’ve got right now online. Also, I have a few pending shirts—could you change all of them to purple, size S, same v‑neck style, and make them polyester? \n\nI don’t really have my email handy at the moment.Sure thing. Could you let me know what info you need from me to pull up those pending orders?"
+   "content": "Hey, yeah, I’m looking to see exactly how many t‑shirt options you’ve got right now online. Also, I have a few pending shirts - could you change all of them to purple, size S, same v‑neck style, and make them polyester? \n\nI don’t really have my email handy at the moment.Sure thing. Could you let me know what info you need from me to pull up those pending orders?"
   },
   {
    "role": "assistant",
