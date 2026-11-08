@@ -54,6 +54,7 @@ and the tool-fix vs weight-fix comparison.
 - `scripts/baseline.py` defaults to the tau2 `train` split so held-out tasks stay unused until the splits are frozen.
 - Weight fix (teacher runs, SFT data, LoRA job): `docs/training.md`. The teacher gets the student's prompted view (`force_prompted`); the teacher model is chosen by the team and passed with `--teacher-model` (no default).
 - `scripts/train_job.py` launches nothing without `--launch`, and prints flavor price x timeout first.
+- Gate (step 05): `docs/gate.md`. `scripts/gate_job.py` (HF Job, vLLM serves base + LoRA) or `scripts/gate_eval.py --local-dry-run` (offline). Config `configs/gate.yaml` (status `proposed` until the team freezes it), systems in `configs/systems/`. Metrics come from AuditKIT; the user model is a required argument (no default).
 
 ## Traces
 
@@ -86,7 +87,8 @@ and the tool-fix vs weight-fix comparison.
 - **The teacher model is not chosen yet** (2026-11-08). Keep it a required argument with no default.
 - **HF Jobs** (paid from the HF credits): **a job stops after 30 minutes by default. Always pass a
   timeout** (`hf jobs run --timeout 2h ...`, or `timeout=` in Python). A job uses the credits of the
-  namespace it runs in. Prices: T4 $0.40/h, L4 $0.80/h, A10G small $1.00/h.
+  namespace it runs in. Prices: T4 $0.40/h, L4 $0.80/h, A10G small $1.00/h, A10G large $1.50/h,
+  L40S $1.80/h, A100 large $2.50/h, RTX Pro 6000 $2.75/h (`PRICES` in `scripts/train_job.py`, 2026-11-08).
 - Split: HF Jobs for training and gate evals (output lands on the HF Hub), GCP Spot VM for long
   agent runs that collect traces.
 
@@ -136,6 +138,9 @@ and the tool-fix vs weight-fix comparison.
 - 2026-11-08: AgentTune `EventLog` has no system event, and its built-in distill factory trains on every token (TRL `assistant_only_loss` depends on chat template generation markers, not verified for Tiny Aya). `scripts/train_lora.py` adds the system prompt back (`SystemPromptEventLog`) and masks labels itself.
 - 2026-11-08: tau2 appends a language clause to the agent policy at run time, so `env.get_policy()` alone is not the agent prompt. Runs now record the real prompt in `prompts.json`.
 - 2026-11-08: tau2 saves results under its own data dir unless `save_to` is an absolute path. `scripts/baseline.py` passes one.
+- 2026-11-08: AuditKIT `reliability()` lowers k to the number of decided trials when a task has fewer than k (infra errors). `eval_metrics.pass_metrics` scores pass^k only on tasks with k decided trials and counts the rest.
+- 2026-11-08: AuditKIT multi-trial rows keep only the first trial's diagnostics. `eval_metrics` runs a second, one-case-per-run pass for ToolCallF1 and the other diagnostics.
+- 2026-11-08: The GitHub repo is private, so an HF Job cannot clone it. `scripts/gate_job.py --launch` uploads `git archive HEAD` to the runs dataset; commit before you launch.
 
 ## Keep this file correct
 
