@@ -49,6 +49,7 @@ and the tool-fix vs weight-fix comparison.
 - How to run: `docs/baseline.md`. tau2-bench is pinned in `scripts/setup_tau2.sh` and lives in `third_party/` (git-ignored).
 - Agent and user simulator run through HF Inference Providers (router `https://router.huggingface.co/v1`). The token is read at run time from `$SWITCHBOARD_SECRETS_DIR/HF_TOKEN`.
 - 2026-11-08: Tiny Aya has no native tool calling (template and HF router drop `tools`). We use prompted JSON tool calls (`src/shipwright/prompted_tools.py`, format in `docs/baseline.md`). Training data must use the same format.
+- Failure labels, rule labels and the router are defined in `src/shipwright/classify.py` (how to run: `docs/baseline.md`).
 - `scripts/baseline.py` defaults to the tau2 `train` split so held-out tasks stay unused until the splits are frozen.
 
 ## Traces
@@ -124,6 +125,7 @@ and the tool-fix vs weight-fix comparison.
 - 2026-11-08: tau2 runs `json.loads` on tool-call arguments, so one malformed call crashes the run. `src/shipwright/llm_patch.py` wraps bad arguments instead.
 - 2026-11-08: Tiny Aya context is 8192 tokens; the cohere provider rejects longer requests. `src/shipwright/context.py` trims the prompt and sets `max_tokens` 700.
 - 2026-11-08: tau2 calls its own default models (NL judge `gpt-5.4-mini-2026-03-17` and others), which do not exist on the HF router. `scripts/baseline.py` reroutes them to the user model.
+- 2026-11-08: Tiny Aya copies example values from tool descriptions (`#W0000000`, `sara_doe_496`, `1008292230`) as real ids: 13 of 19 failures in the first 20-task run. The classifier labels this `tool_example_copied` and routes it to `tool_fix`.
 - 2026-11-08: tau2 saves results under its own data dir unless `save_to` is an absolute path. `scripts/baseline.py` passes one.
 
 ## Keep this file correct

@@ -117,3 +117,21 @@ to the agent and the run goes on. The trace shows the original text.
 
 The cost in `summary.json` is an estimate from token counts and assumed prices
 (`PRICES` in `scripts/baseline.py`). Check HF billing for the real number.
+
+## Classify and route failures
+
+```sh
+.venv/bin/python scripts/classify.py runs/baseline-<timestamp> --no-llm   # rules only, no network
+.venv/bin/python scripts/classify.py runs/baseline-<timestamp>            # rules, then the judge
+```
+
+- DETECT: a run fails when reward < 1. Infra-error runs get the label `environment`, route `no_fix`.
+- Rule labels (`src/shipwright/classify.py`): `loop`, `unknown_tool`, `malformed_args`,
+  `tool_error_ignored`, `context_overflow`, `invented_id`, `tool_example_copied`
+  (an invented id that equals an example value from a tool description, such as `#W0000000`).
+- Judge: `openai/gpt-oss-120b:cerebras` via the HF router, only for failed runs that no rule
+  explains (`--judge-all` judges every failed run). Strict JSON, validated, one retry.
+  Labels: `wrong_tool`, `bad_arguments`, `invented_id`, `wrong_order`, `skipped_policy_step`,
+  `loop`, `invented_answer`, `premature_transfer`, `tool_description_unclear`, `environment`.
+- ROUTE: fault layer `tool` goes to `tool_fix`, `model` to `weight_fix`, `environment` to `no_fix`.
+- Output in the run dir: `failures.jsonl` (one row per failed run) and `failure_summary.json`.
