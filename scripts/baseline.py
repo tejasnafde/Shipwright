@@ -66,6 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output-dir", type=Path, default=None)
     p.add_argument("--tool-patches", type=Path, default=None,
                    help="ledger (patches/ledger.jsonl); its 'applied' patches change the Tiny Aya tool prompt")
+    p.add_argument("--tool-patch-ids", nargs="*", default=None,
+                   help="with --tool-patches: use exactly these patch ids, whatever their ledger status (gate)")
+    p.add_argument("--agent-api-base", default=None,
+                   help="OpenAI-compatible endpoint for the agent only, e.g. http://localhost:8000/v1 (vLLM)."
+                        " The user simulator still goes to the HF router.")
     p.add_argument("--dry-run", action="store_true", help="fake LLM, no network")
     return p
 
@@ -138,8 +143,10 @@ def run(
 
         if prompted_tools.is_prompted_model(args.agent_model):
             # Count tokens with the student's tokenizer: the teacher gets the student's budget.
+            # A vLLM served name (e.g. a LoRA module) is not a repo id: use the student repo.
             repo = args.agent_model.removeprefix("openai/").split(":")[0]
-            repo = repo if "tiny-aya" in repo.lower() else context.STUDENT_REPO
+            ok = "tiny-aya" in repo.lower() and "/" in repo and not args.agent_api_base
+            repo = repo if ok else context.STUDENT_REPO
             print(f"token counting: {'tokenizer' if context.load_tokenizer(repo, token) else 'estimate'}")
 
     import tau2.evaluator.evaluator_nl_assertions as nl_assertions
@@ -154,11 +161,15 @@ def run(
     tool_names = {t.name for t in domain_tools}
 
     active_patches: list[str] = []
+    if args.tool_patch_ids is not None and not args.tool_patches:
+        raise SystemExit("--tool-patch-ids needs --tool-patches")
     if args.tool_patches:
         from shipwright.prompted_tools import set_tool_patches
-        from shipwright.tool_fix import apply_patches, load_ledger
+        from shipwright.tool_fix import apply_patches, load_ledger, select_patches
 
         ledger = load_ledger(args.tool_patches)
+        if args.tool_patch_ids is not None:
+            ledger = select_patches(ledger, args.tool_patch_ids)
         # Fail now, not mid-run, if an applied patch does not fit the current tools.
         _, active_patches = apply_patches([t.openai_schema for t in domain_tools], ledger)
         set_tool_patches(ledger)
@@ -169,11 +180,17 @@ def run(
     run_config["active_tool_patches"] = active_patches
     (out_dir / "run_config.json").write_text(json.dumps(run_config, indent=2))
 
+    agent_args: dict = {"temperature": args.agent_temperature, **(agent_llm_args or {})}
+    if args.agent_api_base and not args.dry_run:
+        # Per-call endpoint for the agent; vLLM ignores the key (no --api-key on the server).
+        agent_args.update(api_base=args.agent_api_base, api_key="EMPTY")
+        prices = {**(prices or PRICES), "agent": (0.0, 0.0)}  # our GPU, billed per hour, not per token
+
     config = TextRunConfig(
         domain=args.domain,
         agent="llm_agent",
         llm_agent=args.agent_model,
-        llm_args_agent={"temperature": args.agent_temperature, **(agent_llm_args or {})},
+        llm_args_agent=agent_args,
         user="user_simulator",
         llm_user=args.user_model,
         llm_args_user={"temperature": 0.0},

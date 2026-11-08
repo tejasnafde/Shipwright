@@ -175,6 +175,27 @@ def apply_patches(tools: list[dict], rows: list[dict]) -> tuple[list[dict], list
     return [by_name[n] for n in order], active
 
 
+def select_patches(rows: list[dict], ids: list[str] | str) -> list[dict]:
+    """The ledger rows a system under test runs with, all marked ``applied``.
+
+    ``ids`` is a list of patch ids (ledger order is kept, whatever their status), or the
+    string ``"applied"`` for the rows whose status is applied now. Used by the gate, which
+    must compare an exact patch set, not whatever the ledger says at run time.
+    """
+    if ids == "applied":
+        chosen = [r for r in rows if r.get("status") == "applied"]
+    elif isinstance(ids, str):
+        raise ValueError(f"patch ids must be a list or 'applied', got {ids!r}")
+    else:
+        known = {r["id"] for r in rows}
+        missing = [i for i in ids if i not in known]
+        if missing:
+            raise KeyError(f"patch ids not in the ledger: {missing}")
+        wanted = set(ids)
+        chosen = [r for r in rows if r["id"] in wanted]
+    return [{**copy.deepcopy(r), "status": "applied"} for r in chosen]
+
+
 def set_status(rows: list[dict], patch_id: str, status: str, tools: list[dict] | None = None) -> list[dict]:
     """Change one patch's status. With tools given, check the applied set still applies."""
     if status not in STATUSES:

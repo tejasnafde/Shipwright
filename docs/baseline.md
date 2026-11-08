@@ -35,7 +35,10 @@ or from `$HF_TOKEN`. The token goes to litellm through process env vars only. It
 
 Other flags: `--task-split train|test|base` (default `train`, so held-out tasks stay unused),
 `--task-ids 0 1 2`, `--trials`, `--agent-model`, `--user-model`, `--max-concurrency` (default 4),
-`--output-dir` (default `runs/baseline-<timestamp>/`).
+`--output-dir` (default `runs/baseline-<timestamp>/`), `--tool-patch-ids` (with `--tool-patches`:
+exactly these patches, whatever their ledger status), `--agent-api-base` (agent on an
+OpenAI-compatible endpoint such as vLLM; the user simulator stays on the router). Both are used
+by the gate (`docs/gate.md`).
 
 ## Output (in the run dir, git-ignored)
 
