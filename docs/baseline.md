@@ -76,6 +76,36 @@ with `tiny-aya` in the name. tau2 stays unchanged.
   `tool_call_parse_failures`.
 - Training data for the student model must use this same format.
 
+## Context budget (Tiny Aya)
+
+Tiny Aya has an 8192-token context (prompt plus reply), and the cohere provider
+rejects longer requests. `src/shipwright/context.py` keeps each prompted request inside it:
+
+- Tools are listed one per line, for example
+  `get_order_details(order_id: str e.g. '#W0000000') - Get the status and details of an order.`
+  (`?` marks an optional argument). About 2.9k chars instead of 12k of JSON schemas.
+- Tool results in history are minified JSON.
+- `max_tokens` is 700. The prompt budget is 8192 - 700 - a margin (100 with the real
+  tokenizer, 400 with the 3.5 chars per token estimate). The baseline downloads
+  `tokenizer.json` from the Tiny Aya repo with the HF token and falls back to the estimate.
+- Over budget: the oldest middle turns are dropped (the system message, the first user
+  message and the latest turns stay), with an `[earlier turns omitted]` note. If the latest
+  message alone is too big, it is cut with a `[truncated N chars]` marker.
+- Per turn the trace has `prompt_tokens_est`, `context_dropped_messages`,
+  `context_truncated_chars` and `context_trimmed`. `summary.json` has `context_trimmed_turns`.
+
+## tau2 default models
+
+Some tau2 tasks call a built-in judge (`DEFAULT_LLM_NL_ASSERTIONS`, an OpenAI model).
+`scripts/baseline.py` sets it to the user model, and reroutes any other model that is not
+the agent or the user model to the user model (`rerouted_models` in `summary.json` counts them).
+A ```json fence around the judge reply is removed, because tau2 parses it with `json.loads`.
+
+## Infra errors
+
+`summary.json` has `pass_rate` (all runs), `pass_rate_excluding_infra_errors`,
+`num_infra_errors` and `infra_error_messages` (first 150 chars, counted).
+
 ## Malformed tool calls
 
 tau2 runs `json.loads` on every tool-call argument string, so one bad call would crash the
