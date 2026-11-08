@@ -56,6 +56,14 @@ and the tool-fix vs weight-fix comparison.
 
 - **GCP project `lexsi-hackathon`**, region `asia-south1`. Owner: Tejas. Editors: Ishank, Mitushi.
   Editors cannot change IAM: ask Tejas.
+- **Every gcloud command must name the project and the account config.** Never rely on the
+  active config: each of us has other Google accounts and projects on the same machine.
+  - Tejas's machine: `--configuration=personal --project=lexsi-hackathon`
+    (his active config is a work account with no access to this project).
+  - Ishank's and Mitushi's machines: `--configuration=lexsi --project=lexsi-hackathon`
+    (the `lexsi` config is made in `docs/gcp-setup.md`, step 2).
+  - Python SDKs: pass `project="lexsi-hackathon"` explicitly.
+  - A `PERMISSION_DENIED` or `NOT_FOUND` on a resource that exists usually means the wrong config.
 - Label every GCP resource `app=lexsi-hackathon`.
 - **Budget:** alerts every Rs 500. **At Rs 3000 per month, billing switches off for the whole project**
   and everything in it stops. Cost data lags hours, so stop GPU machines as soon as a job ends.
@@ -90,7 +98,11 @@ and the tool-fix vs weight-fix comparison.
 
 ## Working style
 
-- Branch per change, pull request to `main`, merge (never rebase).
+- **Branches:** `main` is the main branch: the submitted, working state. Never push to it directly.
+  Each person has a long-lived branch: `tejas`, `ishank`, `mitushi`. Work there (or in short
+  branches cut from it), then open a pull request into `main`. Merge, never rebase.
+  Pull `main` into your branch often to stay current.
+- Per-person Cloud Build triggers may run on pushes to these branches later. Do not rename them.
 - No em dashes in code, docs or commits.
 - Prefer the simplest thing that works. Kafka, Langfuse-as-a-dependency and UIs are out of scope.
 
