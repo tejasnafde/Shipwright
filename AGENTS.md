@@ -78,6 +78,10 @@ and the tool-fix vs weight-fix comparison.
   and everything in it stops. Cost data lags hours, so stop GPU machines as soon as a job ends.
 - **New GCP projects have 0 GPU quota.** Request it before you plan a GPU run (see `docs/gcp-setup.md`).
 - Use Spot VMs for GPU work and save checkpoints often.
+- **HF credits are shared by the whole team.** No agent starts a credit-spending run (HF Inference
+  Providers calls, HF Jobs) unless a human on the team asked for that specific run. State the
+  expected cost first. Offline work (dry runs, tests) is always fine.
+- **The teacher model is not chosen yet** (2026-11-08). Keep it a required argument with no default.
 - **HF Jobs** (paid from the HF credits): **a job stops after 30 minutes by default. Always pass a
   timeout** (`hf jobs run --timeout 2h ...`, or `timeout=` in Python). A job uses the credits of the
   namespace it runs in. Prices: T4 $0.40/h, L4 $0.80/h, A10G small $1.00/h.
