@@ -48,10 +48,32 @@ def sanitize_tool_calls(response: Any) -> int:
     return fixed
 
 
-def install(fake_completion: Callable[..., Any] | None = None) -> None:
+def is_nl_judge_request(kwargs: dict) -> bool:
+    """tau2's NL-assertion judge (it json.loads the reply with no fence handling)."""
+    msgs = kwargs.get("messages") or []
+    return bool(msgs) and "metExpectation" in str(msgs[0].get("content") or "")
+
+
+def strip_json_fences(response: Any) -> None:
+    """Remove a ```json fence around a reply, in place."""
+    for choice in getattr(response, "choices", None) or []:
+        text = (choice.message.content or "").strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else ""
+            if text.rstrip().endswith("```"):
+                text = text.rstrip()[:-3]
+            choice.message.content = text.strip()
+
+
+def install(
+    fake_completion: Callable[..., Any] | None = None,
+    model_map: Callable[[dict], dict] | None = None,
+) -> None:
     """Patch ``tau2.utils.llm_utils.completion``. Call once, before running tau2.
 
     ``fake_completion`` replaces the network call (used by the offline dry run).
+    ``model_map`` rewrites the request kwargs first (used to reroute tau2's
+    built-in default models, e.g. the NL-assertion judge, to the HF router).
     """
     global _installed
     import tau2.utils.llm_utils as llm_utils
@@ -62,14 +84,40 @@ def install(fake_completion: Callable[..., Any] | None = None) -> None:
         real = fake_completion or llm_utils.completion
 
         def wrapped(*args: Any, **kwargs: Any) -> Any:
+            if model_map is not None:
+                kwargs = model_map(kwargs)
             prompted = is_prompted_model(str(kwargs.get("model", ""))) and bool(kwargs.get("tools"))
+            context = None
             if prompted:
-                kwargs = prepare_request(kwargs)
+                kwargs, context = prepare_request(kwargs)
             response = real(*args, **kwargs)
+            if is_nl_judge_request(kwargs):
+                strip_json_fences(response)
             if prompted:
-                convert_response(response)
+                convert_response(response, context)
             sanitize_tool_calls(response)
             return response
 
         llm_utils.completion = wrapped
         _installed = True
+
+
+class ModelRerouter:
+    """Send any model other than the allowed ones to a fallback model, and count it."""
+
+    def __init__(self, allowed: set[str], fallback: str):
+        self.allowed = allowed
+        self.fallback = fallback
+        self.counts: dict[str, int] = {}
+
+    def __call__(self, kwargs: dict) -> dict:
+        model = kwargs.get("model", "")
+        if model in self.allowed:
+            return kwargs
+        with _lock:
+            self.counts[model] = self.counts.get(model, 0) + 1
+        kwargs = dict(kwargs)
+        kwargs["model"] = self.fallback
+        # Params added for OpenAI's Responses bridge do not apply to the router.
+        kwargs.pop("allowed_openai_params", None)
+        return kwargs

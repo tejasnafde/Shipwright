@@ -47,7 +47,7 @@ def test_convert_messages():
     assert [m["role"] for m in out] == ["system", "user", "assistant", "user"]
     assert out[0]["content"].startswith("Policy.") and "get_order_details" in out[0]["content"]
     assert pt.parse_tool_call(out[2]["content"]) == ("get_order_details", {"order_id": "#W1"})
-    assert out[3]["content"] == 'Tool result for get_order_details: {"status": "pending"}'
+    assert out[3]["content"] == 'Tool result for get_order_details: {"status":"pending"}'
     assert all("tool_calls" not in m for m in out)
 
 
@@ -65,11 +65,12 @@ def test_convert_messages_merges_user_turns_and_adds_system():
 
 
 def test_prepare_request_and_convert_response():
-    req = pt.prepare_request({"model": "openai/CohereLabs/tiny-aya-global:cohere",
+    req, info = pt.prepare_request({"model": "openai/CohereLabs/tiny-aya-global:cohere",
                               "messages": [{"role": "user", "content": "hi"}],
                               "tools": TOOLS, "tool_choice": "auto", "temperature": 0})
     assert "tools" not in req and "tool_choice" not in req and req["temperature"] == 0
     assert req["messages"][0]["role"] == "system"
+    assert req["max_tokens"] == 700 and info["dropped_messages"] == 0
 
     raw = '```json\n{"name": "get_order_details", "arguments": {"order_id": "#W1"}}\n```'
     resp = ModelResponse(model="m", choices=[{"index": 0, "finish_reason": "stop",
@@ -92,3 +93,22 @@ def test_prepare_request_and_convert_response():
 def test_is_prompted_model():
     assert pt.is_prompted_model("openai/CohereLabs/tiny-aya-global:cohere")
     assert not pt.is_prompted_model("openai/openai/gpt-oss-120b:cerebras")
+
+
+def test_compact_tool_line():
+    tool = {"type": "function", "function": {
+        "name": "cancel_pending_order", "description": "Cancel a pending order. More text here.",
+        "parameters": {"type": "object", "required": ["order_id"], "properties": {
+            "order_id": {"type": "string", "description": "The order id, such as '#W0000000'."},
+            "reason": {"type": "string", "description": "either 'no longer needed' or 'ordered by mistake'"},
+            "item_ids": {"type": "array", "items": {"type": "string"}}}}}}
+    assert pt.compact_tool_line(tool) == (
+        "cancel_pending_order(order_id: str e.g. '#W0000000', "
+        "reason?: str one of 'no longer needed'|'ordered by mistake', item_ids?: list[str])"
+        " - Cancel a pending order."
+    )
+
+
+def test_minify_content():
+    assert pt.minify_content('{\n  "a": [1, 2]\n}') == '{"a":[1,2]}'
+    assert pt.minify_content("not json") == "not json"

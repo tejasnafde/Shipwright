@@ -23,9 +23,11 @@ import re
 import uuid
 from typing import Any
 
+from shipwright.context import REPLY_TOKENS, fit_messages
+
 TRACE_FIELD = "shipwright"
 
-INSTRUCTION = """You can use these tools:
+INSTRUCTION = """You can use these tools (name(arguments) - what it does; ? marks an optional argument):
 {tools}
 
 To call a tool, reply with exactly one block and nothing else:
@@ -49,18 +51,55 @@ def is_prompted_model(model: str) -> bool:
     return "tiny-aya" in model.lower()
 
 
-def _compact_tool(tool: dict) -> dict:
+_TYPES = {"string": "str", "integer": "int", "number": "float", "boolean": "bool", "object": "dict"}
+_CHOICE = re.compile(r"either ('[^']*') or ('[^']*')")
+_EXAMPLE = re.compile(r"such as (\'[^\']*\'|\"[^\"]*\")")
+
+
+def _type_name(schema: dict) -> str:
+    t = schema.get("type", "any")
+    if t == "array":
+        return f"list[{_type_name(schema.get('items') or {})}]"
+    return _TYPES.get(t, str(t))
+
+
+def _first_sentence(text: str, limit: int = 140) -> str:
+    text = " ".join((text or "").split())
+    m = re.search(r"(.+?\.)(\s|$)", text)
+    text = m.group(1) if m else text
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def compact_tool_line(tool: dict) -> str:
+    """One line per tool: name(arg: type e.g. 'x', opt?: type) - first sentence of the description."""
     fn = tool.get("function", tool)
-    return {
-        "name": fn.get("name"),
-        "description": fn.get("description", ""),
-        "parameters": fn.get("parameters", {}),
-    }
+    params = fn.get("parameters") or {}
+    required = set(params.get("required") or [])
+    args = []
+    for name, schema in (params.get("properties") or {}).items():
+        arg = f"{name}{'' if name in required else '?'}: {_type_name(schema)}"
+        desc = schema.get("description") or ""
+        ex = _EXAMPLE.search(desc)
+        choice = _CHOICE.search(desc)
+        if choice:
+            arg += f" one of {choice.group(1)}|{choice.group(2)}"
+        elif ex:
+            arg += f" e.g. {ex.group(1)}"
+        args.append(arg)
+    return f"{fn.get('name')}({', '.join(args)}) - {_first_sentence(fn.get('description', ''))}"
 
 
 def render_tools_prompt(tools: list[dict]) -> str:
-    lines = "\n".join(json.dumps(_compact_tool(t)) for t in tools)
+    lines = "\n".join(compact_tool_line(t) for t in tools)
     return INSTRUCTION.format(tools=lines)
+
+
+def minify_content(content: str) -> str:
+    """Compact JSON (no indentation) if the content is JSON, else unchanged."""
+    try:
+        return json.dumps(json.loads(content), separators=(",", ":"), ensure_ascii=False)
+    except (TypeError, ValueError):
+        return content
 
 
 def format_tool_call(name: str, arguments: Any) -> str:
@@ -95,7 +134,7 @@ def convert_messages(messages: list[dict], tools: list[dict]) -> list[dict]:
             out.append({"role": "assistant", "content": "\n".join(parts)})
         elif role == "tool":
             name = names_by_id.get(m.get("tool_call_id", ""), "tool")
-            out.append({"role": "user", "content": f"Tool result for {name}: {content}"})
+            out.append({"role": "user", "content": f"Tool result for {name}: {minify_content(content)}"})
         else:
             out.append({"role": role, "content": content})
     if not added:
@@ -176,7 +215,7 @@ def parse_tool_call(text: str | None) -> tuple[str, dict] | None:
     return None
 
 
-def convert_response(response: Any) -> None:
+def convert_response(response: Any, context: dict | None = None) -> None:
     """Turn a prompted JSON tool call in the reply into a native tool_calls entry (in place)."""
     from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
@@ -198,14 +237,19 @@ def convert_response(response: Any) -> None:
         else:
             status = "parse_failed" if looks_like_tool_attempt(raw) else "text"
         fields = dict(getattr(msg, "provider_specific_fields", None) or {})
-        fields[TRACE_FIELD] = {"raw_text": raw, "parse": status}
+        fields[TRACE_FIELD] = {"raw_text": raw, "parse": status, **(context or {})}
         msg.provider_specific_fields = fields
 
 
-def prepare_request(kwargs: dict) -> dict:
-    """Remove native tools from a completion request and prompt for them instead."""
+def prepare_request(kwargs: dict) -> tuple[dict, dict]:
+    """Remove native tools, prompt for them instead, and fit the context window.
+
+    Returns (new kwargs, context info for the trace).
+    """
     kwargs = dict(kwargs)
     tools = kwargs.pop("tools", None)
     kwargs.pop("tool_choice", None)
-    kwargs["messages"] = convert_messages(kwargs["messages"], tools)
-    return kwargs
+    messages, info = fit_messages(convert_messages(kwargs["messages"], tools))
+    kwargs["messages"] = messages
+    kwargs["max_tokens"] = REPLY_TOKENS
+    return kwargs, info

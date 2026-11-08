@@ -16,6 +16,7 @@ from typing import Any, Iterable
 MALFORMED_KEY = "__malformed_arguments__"
 
 PASS_THRESHOLD = 1.0 - 1e-6
+INFRA_ERROR = "infrastructure_error"
 
 
 def _raw_message(msg: dict) -> dict:
@@ -118,6 +119,10 @@ def build_trace(sim: dict, tool_names: set[str]) -> dict:
                 "turn_idx": msg.get("turn_idx"),
                 "raw_output": prompted["raw_text"] if "raw_text" in prompted else raw.get("content", text),
                 "tool_call_parse": parse_status,
+                "prompt_tokens_est": prompted.get("prompt_tokens_est"),
+                "context_dropped_messages": prompted.get("dropped_messages", 0),
+                "context_truncated_chars": prompted.get("truncated_chars", 0),
+                "context_trimmed": bool(prompted.get("dropped_messages") or prompted.get("truncated_chars")),
                 "reasoning": raw.get("reasoning_content") or raw.get("reasoning"),
                 "raw_tool_calls": raw_tool_calls,
                 "parsed_tool_calls": parsed,
@@ -137,6 +142,8 @@ def build_trace(sim: dict, tool_names: set[str]) -> dict:
         "reward": reward,
         "passed": reward is not None and reward >= PASS_THRESHOLD,
         "termination_reason": sim.get("termination_reason"),
+        "error": (sim.get("info") or {}).get("error"),
+        "error_type": (sim.get("info") or {}).get("error_type"),
         "reward_info": reward_info,
         "duration": sim.get("duration"),
         "agent_cost": sim.get("agent_cost"),
@@ -161,7 +168,7 @@ def summarize(traces: list[dict]) -> dict:
     n = len(traces)
     agent_tokens: Counter = Counter()
     user_tokens: Counter = Counter()
-    tool_calls = malformed = unknown = tool_errors = text_calls = parse_failed = 0
+    tool_calls = malformed = unknown = tool_errors = text_calls = parse_failed = trimmed = 0
     agent_turns = 0
     unknown_names: Counter = Counter()
     for t in traces:
@@ -173,6 +180,7 @@ def summarize(traces: list[dict]) -> dict:
             _add_usage(agent_tokens, turn.get("usage"))
             text_calls += int(turn["text_tool_call"])
             parse_failed += int(turn.get("tool_call_parse") == "parse_failed")
+            trimmed += int(bool(turn.get("context_trimmed")))
             for tc in turn["parsed_tool_calls"]:
                 tool_calls += 1
                 malformed += int(tc["malformed_arguments"])
@@ -186,11 +194,20 @@ def summarize(traces: list[dict]) -> dict:
         return sum(vals) if vals else None
 
     passed = sum(1 for t in traces if t["passed"])
+    infra = [t for t in traces if t["termination_reason"] == INFRA_ERROR]
+    clean = n - len(infra)
+    infra_messages = Counter((t.get("error") or "")[:150] for t in infra)
     return {
         "num_runs": n,
         "num_tasks": len({t["task_id"] for t in traces}),
         "num_passed": passed,
         "pass_rate": passed / n if n else None,
+        "num_infra_errors": len(infra),
+        "pass_rate_excluding_infra_errors": (
+            sum(1 for t in traces if t["passed"] and t["termination_reason"] != INFRA_ERROR) / clean
+            if clean else None
+        ),
+        "infra_error_messages": dict(infra_messages.most_common()),
         "avg_reward": (
             sum(t["reward"] or 0.0 for t in traces) / n if n else None
         ),
@@ -201,6 +218,7 @@ def summarize(traces: list[dict]) -> dict:
         "tool_errors": tool_errors,
         "tool_calls_in_text": text_calls,
         "tool_call_parse_failures": parse_failed,
+        "context_trimmed_turns": trimmed,
         "avg_agent_turns": agent_turns / n if n else None,
         "avg_messages": sum(t["num_messages"] for t in traces) / n if n else None,
         "termination_reasons": dict(Counter(t["termination_reason"] for t in traces)),

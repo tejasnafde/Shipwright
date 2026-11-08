@@ -49,6 +49,9 @@ PROMPTED_SCRIPT: list[str] = [
 
 def make_fake_completion(agent_model: str):
     def fake_completion(model: str, messages: list[dict], **kwargs: Any) -> ModelResponse:
+        if messages and "metExpectation" in str(messages[0].get("content") or ""):
+            verdict = {"results": [{"expectedOutcome": "x", "reasoning": "dry run", "metExpectation": False}]}
+            return _response(model, "```json\n" + json.dumps(verdict) + "\n```", None)
         if model == agent_model and not kwargs.get("tools"):
             # tau2's fixed greeting is the first assistant turn; do not count it.
             step = max(sum(1 for m in messages if m.get("role") == "assistant") - 1, 0)

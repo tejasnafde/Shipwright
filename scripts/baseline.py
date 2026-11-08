@@ -100,12 +100,24 @@ def main() -> int:
     from shipwright import llm_patch
     from shipwright.traces import build_trace, summarize, write_jsonl
 
+    # tau2 has built-in default models (NL-assertion judge gpt-5.4-mini, env interface,
+    # reviewers). Send every model other than agent and user to the user model.
+    rerouter = llm_patch.ModelRerouter({args.agent_model, args.user_model}, args.user_model)
     if args.dry_run:
         from shipwright.fake_llm import make_fake_completion
 
-        llm_patch.install(make_fake_completion(args.agent_model))
+        llm_patch.install(make_fake_completion(args.agent_model), model_map=rerouter)
     else:
-        llm_patch.install()
+        llm_patch.install(model_map=rerouter)
+        from shipwright import context
+
+        repo = args.agent_model.removeprefix("openai/").split(":")[0]
+        if "tiny-aya" in repo.lower():
+            print(f"token counting: {'tokenizer' if context.load_tokenizer(repo, token) else 'estimate'}")
+
+    import tau2.evaluator.evaluator_nl_assertions as nl_assertions
+
+    nl_assertions.DEFAULT_LLM_NL_ASSERTIONS = args.user_model
 
     from tau2.data_model.simulation import TextRunConfig
     from tau2.registry import registry
@@ -146,6 +158,7 @@ def main() -> int:
     summary["user_model"] = args.user_model
     summary["domain"] = args.domain
     summary["task_split"] = args.task_split
+    summary["rerouted_models"] = rerouter.counts
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
     print(f"\nWrote {out_dir}")
