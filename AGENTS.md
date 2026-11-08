@@ -48,6 +48,7 @@ and the tool-fix vs weight-fix comparison.
 
 - How to run: `docs/baseline.md`. tau2-bench is pinned in `scripts/setup_tau2.sh` and lives in `third_party/` (git-ignored).
 - Agent and user simulator run through HF Inference Providers (router `https://router.huggingface.co/v1`). The token is read at run time from `$SWITCHBOARD_SECRETS_DIR/HF_TOKEN`.
+- 2026-11-08: Tiny Aya has no native tool calling (template and HF router drop `tools`). We use prompted JSON tool calls (`src/shipwright/prompted_tools.py`, format in `docs/baseline.md`). Training data must use the same format.
 - `scripts/baseline.py` defaults to the tau2 `train` split so held-out tasks stay unused until the splits are frozen.
 
 ## Traces

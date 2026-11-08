@@ -47,6 +47,35 @@ Other flags: `--task-split train|test|base` (default `train`, so held-out tasks 
   tool calls written as text, average turns, token usage, a cost estimate.
 - `run_config.json`: the arguments of the run.
 
+## Prompted tool calls (Tiny Aya)
+
+Tiny Aya has no native tool calling. Its chat template knows only system, user and
+assistant turns, and the HF router (cohere provider) drops the `tools` parameter
+(checked 2026-11-08: HTTP 200, no `tool_calls`, 74 prompt tokens).
+`src/shipwright/prompted_tools.py` handles this at the litellm layer, only for models
+with `tiny-aya` in the name. tau2 stays unchanged.
+
+- Request: `tools` and `tool_choice` are removed. The tool schemas, a short instruction
+  and one example go into the system message.
+- Reply format the model must use:
+
+  ````
+  ```json
+  {"name": "get_order_details", "arguments": {"order_id": "#W1234567"}}
+  ```
+  ````
+
+  Any other reply is plain text to the user.
+- History: assistant tool calls become that JSON block; tool results become user turns
+  `Tool result for <name>: <content>`.
+- Response: the first JSON object (fenced or not, trailing text allowed, trivial single
+  quotes allowed) becomes a native `tool_calls` entry. If the reply looks like a tool
+  call but does not parse, it goes to the user as text and the trace marks
+  `tool_call_parse: parse_failed`.
+- The raw reply text is kept per turn (`raw_output`). `summary.json` counts
+  `tool_call_parse_failures`.
+- Training data for the student model must use this same format.
+
 ## Malformed tool calls
 
 tau2 runs `json.loads` on every tool-call argument string, so one bad call would crash the
