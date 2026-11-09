@@ -33,9 +33,10 @@ from train_job import estimate_cost  # noqa: E402
 GATE_SCRIPT = ROOT / "scripts" / "gate_eval.py"
 RUNS_REPO = "mitushigoyal5/shipwright-runs"
 BUNDLE_PATHS = ["src", "scripts", "configs", "patches", "pyproject.toml"]
-# User simulator cost per tau2 run on the HF router (USD). The 20-task baseline spent about
-# $0.0026 per run with gpt-oss-120b on cerebras; doubled for longer runs. Estimate only.
-USER_COST_PER_RUN = 0.005
+# User simulator cost per tau2 run (USD). The 20-task baseline spent about $0.0026 per run with
+# gpt-oss-120b on cerebras; doubled for longer runs. Vertex gpt-oss-120b list prices are about
+# half of cerebras (0.09/0.36 vs 0.25/0.69 per 1M tokens). Estimates only.
+USER_COST_PER_RUN = {"hf_router": 0.005, "vertex": 0.0025}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -44,7 +45,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--current", type=Path, required=True, help="system config, e.g. configs/systems/base.yaml")
     p.add_argument("--candidate", type=Path, required=True, help="system config of the candidate")
     p.add_argument("--user-model", required=True,
-                   help="user simulator, litellm id via the HF router (no default: the team has not chosen it)")
+                   help="user simulator: HF router litellm id or vertex/<publisher>/<model> (no default;"
+                        " team choice: vertex/openai/gpt-oss-120b-maas)")
     p.add_argument("--config", type=Path, default=ROOT / "configs" / "gate.yaml")
     p.add_argument("--target-label", nargs="*", default=None, help="override the candidate's targets")
     p.add_argument("--flavor", default="a100-large")
@@ -86,6 +88,10 @@ def main(argv: list[str] | None = None) -> int:
     price, worst = estimate_cost(args.flavor, args.timeout, args.price_per_hour)
     held = cfg["heldout"]
     runs = 2 * held["num_tasks"] * cfg["k"]
+    from shipwright import vertex
+
+    on_vertex = vertex.is_vertex_model(args.user_model)
+    user_cost = runs * USER_COST_PER_RUN["vertex" if on_vertex else "hf_router"]
     sha = git("rev-parse", "--short", "HEAD")
     bundle = f"gate/round-{args.round}/code/shipwright-{sha}.tar.gz"
     targets = args.target_label if args.target_label is not None else systems["candidate"]["targets"]
@@ -101,8 +107,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"targets:   {targets or 'NONE (the gate will reject)'}")
     print(f"held-out:  {held['domain']} {held['task_split']}, {held['num_tasks']} tasks x k={cfg['k']}"
           f" x 2 systems = {runs} tau2 runs")
-    print(f"user sim:  {args.user_model} via the HF router, about ${runs * USER_COST_PER_RUN:.2f}"
-          f" (${USER_COST_PER_RUN}/run estimate)")
+    print(f"user sim:  {args.user_model} via {'Vertex AI (GCP billing)' if on_vertex else 'the HF router'},"
+          f" about ${user_cost:.2f} estimate")
+    if on_vertex:
+        print("           warning: the job gets a gcloud token minted now, valid about 1 h, with no refresh."
+              " A gate that runs longer loses its user simulator; keep the timeout near 1 h or use an HF user model.")
     if (cfg.get("bfcl") or {}).get("enabled"):
         b = cfg["bfcl"]
         print(f"BFCL:      {', '.join(b['categories'])}, up to {b.get('limit_per_category')} each, on the GPU")
@@ -110,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"flavor:    {args.flavor} at ${price:.2f}/h")
     print(f"timeout:   {args.timeout}")
     print(f"max cost:  ${worst:.2f} GPU (price x timeout; billed only for the time the job runs)"
-          f" + about ${runs * USER_COST_PER_RUN:.2f} user simulator")
+          f" + about ${user_cost:.2f} user simulator")
     print(f"results:   https://huggingface.co/datasets/{args.runs_repo}/tree/main/gate/round-{args.round}/"
           f"{systems['candidate']['name']}")
     print(f"code:      git HEAD {sha} -> {bundle}")
@@ -129,6 +138,13 @@ def main(argv: list[str] | None = None) -> int:
     if not token:
         print("No HF token: expected $SWITCHBOARD_SECRETS_DIR/HF_TOKEN or $HF_TOKEN.", file=sys.stderr)
         return 2
+    secrets = {"HF_TOKEN": token}
+    if on_vertex:
+        try:
+            secrets["SHIPWRIGHT_VERTEX_TOKEN"] = vertex.gcloud_token()
+        except RuntimeError as e:
+            print(f"Vertex token: {e}", file=sys.stderr)
+            return 2
     api = HfApi(token=token)
     api.create_repo(args.runs_repo, repo_type="dataset", exist_ok=True, private=False)
     with tempfile.TemporaryDirectory() as tmp:
@@ -142,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         script_args=script_args(args, bundle),
         flavor=args.flavor,
         timeout=args.timeout,
-        secrets={"HF_TOKEN": token},
+        secrets=secrets,
         labels={"app": "lexsi-hackathon", "round": f"round-{args.round}", "step": "gate"},
         namespace=args.namespace,
         token=token,

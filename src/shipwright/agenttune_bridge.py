@@ -37,6 +37,7 @@ from agenttune.decide.closed_loop.deployment_gate import DeploymentGate
 from agenttune.decide.closed_loop.failure_detector import FailureDetector
 from agenttune.decide.closed_loop.retraining_trigger import RetrainingTrigger, TriggerConfig
 
+from shipwright import vertex
 from shipwright.classify import RULE_LAYERS, compact_trace, expected_actions, route
 
 # AgentTune FailureClassifier.ROOT_CAUSES -> (our label, fault layer). AgentTune has no
@@ -144,7 +145,10 @@ def _failure_classifier_cls():
 
 
 def make_classifier(model_name: str, api_base: str | None = None):
-    """AgentTune ``FailureClassifier`` with our prompt context (litellm model id)."""
+    """AgentTune ``FailureClassifier`` with our prompt context.
+
+    ``model_name``: a ``vertex/<publisher>/<model>`` id (Vertex AI through litellm, api_base and
+    a fresh gcloud token per call, see ``shipwright.vertex``) or any other litellm id."""
     base = _failure_classifier_cls()
 
     class ShipwrightFailureClassifier(base):
@@ -172,6 +176,36 @@ def make_classifier(model_name: str, api_base: str | None = None):
             )
             messages[-1] = {"role": "user", "content": user[:CLASSIFIER_CONTEXT_CHARS]}
             return messages
+
+        async def _classify_single(self, failure: Failure) -> ClassifiedFailure:
+            """A non-vertex id runs AgentTune's own method. A ``vertex/`` id needs a bearer
+            token per call (AgentTune's method passes no api_key), so this does the same
+            request and parsing with ``shipwright.vertex.route_kwargs`` and one retry on 401."""
+            if not vertex.is_vertex_model(self.model_name):
+                return await super()._classify_single(failure)
+            import litellm
+
+            kwargs = {"model": self.model_name, "messages": self._build_prompt(failure),
+                      "response_format": {"type": "json_object"}}
+            tokens = vertex.provider()
+            try:
+                try:
+                    response = await litellm.acompletion(**vertex.route_kwargs(kwargs, tokens))
+                except Exception as e:  # noqa: BLE001
+                    if not vertex.is_auth_error(e):
+                        raise
+                    tokens.invalidate()
+                    response = await litellm.acompletion(**vertex.route_kwargs(kwargs, tokens))
+                parsed = json.loads(response.choices[0].message.content)
+                root = parsed.get("root_cause", "")
+                return ClassifiedFailure(
+                    failure=failure,
+                    root_cause=root if root in self.ROOT_CAUSES else "incomplete_reasoning",
+                    confidence=float(parsed.get("confidence", 0.5)),
+                    analysis=parsed.get("analysis", "No analysis provided"))
+            except Exception as e:  # noqa: BLE001 - same fallback as AgentTune's
+                return ClassifiedFailure(failure=failure, root_cause="incomplete_reasoning", confidence=0.0,
+                                         analysis=f"Classification failed due to error: {type(e).__name__}: {e}")
 
     return ShipwrightFailureClassifier(model_name=model_name, api_base=api_base)
 

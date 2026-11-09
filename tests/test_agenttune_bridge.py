@@ -130,6 +130,49 @@ def test_classifier_error_keeps_rules(monkeypatch, tmp_path):
     assert row["source"] == "rules" and row["route"] == "weight_fix"
 
 
+def test_vertex_classifier_routes_with_a_fresh_token(monkeypatch, tmp_path):
+    from shipwright import vertex
+
+    class Expired(Exception):
+        status_code = 401
+
+    tokens = iter(["tok-1", "tok-2"])
+    monkeypatch.setattr(vertex, "_provider", vertex.TokenProvider(fetch=lambda: next(tokens)))
+    seen = fake_litellm(monkeypatch, {"root_cause": "wrong_tool", "confidence": 0.7, "analysis": "w"})
+    import agenttune.decide.closed_loop.failure_classifier as fc
+
+    ok = fc.litellm.acompletion
+    calls = []
+
+    async def first_401(**kwargs):
+        calls.append(kwargs["api_key"])
+        if len(calls) == 1:
+            raise Expired("401")
+        return await ok(**kwargs)
+
+    monkeypatch.setattr(fc.litellm, "acompletion", first_401)
+    clf = ab.make_classifier(vertex.JUDGE_MODEL)
+    [row] = ab.classify_traces([synthetic([("search_products", {"page": 1}, False)])], tmp_path, classifier=clf)
+    assert row["agenttune_root_cause"] == "wrong_tool" and row["source"] == "agenttune"
+    assert calls == ["tok-1", "tok-2"]  # 401, new token, retry
+    [call] = seen
+    assert call["model"] == "openai/openai/gpt-oss-120b-maas"
+    assert call["api_base"].startswith("https://aiplatform.googleapis.com/v1/projects/")
+    assert "tok" not in repr(clf.__dict__)  # the token is not stored on the classifier
+
+
+def test_vertex_classifier_error_is_recorded_not_raised(monkeypatch, tmp_path):
+    from shipwright import vertex
+
+    def no_gcloud():
+        raise RuntimeError("gcloud failed")
+
+    monkeypatch.setattr(vertex, "_provider", vertex.TokenProvider(fetch=no_gcloud))
+    [row] = ab.classify_traces([synthetic([("search_products", {"page": 1}, False)])], tmp_path,
+                               classifier=ab.make_classifier(vertex.JUDGE_MODEL))
+    assert row["agenttune_root_cause"] is None and "gcloud failed" in row["agenttune_error"]
+
+
 def test_every_agenttune_root_cause_is_mapped():
     from agenttune.decide.closed_loop.failure_classifier import FailureClassifier
     from shipwright.classify import JUDGE_LABELS

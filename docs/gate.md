@@ -87,7 +87,7 @@ The HF router serves only the base model, so the job serves both systems itself 
 - If that server does not start, the job falls back to `merged`: peft `merge_and_unload`,
   then one server per system. `--serve-mode merged` forces it; `--no-merge-fallback` stops it.
 - The agent goes to `http://localhost:8000/v1` (`baseline.py --agent-api-base`); the user
-  simulator goes to the HF router. Served names contain `tiny-aya`, so the prompted-tools
+simulator goes to the HF router, or to Vertex AI for a `vertex/` id. Served names contain `tiny-aya`, so the prompted-tools
   layer applies.
 
 The repo is private, so `gate_job.py --launch` uploads `git archive HEAD` (src, scripts,
@@ -116,9 +116,12 @@ hf jobs logs <job id>      # follow
 hf jobs cancel <job id>    # stop early
 ```
 
-`<USER_MODEL>` is a litellm id via the HF router (e.g. `openai/openai/gpt-oss-120b:cerebras`).
-It has no default: the team has not chosen it. Default flavor `a100-large` at $2.50/h with a
-2 h timeout: at most $5.00 GPU, plus about $1.20 of user simulator calls (240 tau2 runs).
+`<USER_MODEL>` has no default. Team choice (2026-11-09): `vertex/openai/gpt-oss-120b-maas`.
+An HF router id (e.g. `openai/openai/gpt-oss-120b:cerebras`) also works. An HF Job cannot run
+gcloud, so for a `vertex/` user model `gate_job.py --launch` mints a token on your machine and passes
+it as the job secret `SHIPWRIGHT_VERTEX_TOKEN`. It lasts about 1 hour with no refresh: keep such a
+job under 1 hour, or use an HF router user model for a longer one. Default flavor `a100-large` at $2.50/h with a
+2 h timeout: at most $5.00 GPU, plus about $1.20 of user simulator calls on the HF router, or about $0.60 on Vertex (240 tau2 runs).
 
 ## Output
 

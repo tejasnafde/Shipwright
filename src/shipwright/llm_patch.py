@@ -8,7 +8,9 @@ environment returns a tool error to the agent (as a real deployment would), and
 the original text stays in the trace.
 
 For Tiny Aya (no native tool calling) it also switches the call to prompted
-JSON tool calls, see ``shipwright.prompted_tools``.
+JSON tool calls, see ``shipwright.prompted_tools``. ``vertex/`` model ids go to
+Vertex AI with a fresh token (``shipwright.vertex``). A ``UsageMeter`` counts the
+tokens of every call by role (agent, user, judge) for the cost estimate.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ import json
 import threading
 from typing import Any, Callable
 
+from shipwright import vertex
+from shipwright.costs import UsageMeter
 from shipwright.prompted_tools import convert_response, is_prompted_model, prepare_request
 from shipwright.traces import MALFORMED_KEY
 
@@ -65,15 +69,29 @@ def strip_json_fences(response: Any) -> None:
             choice.message.content = text.strip()
 
 
+def call_role(original: dict, kwargs: dict, agent_model: str | None, user_model: str | None) -> str:
+    """Which role a call belongs to: judge (NL judge or a rerouted tau2 default), agent or user."""
+    if is_nl_judge_request(kwargs) or original.get("model") != kwargs.get("model"):
+        return "judge"
+    model = kwargs.get("model")
+    if model == agent_model and (model != user_model or kwargs.get("tools")):
+        return "agent"
+    return "user"
+
+
 def install(
     fake_completion: Callable[..., Any] | None = None,
     model_map: Callable[[dict], dict] | None = None,
+    meter: UsageMeter | None = None,
+    agent_model: str | None = None,
+    user_model: str | None = None,
 ) -> None:
     """Patch ``tau2.utils.llm_utils.completion``. Call once, before running tau2.
 
-    ``fake_completion`` replaces the network call (used by the offline dry run).
-    ``model_map`` rewrites the request kwargs first (used to reroute tau2's
-    built-in default models, e.g. the NL-assertion judge, to the HF router).
+    ``fake_completion`` replaces the network call (used by the offline dry run; ``vertex/``
+    ids are then not routed). ``model_map`` rewrites the request kwargs first (used to
+    reroute tau2's built-in default models, e.g. the NL-assertion judge, to the user model).
+    ``meter`` counts usage by role (``call_role``), keyed by the model id before routing.
     """
     global _installed
     import tau2.utils.llm_utils as llm_utils
@@ -84,13 +102,21 @@ def install(
         real = fake_completion or llm_utils.completion
 
         def wrapped(*args: Any, **kwargs: Any) -> Any:
+            original = kwargs
             if model_map is not None:
                 kwargs = model_map(kwargs)
-            prompted = is_prompted_model(str(kwargs.get("model", ""))) and bool(kwargs.get("tools"))
+            model = str(kwargs.get("model", ""))
+            role = call_role(original, kwargs, agent_model, user_model)
+            prompted = is_prompted_model(model) and bool(kwargs.get("tools"))
             context = None
             if prompted:
                 kwargs, context = prepare_request(kwargs)
-            response = real(*args, **kwargs)
+            if fake_completion is None and vertex.is_vertex_model(model):
+                response = vertex.call_with_refresh(lambda **kw: real(*args, **kw), kwargs)
+            else:
+                response = real(*args, **kwargs)
+            if meter is not None:
+                meter.add(role, model, getattr(response, "usage", None))
             if is_nl_judge_request(kwargs):
                 strip_json_fences(response)
             if prompted:

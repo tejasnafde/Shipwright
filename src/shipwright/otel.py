@@ -240,6 +240,7 @@ def _emit_turn(tracer, root_ctx, clock: _Clock, i: int, msg: dict, turn: dict | 
         "gen_ai.response.finish_reasons": [turn["finish_reason"]] if turn.get("finish_reason") else None,
         "gen_ai.usage.input_tokens": usage.get("prompt_tokens"),
         "gen_ai.usage.output_tokens": usage.get("completion_tokens"),
+        "gen_ai.usage.cache_read.input_tokens": usage.get("cached_prompt_tokens"),
         "gen_ai.output.messages": output_messages,
         "openinference.span.kind": "LLM",
         "llm.model_name": model or None,
