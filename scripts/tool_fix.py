@@ -24,9 +24,9 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from shipwright import tool_fix as tf  # noqa: E402
+from shipwright.vertex import JUDGE_MODEL  # noqa: E402
 
 DEFAULT_LEDGER = ROOT / "patches" / "ledger.jsonl"
-PROPOSER_MODEL = "openai/gpt-oss-120b:cerebras"
 
 
 def domain_tools(domain: str) -> list[dict]:
@@ -46,7 +46,9 @@ def main() -> int:
     p.add_argument("--domain", default="retail")
     p.add_argument("--round", type=int, default=None)
     p.add_argument("--no-llm", action="store_true")
-    p.add_argument("--model", default=PROPOSER_MODEL)
+    p.add_argument("--model", default=JUDGE_MODEL,
+                   help="raw HF router id (e.g. openai/gpt-oss-120b:cerebras) or vertex/<publisher>/<model>"
+                        " (default: the team's choice, Vertex gpt-oss-120b)")
     p.add_argument("--apply", nargs="+", metavar="PATCH_ID")
     p.add_argument("--apply-proposed", action="store_true")
     p.add_argument("--rollback", metavar="PATCH_ID")
@@ -85,11 +87,11 @@ def main() -> int:
         from baseline import load_token
         from classify import make_chat
 
-        token = load_token()
-        if not token:
-            print("No HF token; use --no-llm or provide the token.", file=sys.stderr)
+        try:
+            chat = make_chat(load_token(), args.model)
+        except RuntimeError as e:
+            print(f"{e} Use --no-llm, or provide the token.", file=sys.stderr)
             return 2
-        chat = make_chat(token, args.model)
 
     rows, notes = tf.propose(failures, traces, tools, ledger, chat, args.round)
     for n in notes:

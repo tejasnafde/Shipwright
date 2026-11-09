@@ -11,6 +11,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
+from shipwright.costs import cached_tokens, hit_rate
+
 # Key that llm_patch puts into tool-call arguments when the model's arguments
 # are not a valid JSON object. The original string is kept under this key.
 MALFORMED_KEY = "__malformed_arguments__"
@@ -43,6 +45,15 @@ def _finish_reason(msg: dict) -> str | None:
     raw = msg.get("raw_data") or {}
     choices = raw.get("choices") or []
     return choices[0].get("finish_reason") if choices else None
+
+
+def _usage(msg: dict) -> dict | None:
+    """tau2's usage (prompt and completion tokens) plus cached prompt tokens from raw_data, if reported."""
+    usage = msg.get("usage")
+    cached = cached_tokens((msg.get("raw_data") or {}).get("usage"))
+    if usage is not None and cached is not None:
+        usage = {**usage, "cached_prompt_tokens": cached}
+    return usage
 
 
 def _looks_like_text_tool_call(text: str | None) -> bool:
@@ -131,7 +142,7 @@ def build_trace(sim: dict, tool_names: set[str]) -> dict:
                 "errors": errors,
                 "text_tool_call": text_tool_call,
                 "finish_reason": _finish_reason(msg),
-                "usage": msg.get("usage"),
+                "usage": _usage(msg),
             }
         )
 
@@ -152,14 +163,15 @@ def build_trace(sim: dict, tool_names: set[str]) -> dict:
         "num_messages": len(messages),
         "agent_turns": turns,
         # Full message list; raw_data is dropped here because agent_turns keeps it.
-        "messages": [{k: v for k, v in m.items() if k != "raw_data"} for m in messages],
+        "messages": [{**{k: v for k, v in m.items() if k != "raw_data"},
+                      **({"usage": _usage(m)} if m.get("usage") is not None else {})} for m in messages],
     }
 
 
 def _add_usage(total: Counter, usage: dict | None) -> None:
     if not usage:
         return
-    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens", "cached_prompt_tokens"):
         if isinstance(usage.get(key), (int, float)):
             total[key] += usage[key]
 
@@ -225,6 +237,10 @@ def summarize(traces: list[dict]) -> dict:
         "termination_reasons": dict(Counter(t["termination_reason"] for t in traces)),
         "agent_tokens": dict(agent_tokens),
         "user_tokens": dict(user_tokens),
+        "cached_prompt_tokens": {"agent": agent_tokens["cached_prompt_tokens"],
+                                 "user": user_tokens["cached_prompt_tokens"]},
+        "cache_hit_rate": {"agent": hit_rate(agent_tokens["prompt_tokens"], agent_tokens["cached_prompt_tokens"]),
+                           "user": hit_rate(user_tokens["prompt_tokens"], user_tokens["cached_prompt_tokens"])},
         "agent_cost_litellm": _sum("agent_cost"),
         "user_cost_litellm": _sum("user_cost"),
     }

@@ -11,6 +11,8 @@ Writes to the output dir:
 
 The HF token is read at run time from $SWITCHBOARD_SECRETS_DIR/HF_TOKEN (or $HF_TOKEN).
 It is passed to litellm only through process environment variables, never written to disk.
+Model ids that start with vertex/ (e.g. vertex/openai/gpt-oss-120b-maas) go to Vertex AI with a
+gcloud token instead (src/shipwright/vertex.py); a run with only vertex/ models needs no HF token.
 
 --dry-run uses a scripted fake LLM: no network, no token, exercises the full pipeline.
 """
@@ -31,11 +33,6 @@ HF_ROUTER = "https://router.huggingface.co/v1"
 DEFAULT_AGENT = "openai/CohereLabs/tiny-aya-global:cohere"
 DEFAULT_USER = "openai/openai/gpt-oss-120b:cerebras"
 
-# USD per 1M tokens (input, output). Estimates only; check HF billing for real cost.
-PRICES = {
-    "agent": (0.50, 1.50),  # Tiny Aya on cohere: price not published, conservative guess
-    "user": (0.25, 0.69),  # gpt-oss-120b on cerebras
-}
 
 
 def load_token() -> str | None:
@@ -59,7 +56,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--task-ids", nargs="*", default=None, help="explicit task ids (overrides --num-tasks)")
     p.add_argument("--trials", type=int, default=1)
     p.add_argument("--agent-model", default=DEFAULT_AGENT)
-    p.add_argument("--user-model", default=DEFAULT_USER)
+    p.add_argument("--user-model", default=DEFAULT_USER,
+                   help="user simulator (and tau2's judge): an HF router litellm id or vertex/<publisher>/<model>")
     p.add_argument("--agent-temperature", type=float, default=0.0)
     p.add_argument("--max-steps", type=int, default=100)
     p.add_argument("--max-concurrency", type=int, default=4)
@@ -80,18 +78,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return build_parser().parse_args(argv)
 
 
-def estimate_cost(summary: dict, prices: dict | None = None) -> dict:
-    prices = prices or PRICES
-    out = {}
-    for who in ("agent", "user"):
-        toks = summary.get(f"{who}_tokens") or {}
-        pin, pout = prices[who]
-        out[who] = round(
-            toks.get("prompt_tokens", 0) / 1e6 * pin + toks.get("completion_tokens", 0) / 1e6 * pout, 4
-        )
-    out["total"] = round(out["agent"] + out["user"], 4)
-    out["note"] = "estimate from token counts and assumed prices in scripts/baseline.py"
-    return out
+def cost_estimate(meter, args: argparse.Namespace, role_names: dict[str, str] | None = None) -> dict:
+    """Per-role cost from the usage meter, priced by provider (src/shipwright/costs.py)."""
+    from shipwright.costs import estimate, provider_of
+
+    providers = {args.user_model: provider_of(args.user_model, dry_run=args.dry_run),
+                 args.agent_model: provider_of(args.agent_model, args.agent_api_base, args.dry_run)}
+    return estimate(meter.rows, providers, role_names)
 
 
 def run(
@@ -100,32 +93,47 @@ def run(
     prefix: str = "baseline",
     prompted_models: dict[str, int] | None = None,
     agent_llm_args: dict | None = None,
-    prices: dict | None = None,
+    role_names: dict[str, str] | None = None,
 ) -> tuple[Path, list[dict], dict] | None:
     """Run tau2 with the given args. Returns (run dir, traces, summary), or None without a token.
 
     ``prompted_models`` maps extra model names to their reply-token budget: they get the
     same prompted-tools view as Tiny Aya (used for the teacher). ``agent_llm_args`` is
-    merged into the agent's litellm args (e.g. reasoning_effort).
+    merged into the agent's litellm args (e.g. reasoning_effort). ``role_names`` renames
+    roles in the cost estimate (teacher runs: agent -> teacher).
     """
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = (args.output_dir or ROOT / "runs" / f"{prefix}-{stamp}").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    from shipwright import vertex
+
     token = None
+    needs_hf = not (vertex.is_vertex_model(args.user_model)
+                    and (vertex.is_vertex_model(args.agent_model) or args.agent_api_base))
     if args.dry_run:
         os.environ.setdefault("OPENAI_API_KEY", "dry-run")
     else:
         token = load_token()
-        if not token:
+        if needs_hf and not token:
             print("No HF token: expected $SWITCHBOARD_SECRETS_DIR/HF_TOKEN or $HF_TOKEN.", file=sys.stderr)
             return None
-        # litellm's openai provider reads these; nothing token-bearing goes into tau2 config.
-        os.environ["OPENAI_API_KEY"] = token
-        os.environ["OPENAI_API_BASE"] = HF_ROUTER
-        os.environ["OPENAI_BASE_URL"] = HF_ROUTER
+        if token:
+            # litellm's openai provider reads these; nothing token-bearing goes into tau2 config.
+            # vertex/ calls pass their own api_base and api_key per call.
+            os.environ["OPENAI_API_KEY"] = token
+            os.environ["OPENAI_API_BASE"] = HF_ROUTER
+            os.environ["OPENAI_BASE_URL"] = HF_ROUTER
+        if vertex.is_vertex_model(args.agent_model) or vertex.is_vertex_model(args.user_model):
+            try:
+                vertex.provider().get()  # fail now, not mid-run, if gcloud cannot mint a token
+            except RuntimeError as e:
+                print(f"Vertex token: {e}", file=sys.stderr)
+                return None
+            print(f"vertex: project {vertex.project()}, location {vertex.location()}")
 
     from shipwright import llm_patch, prompted_tools
+    from shipwright.costs import UsageMeter
     from shipwright.traces import build_trace, summarize, write_jsonl
 
     for model, reply_tokens in (prompted_models or {}).items():
@@ -134,12 +142,14 @@ def run(
     # tau2 has built-in default models (NL-assertion judge gpt-5.4-mini, env interface,
     # reviewers). Send every model other than agent and user to the user model.
     rerouter = llm_patch.ModelRerouter({args.agent_model, args.user_model}, args.user_model)
+    meter = UsageMeter()
+    roles = {"meter": meter, "agent_model": args.agent_model, "user_model": args.user_model}
     if args.dry_run:
         from shipwright.fake_llm import make_fake_completion
 
-        llm_patch.install(make_fake_completion(args.agent_model), model_map=rerouter)
+        llm_patch.install(make_fake_completion(args.agent_model), model_map=rerouter, **roles)
     else:
-        llm_patch.install(model_map=rerouter)
+        llm_patch.install(model_map=rerouter, **roles)
         from shipwright import context
 
         if prompted_tools.is_prompted_model(args.agent_model):
@@ -184,8 +194,7 @@ def run(
     agent_args: dict = {"temperature": args.agent_temperature, **(agent_llm_args or {})}
     if args.agent_api_base and not args.dry_run:
         # Per-call endpoint for the agent; vLLM ignores the key (no --api-key on the server).
-        agent_args.update(api_base=args.agent_api_base, api_key="EMPTY")
-        prices = {**(prices or PRICES), "agent": (0.0, 0.0)}  # our GPU, billed per hour, not per token
+        agent_args.update(api_base=args.agent_api_base, api_key="EMPTY")  # priced 0: our GPU, per hour
 
     config = TextRunConfig(
         domain=args.domain,
@@ -211,7 +220,8 @@ def run(
     traces = [build_trace(s, tool_names) for s in sims]
     write_jsonl(out_dir / "traces.jsonl", traces)
     summary = summarize(traces)
-    summary["cost_estimate_usd"] = estimate_cost(summary, prices)
+    summary["usage_by_role"] = meter.by_role()
+    summary["cost_estimate_usd"] = cost_estimate(meter, args, role_names)
     summary["agent_model"] = args.agent_model
     summary["user_model"] = args.user_model
     summary["domain"] = args.domain
@@ -233,7 +243,8 @@ def export_spans(traces: list[dict], out_dir: Path, args: argparse.Namespace, ac
     except Exception as e:  # noqa: BLE001 - e.g. opentelemetry not installed
         print(f"warning: OTel spans skipped ({e})")
         return
-    provider = "dry_run" if args.dry_run else ("openai" if args.agent_api_base else "huggingface")
+    provider = "dry_run" if args.dry_run else (
+        "openai" if args.agent_api_base else ("vertex" if args.agent_model.startswith("vertex/") else "huggingface"))
     export_run(traces, out_dir, {
         "agent_model": args.agent_model, "user_model": args.user_model, "domain": args.domain,
         "task_split": args.task_split, "provider": provider, "active_tool_patches": active_patches,

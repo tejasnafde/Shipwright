@@ -11,7 +11,7 @@ Three modes:
   --in-job           Inside an HF Job (launched by scripts/gate_job.py). Downloads the code
                      bundle, installs the harness (scripts/setup_tau2.sh), starts vLLM with
                      the base model and the candidate LoRA, runs tau2 for both systems with
-                     k trials (agent: http://localhost:8000/v1, user simulator: HF router),
+                     k trials (agent: http://localhost:8000/v1, user simulator: HF router or Vertex),
                      runs BFCL, classifies failures, computes metrics, decides and pushes
                      everything to <runs-repo>/gate/round-N/<candidate>/ plus one row to
                      the dataset's metrics.jsonl.
@@ -55,8 +55,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--current", type=Path, default=None, help="system config of the current system")
     p.add_argument("--candidate", type=Path, default=None, help="system config of the candidate")
     p.add_argument("--user-model", default=None,
-                   help="user simulator, litellm id via the HF router (required for --in-job; no default:"
-                        " the team has not chosen it)")
+                   help="user simulator: HF router litellm id or vertex/<publisher>/<model> (required for"
+                        " --in-job; no default). In a job, vertex/ uses $SHIPWRIGHT_VERTEX_TOKEN (set by gate_job.py)")
     p.add_argument("--target-label", nargs="*", default=None, help="override the candidate's targets")
     p.add_argument("--output-dir", type=Path, default=None)
     p.add_argument("--runs-repo", default=RUNS_REPO)
@@ -81,7 +81,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if not decide_only and not (args.current and args.candidate):
         p.error("--current and --candidate system configs are required")
     if args.in_job and not args.user_model:
-        p.error("--user-model is required (no default: the team has not chosen it)")
+        p.error("--user-model is required (no default)")
     # Config paths are repo-relative (the job re-runs this script from the unpacked bundle).
     for key in ("config", "current", "candidate"):
         path = getattr(args, key)

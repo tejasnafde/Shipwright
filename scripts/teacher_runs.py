@@ -1,6 +1,7 @@
 """Teacher runs: a strong model plays the agent on tau2 retail, in the student's format.
 
-The teacher is a required argument (--teacher-model); see docs/training.md for candidates.
+The teacher and the user simulator are required arguments (--teacher-model, --user-model); see
+docs/training.md for the team's current choice (Vertex AI).
 
 The teacher sees exactly the prompt Tiny Aya sees: the compact tool list, the ```json
 block protocol, no native tools, the same 8192-token prompt budget (see
@@ -35,8 +36,6 @@ import baseline  # noqa: E402
 DEFAULT_FROM_RUN = ROOT / "runs" / "baseline-20261108-214337"
 # The teacher's reasoning counts against max_tokens; 700 (the student's budget) is too small.
 TEACHER_REPLY_TOKENS = 4096
-# Cost estimate only. Assumed teacher price (USD per 1M input, output tokens); check HF billing.
-TEACHER_PRICES = {"agent": (1.00, 3.00), "user": baseline.PRICES["user"]}
 
 
 def weight_fix_task_ids(run_dir: Path) -> list[str]:
@@ -62,9 +61,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--all-train", action="store_true", help="run every train task")
     p.add_argument("--trials", type=int, default=3)
     p.add_argument("--teacher-model", required=True,
-                   help="litellm id via the HF router, e.g. openai/openai/gpt-oss-120b:cerebras (no default:"
-                        " the team picks it; it must allow training on its outputs)")
-    p.add_argument("--user-model", default=baseline.DEFAULT_USER)
+                   help="vertex/<publisher>/<model> or an HF router litellm id (no default; the team's current"
+                        " choice is vertex/deepseek-ai/deepseek-v4.1-flash-maas; it must allow training on its outputs)")
+    p.add_argument("--user-model", required=True,
+                   help="user simulator and judge (no default; the team's current choice is"
+                        " vertex/openai/gpt-oss-120b-maas)")
     p.add_argument("--temperature", type=float, default=0.7, help="teacher temperature (variety across trials)")
     p.add_argument("--reasoning-effort", default="", help="low/medium/high for reasoning teachers such as gpt-oss; empty: not sent")
     p.add_argument("--reply-tokens", type=int, default=TEACHER_REPLY_TOKENS)
@@ -115,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
         prefix="teacher",
         prompted_models={args.teacher_model: args.reply_tokens},
         agent_llm_args=llm_args,
-        prices=TEACHER_PRICES,
+        role_names={"agent": "teacher"},
     )
     if result is None:
         return 2
@@ -137,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         "kept_per_task": per_task,
         "tasks_without_success": sorted({str(t["task_id"]) for t in traces} - set(per_task)),
         "pass_rate": summary.get("pass_rate"),
+        "cache_hit_rate": (summary.get("cache_hit_rate") or {}).get("agent"),
         "cost_estimate_usd": summary.get("cost_estimate_usd"),
     }
     (out_dir / "teacher_summary.json").write_text(json.dumps(teacher_summary, indent=2))

@@ -8,6 +8,10 @@ Both the agent and the user simulator go through Hugging Face Inference Provider
 - User simulator: `openai/gpt-oss-120b:cerebras` (litellm id `openai/openai/gpt-oss-120b:cerebras`)
 - tau2-bench: pinned commit in `scripts/setup_tau2.sh`, cloned to `third_party/` (git-ignored)
 
+The user simulator (and the teacher, the judge and the patch proposer) can also run on
+Vertex AI: see "Vertex AI models" below. Team choice (2026-11-09): user simulator and judge
+`vertex/openai/gpt-oss-120b-maas`.
+
 ## Setup (once)
 
 ```sh
@@ -34,7 +38,7 @@ or from `$HF_TOKEN`. The token goes to litellm through process env vars only. It
 ```
 
 Other flags: `--task-split train|test|base` (default `train`, so held-out tasks stay unused),
-`--task-ids 0 1 2`, `--trials`, `--agent-model`, `--user-model`, `--max-concurrency` (default 4),
+`--task-ids 0 1 2`, `--trials`, `--agent-model`, `--user-model` (e.g. `vertex/openai/gpt-oss-120b-maas`), `--max-concurrency` (default 4),
 `--output-dir` (default `runs/baseline-<timestamp>/`), `--tool-patch-ids` (with `--tool-patches`:
 exactly these patches, whatever their ledger status), `--agent-api-base` (agent on an
 OpenAI-compatible endpoint such as vLLM; the user simulator stays on the router). Both are used
@@ -119,10 +123,62 @@ simulation. `src/shipwright/llm_patch.py` wraps the litellm call: invalid argume
 `{"__malformed_arguments__": "<original text>"}`. The environment then returns a tool error
 to the agent and the run goes on. The trace shows the original text.
 
+## Vertex AI models
+
+A model id `vertex/<publisher>/<model>` goes to the Vertex AI OpenAI-compatible endpoint
+(`src/shipwright/vertex.py`); every other id goes to the HF router as before.
+
+| Role | Id | USD per 1M tokens (in / cached in / out) |
+|---|---|---|
+| teacher | `vertex/deepseek-ai/deepseek-v4.1-flash-maas` | 0.30 / 0.03 / 1.20 |
+| user simulator, judge, proposer | `vertex/openai/gpt-oss-120b-maas` | 0.09 / 0.09 / 0.36 |
+
+- Endpoint: `https://aiplatform.googleapis.com/v1/projects/$SHIPWRIGHT_GCP_PROJECT/locations/global/endpoints/openapi`
+  (DeepSeek V4.1 Flash is only on `global`). Project default `lexsi-hackathon`.
+- Inside tau2: `llm_patch` rewrites each `vertex/` call to litellm `openai/<publisher>/<model>`
+  with that `api_base` and a fresh bearer token as `api_key`, per call. On a 401 it gets a new
+  token and retries once. `classify.py` and `tool_fix.py` post to the same endpoint with httpx.
+- Token: `gcloud --configuration=$SHIPWRIGHT_GCLOUD_CONFIG auth print-access-token` (default
+  `personal`; Ishank and Mitushi set `SHIPWRIGHT_GCLOUD_CONFIG=lexsi`). It is cached and refreshed
+  after 45 minutes (tokens last about 1 hour). Never Application Default Credentials. The binary is
+  `$SHIPWRIGHT_GCLOUD`, else the Homebrew path, else `gcloud` from PATH. `$SHIPWRIGHT_VERTEX_TOKEN`
+  is used as is, with no refresh (HF Jobs). The token is never logged or written to disk.
+- A run whose agent and user models are both `vertex/` (or agent on `--agent-api-base`) needs no HF
+  token; token counting then falls back to the estimate unless the HF token is set.
+- gpt-oss-120b reasons first: a `max_tokens` below 1024 is raised to 1024.
+- Check access and print the usage block (2 tiny calls, GCP billing):
+  `.venv/bin/python scripts/check_vertex.py` (`--cache-probe` adds 2 calls of about 5k tokens).
+
+## Prompt caching (teacher)
+
+Vertex has no explicit context cache (`cachedContents`) for MaaS open models; that API is for
+Gemini. DeepSeek V4.1 Flash has implicit prefix caching (Preview, 90% off cached tokens, from
+4096 prompt tokens, hits not guaranteed); gpt-oss-120b is not listed for it (Google docs
+"Use open models", 2026-11-09).
+
+- Every teacher request starts with the same bytes: the system message (tau2 policy plus the
+  compact tool list), then the conversation. No timestamps or run ids come before the conversation
+  (`tests/test_vertex.py` checks this). The fixed prefix is about 2.6k tokens, below the 4096
+  minimum, so hits come from the earlier turns of the same run.
+- Per call, cached tokens are read from the usage block (`prompt_tokens_details.cached_tokens`,
+  or a Vertex field) and stored as `usage.cached_prompt_tokens` in the trace turn (only when the
+  provider reports it) and as `gen_ai.usage.cache_read.input_tokens` in the span.
+- On a call with no hit, Vertex returns `prompt_tokens_details: null` (checked 2026-11-09). The
+  field on a hit is not verified yet: run `check_vertex.py --cache-probe` once.
+
 ## Cost
 
-The cost in `summary.json` is an estimate from token counts and assumed prices
-(`PRICES` in `scripts/baseline.py`). Check HF billing for the real number.
+`summary.json`:
+
+- `usage_by_role`: calls, prompt, completion and cached prompt tokens for `agent`, `user` and
+  `judge` (tau2's NL judge and any rerouted default model), counted for every LLM call.
+- `cost_estimate_usd`: USD per role (`teacher` instead of `agent` in teacher runs) and `total`,
+  plus `by_role` with model, provider (`vertex`, `hf_router`, `local`, `dry_run`), tokens, cache
+  hit rate and the prices used. Cached tokens are priced at the cached price.
+  Prices: `src/shipwright/costs.py`. Unknown models get an assumed price (`price_assumed: true`).
+- `cached_prompt_tokens` and `cache_hit_rate` for agent and user, from the traces.
+
+These are estimates. Check HF billing and GCP billing for the real number.
 
 ## Classify and route failures
 
@@ -135,7 +191,8 @@ The cost in `summary.json` is an estimate from token counts and assumed prices
 - Rule labels (`src/shipwright/classify.py`): `loop`, `unknown_tool`, `malformed_args`,
   `tool_error_ignored`, `context_overflow`, `invented_id`, `tool_example_copied`
   (an invented id that equals an example value from a tool description, such as `#W0000000`).
-- Judge: `openai/gpt-oss-120b:cerebras` via the HF router, only for failed runs that no rule
+- Judge: `--judge-model`, default `vertex/openai/gpt-oss-120b-maas` (a raw HF router id such as
+  `openai/gpt-oss-120b:cerebras` also works), only for failed runs that no rule
   explains (`--judge-all` judges every failed run). Strict JSON, validated, one retry.
   Labels: `wrong_tool`, `bad_arguments`, `invented_id`, `wrong_order`, `skipped_policy_step`,
   `loop`, `invented_answer`, `premature_transfer`, `tool_description_unclear`, `environment`.
@@ -155,7 +212,7 @@ The cost in `summary.json` is an estimate from token counts and assumed prices
 - Input: `failures.jsonl` rows with route `tool_fix`, and the tau2 tool specs.
 - Rules: for `tool_example_copied`, concrete example ids in descriptions become placeholders
   (`#W<7 digits>`, `<10 digits>`, `<first>_<last>_<digits>`, `gift_card_<digits>`).
-- LLM (`openai/gpt-oss-120b:cerebras`): gets one tool spec and up to 3 failure excerpts, and returns
+- LLM (`--model`, default `vertex/openai/gpt-oss-120b-maas`): gets one tool spec and up to 3 failure excerpts, and returns
   `{"patches": [{tool, field, new_text, reason}]}`. Only `description` and
   `parameters.<name>.description` can change. A patch with a concrete id is rejected (one retry).
 - Ledger: `patches/ledger.jsonl` (committed). One row per patch: id, round, tool, field, before,

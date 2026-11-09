@@ -47,14 +47,17 @@ and the tool-fix vs weight-fix comparison.
 ## Baseline harness
 
 - How to run: `docs/baseline.md`. tau2-bench is pinned in `scripts/setup_tau2.sh` and lives in `third_party/` (git-ignored).
-- Agent and user simulator run through HF Inference Providers (router `https://router.huggingface.co/v1`). The token is read at run time from `$SWITCHBOARD_SECRETS_DIR/HF_TOKEN`.
+- Tiny Aya (the agent) runs through HF Inference Providers (router `https://router.huggingface.co/v1`). The token is read at run time from `$SWITCHBOARD_SECRETS_DIR/HF_TOKEN`.
+- 2026-11-09: model ids `vertex/<publisher>/<model>` go to Vertex AI (`src/shipwright/vertex.py`), for the teacher, user simulator, tau2 judge, `classify.py` judge and `tool_fix.py` proposer. All other ids go to the HF router unchanged. Smoke check: `scripts/check_vertex.py`.
+- 2026-11-09, team choice: teacher `vertex/deepseek-ai/deepseek-v4.1-flash-maas`; user simulator and judge `vertex/openai/gpt-oss-120b-maas`. `--teacher-model` and `--user-model` stay required with no default; `classify.py --judge-model` and `tool_fix.py --model` default to the Vertex gpt-oss.
+- `summary.json` `cost_estimate_usd` is per role (agent or teacher, user, judge) by provider, with cached prompt tokens at the cached price. Prices: `src/shipwright/costs.py`.
 - 2026-11-08: Tiny Aya has no native tool calling (template and HF router drop `tools`). We use prompted JSON tool calls (`src/shipwright/prompted_tools.py`, format in `docs/baseline.md`). Training data must use the same format.
 - Failure labels, rule labels and the router are defined in `src/shipwright/classify.py` (how to run: `docs/baseline.md`).
 - Tool patches: `patches/ledger.jsonl` is committed (small config, not run output). Change a patch status only with `scripts/tool_fix.py`.
 - CI (`.github/workflows/ci.yml`, every push and PR): `setup_tau2.sh`, pytest, the offline dry run,
   rule-only classify, and the span round trip. No secrets, no model API calls. Keep it offline.
 - `scripts/baseline.py` defaults to the tau2 `train` split so held-out tasks stay unused until the splits are frozen.
-- Weight fix (teacher runs, SFT data, LoRA job): `docs/training.md`. The teacher gets the student's prompted view (`force_prompted`); the teacher model is chosen by the team and passed with `--teacher-model` (no default).
+- Weight fix (teacher runs, SFT data, LoRA job): `docs/training.md`. The teacher gets the student's prompted view (`force_prompted`); the teacher model is passed with `--teacher-model` (no default; team choice above).
 - `scripts/train_job.py` launches nothing without `--launch`, and prints flavor price x timeout first.
 - Gate (step 05): `docs/gate.md`. `scripts/gate_job.py` (HF Job, vLLM serves base + LoRA) or `scripts/gate_eval.py --local-dry-run` (offline). Config `configs/gate.yaml` (status `proposed` until the team freezes it), systems in `configs/systems/`. Metrics come from AuditKIT; the user model is a required argument (no default).
 
@@ -90,7 +93,14 @@ and the tool-fix vs weight-fix comparison.
 - **HF credits are shared by the whole team.** No agent starts a credit-spending run (HF Inference
   Providers calls, HF Jobs) unless a human on the team asked for that specific run. State the
   expected cost first. Offline work (dry runs, tests) is always fine.
-- **The teacher model is not chosen yet** (2026-11-08). Keep it a required argument with no default.
+- **Vertex AI (2026-11-09)** for the teacher, user simulator and judge (spends GCP budget, not HF credits):
+  OpenAI-compatible endpoint `https://aiplatform.googleapis.com/v1/projects/lexsi-hackathon/locations/global/endpoints/openapi`.
+  Auth is a `gcloud --configuration=$SHIPWRIGHT_GCLOUD_CONFIG auth print-access-token` token (default `personal`,
+  teammates set `lexsi`), cached and refreshed after 45 minutes. Never ADC or litellm's `vertex_ai` provider.
+  Other env vars: `SHIPWRIGHT_GCP_PROJECT`, `SHIPWRIGHT_GCLOUD`, `SHIPWRIGHT_VERTEX_LOCATION`, `SHIPWRIGHT_VERTEX_TOKEN`
+  (`src/shipwright/vertex.py`). Prices per 1M tokens: DeepSeek V4.1 Flash $0.30 in, $0.03 cached, $1.20 out;
+  gpt-oss-120b $0.09 in, $0.36 out. Tiny Aya stays on the HF router (Vertex has no Cohere models); GPUs stay on HF Jobs.
+  The same "a human asked for this run" rule applies to Vertex calls.
 - **HF Jobs** (paid from the HF credits): **a job stops after 30 minutes by default. Always pass a
   timeout** (`hf jobs run --timeout 2h ...`, or `timeout=` in Python). A job uses the credits of the
   namespace it runs in. Prices: T4 $0.40/h, L4 $0.80/h, A10G small $1.00/h, A10G large $1.50/h,
@@ -146,6 +156,9 @@ and the tool-fix vs weight-fix comparison.
 - 2026-11-08: tau2 saves results under its own data dir unless `save_to` is an absolute path. `scripts/baseline.py` passes one.
 - 2026-11-08: AuditKIT `reliability()` lowers k to the number of decided trials when a task has fewer than k (infra errors). `eval_metrics.pass_metrics` scores pass^k only on tasks with k decided trials and counts the rest.
 - 2026-11-08: AuditKIT multi-trial rows keep only the first trial's diagnostics. `eval_metrics` runs a second, one-case-per-run pass for ToolCallF1 and the other diagnostics.
+- 2026-11-09: DeepSeek V4.1 Flash on Vertex is served only on the `global` endpoint (a `us-central1` call fails). Vertex has no explicit context cache (`cachedContents`) for MaaS open models; implicit prefix caching (Preview) covers `deepseek-v4.1-flash-maas` from 4096 prompt tokens, not gpt-oss-120b. Our fixed teacher prefix (policy + tool list) is about 2.6k tokens, so hits come from the growing conversation of one run.
+- 2026-11-09: Vertex gpt-oss-120b spends reply tokens on reasoning (`reasoning_content`) first. `vertex.py` raises `max_tokens` below 1024 to 1024; `reasoning_effort: low` is accepted.
+- 2026-11-09: A Vertex token lasts about 1 hour and an HF Job cannot run gcloud. `gate_job.py` passes a token minted at launch (`SHIPWRIGHT_VERTEX_TOKEN`), with no refresh: a gate job with a Vertex user model must finish within about 1 hour.
 - 2026-11-08: The GitHub repo is private, so an HF Job cannot clone it. `scripts/gate_job.py --launch` uploads `git archive HEAD` to the runs dataset; commit before you launch.
 
 ## Keep this file correct

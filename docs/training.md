@@ -8,8 +8,8 @@ The weight-fix path for failures that `scripts/classify.py` routes to `weight_fi
 3. **Training** (`scripts/train_job.py` launches `scripts/train_lora.py` on HF Jobs): a LoRA on
    Tiny Aya Global with AgentTune, pushed to the Hub on a round branch.
 
-Nothing here spends credits unless you run a command that says so (teacher runs call the HF
-router; `build_sft.py --push` writes to the Hub; `train_job.py --launch` starts a paid GPU job).
+Nothing here spends credits unless you run a command that says so (teacher runs call Vertex AI
+or the HF router; `build_sft.py --push` writes to the Hub; `train_job.py --launch` starts a paid GPU job).
 
 ## The teacher sees the student's prompt
 
@@ -20,13 +20,19 @@ in the system prompt, tool results as user turns, and the same 8192-token prompt
 because a reasoning teacher spends tokens before it answers. Replies over 700 tokens (the
 student's budget) are dropped in `build_sft.py`.
 
-The teacher is a required argument (`--teacher-model`), with no default: the team picks it.
-It must allow training on its outputs (no closed Claude or GPT models). Candidates, as litellm
-ids on the HF router (check the provider suffix is live before a run):
+The teacher (`--teacher-model`) and the user simulator (`--user-model`) are required arguments,
+with no default. The teacher must allow training on its outputs (no closed Claude or GPT models).
 
-- `openai/openai/gpt-oss-120b:cerebras` (Apache 2.0, reasoning: pass `--reasoning-effort medium`)
-- `openai/CohereLabs/aya-expanse-32b:cohere` (an allowed hackathon model; CC-BY-NC)
-- any other open-weight model the team agrees on
+**Team choice (2026-11-09):** teacher `vertex/deepseek-ai/deepseek-v4.1-flash-maas`, user simulator
+`vertex/openai/gpt-oss-120b-maas`, both on Vertex AI (GCP budget, not HF credits; setup and auth in
+`docs/baseline.md`, "Vertex AI models"). Other ids still work, for example on the HF router
+`openai/openai/gpt-oss-120b:cerebras` (pass `--reasoning-effort medium`) or
+`openai/CohereLabs/aya-expanse-32b:cohere`.
+
+The teacher's requests start with the same system message (policy plus tool list) on every call,
+so Vertex implicit prefix caching can apply; `summary.json` and `teacher_summary.json` report the
+cache hit rate, and the cost estimate prices cached tokens at $0.03 per 1M ("Prompt caching" in
+`docs/baseline.md`).
 
 If the teacher is the same model as the user simulator, that is fine for retail: the user
 simulator has no tools, so it never gets the prompted view.
@@ -89,11 +95,16 @@ language guidance); this rebuild was checked equal to a recorded prompt on 2026-
 ```sh
 # 0. Offline checks (no network, no credits)
 .venv/bin/python -m pytest -q
-.venv/bin/python scripts/teacher_runs.py --dry-run --teacher-model openai/teacher-x --task-ids 0 1 --trials 1 --output-dir runs/teacher-dry
+.venv/bin/python scripts/teacher_runs.py --dry-run --teacher-model vertex/deepseek-ai/deepseek-v4.1-flash-maas \
+    --user-model vertex/openai/gpt-oss-120b-maas --task-ids 0 1 --trials 1 --output-dir runs/teacher-dry
 
-# 1. Teacher runs (HF router: spends credits). Default tasks: the weight_fix ids of the baseline run.
-.venv/bin/python scripts/teacher_runs.py --teacher-model <TEACHER> --trials 3 \
-    --from-run runs/baseline-20261108-214337
+# 1a. Vertex access check (2 tiny calls, GCP billing)
+.venv/bin/python scripts/check_vertex.py
+
+# 1b. Teacher runs (Vertex: spends GCP budget). Default tasks: the weight_fix ids of the baseline run.
+#     Teammates: export SHIPWRIGHT_GCLOUD_CONFIG=lexsi first.
+.venv/bin/python scripts/teacher_runs.py --teacher-model vertex/deepseek-ai/deepseek-v4.1-flash-maas \
+    --user-model vertex/openai/gpt-oss-120b-maas --trials 3 --from-run runs/baseline-20261108-214337
 #    add --all-train to also run every train task; outputs kept.jsonl and teacher_summary.json
 
 # 2. Build the SFT data (downloads only the Tiny Aya tokenizer; --estimate-tokens avoids that)

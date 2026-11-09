@@ -5,7 +5,9 @@ Usage:
 
 Reads traces.jsonl (and tau2/results.json for the task instructions).
 Writes failures.jsonl and failure_summary.json into the same dir.
-The judge is openai/gpt-oss-120b:cerebras via the HF router. The token is read like baseline.py.
+The judge (--judge-model) defaults to vertex/openai/gpt-oss-120b-maas on Vertex AI (gcloud token,
+src/shipwright/vertex.py). A raw HF router id such as openai/gpt-oss-120b:cerebras also works
+(HF token read like baseline.py).
 """
 
 from __future__ import annotations
@@ -22,10 +24,9 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from baseline import HF_ROUTER, load_token  # noqa: E402
+from shipwright.vertex import JUDGE_MODEL  # noqa: E402
 from shipwright.classify import classify_run, summarize_failures, tool_example_values  # noqa: E402
 from shipwright.traces import write_jsonl  # noqa: E402
-
-JUDGE_MODEL = "openai/gpt-oss-120b:cerebras"
 
 
 def load_instructions(run_dir: Path) -> dict[str, str]:
@@ -50,13 +51,23 @@ def load_tools(run_dir: Path) -> list[dict]:
     return [t.openai_schema for t in registry.get_env_constructor(domain)().get_tools()]
 
 
-def make_chat(token: str, model: str):
-    client = httpx.Client(timeout=120, headers={"Authorization": f"Bearer {token}"})
+def make_chat(token: str | None, model: str):
+    """A chat function for the judge or the patch proposer: HF router, or Vertex for vertex/ ids."""
+    from shipwright import vertex
+
+    url, body_model, headers = vertex.endpoint(model, token, HF_ROUTER)
+    client = httpx.Client(timeout=120)
+
+    def post(messages: list[dict]) -> httpx.Response:
+        return client.post(url, headers=headers(),
+                           json={"model": body_model, "messages": messages, "temperature": 0,
+                                 "max_tokens": 2000, "reasoning_effort": "low"})
 
     def chat(messages: list[dict]) -> str:
-        r = client.post(f"{HF_ROUTER}/chat/completions",
-                        json={"model": model, "messages": messages, "temperature": 0,
-                              "max_tokens": 2000, "reasoning_effort": "low"})
+        r = post(messages)
+        if r.status_code == 401 and vertex.is_vertex_model(model):
+            vertex.provider().invalidate()  # expired token: get a new one, retry once
+            r = post(messages)
         r.raise_for_status()
         return r.json()["choices"][0]["message"].get("content") or ""
 
@@ -68,18 +79,20 @@ def main() -> int:
     p.add_argument("run_dir", type=Path)
     p.add_argument("--no-llm", action="store_true", help="rule labels only, no network")
     p.add_argument("--judge-all", action="store_true", help="also judge runs that rules already label")
-    p.add_argument("--judge-model", default=JUDGE_MODEL)
+    p.add_argument("--judge-model", default=JUDGE_MODEL,
+                   help="raw HF router id (e.g. openai/gpt-oss-120b:cerebras) or vertex/<publisher>/<model>"
+                        " (default: the team's choice, Vertex gpt-oss-120b)")
     args = p.parse_args()
 
     traces = [json.loads(line) for line in (args.run_dir / "traces.jsonl").read_text().splitlines() if line]
     instructions = load_instructions(args.run_dir)
     chat = None
     if not args.no_llm:
-        token = load_token()
-        if not token:
-            print("No HF token; use --no-llm or provide the token.", file=sys.stderr)
+        try:
+            chat = make_chat(load_token(), args.judge_model)
+        except RuntimeError as e:
+            print(f"{e} Use --no-llm, or provide the token.", file=sys.stderr)
             return 2
-        chat = make_chat(token, args.judge_model)
 
     examples = tool_example_values(load_tools(args.run_dir))
     rows = []
