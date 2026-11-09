@@ -103,7 +103,8 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - **Vertex AI (2026-11-09)** for the teacher, user simulator and judge (spends GCP budget, not HF credits):
   OpenAI-compatible endpoint `https://aiplatform.googleapis.com/v1/projects/lexsi-hackathon/locations/global/endpoints/openapi`.
   Auth is a `gcloud --configuration=$SHIPWRIGHT_GCLOUD_CONFIG auth print-access-token` token (default `personal`,
-  teammates set `lexsi`), cached and refreshed after 45 minutes. Never ADC or litellm's `vertex_ai` provider.
+  teammates set `lexsi`), cached and refreshed after 45 minutes. Inside Cloud Run the service account token
+  comes from the metadata server instead. Never ADC or litellm's `vertex_ai` provider.
   Other env vars: `SHIPWRIGHT_GCP_PROJECT`, `SHIPWRIGHT_GCLOUD`, `SHIPWRIGHT_VERTEX_LOCATION`, `SHIPWRIGHT_VERTEX_TOKEN`
   (`src/shipwright/vertex.py`). Prices per 1M tokens: DeepSeek V4.1 Flash $0.30 in, $0.03 cached, $1.20 out;
   gpt-oss-120b $0.09 in, $0.36 out. Tiny Aya stays on the HF router (Vertex has no Cohere models); GPUs stay on HF Jobs.
@@ -112,8 +113,12 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   timeout** (`hf jobs run --timeout 2h ...`, or `timeout=` in Python). A job uses the credits of the
   namespace it runs in. Prices: T4 $0.40/h, L4 $0.80/h, A10G small $1.00/h, A10G large $1.50/h,
   L40S $1.80/h, A100 large $2.50/h, RTX Pro 6000 $2.75/h (`PRICES` in `scripts/train_job.py`, 2026-11-08).
-- Split: HF Jobs for training and gate evals (output lands on the HF Hub), GCP Spot VM for long
+- Split: HF Jobs for training and GPU gate evals (output lands on the HF Hub), Cloud Run Jobs for
   agent runs that collect traces.
+- **Live runs go through Cloud Run Jobs, never on a laptop (2026-11-09).** Each person has
+  `shipwright-<owner>` (owner: tejas, ishank, mitushi, main), which runs its branch's latest image and
+  uploads `runs/<dir>/` to `gs://lexsi-hackathon-runs/<owner>/`. How: `docs/cloud-runs.md`.
+  The shared-credit rule above still applies to every job execution. Build images with Cloud Build only.
 
 ## Secrets
 
