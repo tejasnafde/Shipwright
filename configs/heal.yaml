@@ -1,0 +1,18 @@
+# AgentTune RetrainingTrigger config (TriggerConfig fields). Read by scripts/round_status.py.
+#
+# status: proposed. Freeze with configs/gate.yaml before round 1 (AGENTS.md, Evaluation rules).
+# Values are AgentTune's defaults, except where a comment says why.
+status: proposed
+frozen_on: null
+
+retrain_trigger:
+  total_failures_threshold: 50   # T1: buffer size
+  dominance_ratio: 0.70          # T2: one root cause >= 70% of the buffer
+  min_examples_ready: 30         # T3: weight-fix failures that have a teacher correction
+  reward_drift_sigma: 1.5        # T4: only with --reward-baseline (an earlier run of the same tasks)
+  novel_type_min_count: 3        # T5
+  staleness_window_hours: 6.0    # T6: never fires here (each round_status call is a fresh trigger)
+  min_stale_buffer_size: 10
+  max_drop_rate: 0.60            # gate: block if > 60% of weight-fix failures have no correction
+  min_attempts_for_drop_gate: 10
+  max_buffer_size: 500

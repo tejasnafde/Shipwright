@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from shipwright import agenttune_bridge as ab
 from shipwright.classify import summarize_failures
 
@@ -134,3 +136,56 @@ def test_every_agenttune_root_cause_is_mapped():
 
     assert set(ab.AGENTTUNE_ROOT_CAUSE_MAP) == set(FailureClassifier.ROOT_CAUSES)
     assert all(label in JUDGE_LABELS for label, _ in ab.AGENTTUNE_ROOT_CAUSE_MAP.values())
+
+
+# ---------------------------------------------------------------- RETRAIN TRIGGER
+
+def weight_rows(n, label="invented_id"):
+    return [{"task_id": str(i), "simulation_id": f"s{i}", "route": "weight_fix", "labels": [label],
+             "agenttune_root_cause": "hallucinated_output", "outcome_failed": True} for i in range(n)]
+
+
+SFT = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
+
+
+def test_trigger_fires_on_dominant_corrected_failures():
+    st = ab.retrain_status(weight_rows(12), {str(i): SFT for i in range(12)})
+    assert st["should_train"] and st["reason"] == "dominance:hallucinated_output"
+    assert st["num_with_correction"] == 12 and st["buffer_health"]["drop_rate"] == 0.0
+
+
+def test_trigger_drop_rate_gate_blocks_uncorrected_buffer():
+    st = ab.retrain_status(weight_rows(12), {"0": SFT})
+    assert not st["should_train"] and st["reason"] == "drop_rate_too_high"
+
+
+def test_trigger_below_threshold_and_tool_rows_ignored():
+    rows = weight_rows(2) + [{"task_id": "9", "route": "tool_fix", "labels": ["tool_example_copied"]}]
+    st = ab.retrain_status(rows, {}, {"dominance_ratio": 1.1, "novel_type_min_count": 5})
+    assert not st["should_train"] and st["reason"] == "below_threshold"
+    assert st["num_weight_fix_failures"] == 2
+    with pytest.raises(ValueError):
+        ab.trigger_config({"bogus": 1})
+
+
+def test_trigger_reward_drift_needs_a_baseline():
+    st = ab.retrain_status(weight_rows(1), {}, {"dominance_ratio": 1.1, "novel_type_min_count": 5},
+                           baseline_rewards=[1.0, 1.0, 0.0, 1.0], rewards=[0.0, 0.0, 0.0, 0.0])
+    assert st["should_train"] and st["reason"] == "reward_drift"
+
+
+def test_round_status_script(tmp_path):
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import round_status
+
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "failures.jsonl").write_text("".join(json.dumps(r) + "\n" for r in weight_rows(12)))
+    sft = tmp_path / "sft.jsonl"
+    sft.write_text("".join(json.dumps({"task_id": str(i), "messages": SFT}) + "\n" for i in range(12)))
+    assert round_status.main([str(run), "--sft", str(sft)]) == 0
+    st = json.loads((run / "round_status.json").read_text())
+    assert st["should_train"] and st["config_status"] == "proposed"
+    assert st["trigger_config"]["max_drop_rate"] == 0.6

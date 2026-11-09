@@ -32,8 +32,9 @@ from pathlib import Path
 
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")  # no price-list fetch at litellm import
 
-from agenttune.decide.closed_loop.contracts import ClassifiedFailure, Failure
+from agenttune.decide.closed_loop.contracts import ClassifiedFailure, Failure, TrainingExample
 from agenttune.decide.closed_loop.failure_detector import FailureDetector
+from agenttune.decide.closed_loop.retraining_trigger import RetrainingTrigger, TriggerConfig
 
 from shipwright.classify import RULE_LAYERS, compact_trace, expected_actions, route
 
@@ -316,3 +317,83 @@ def classify_traces(traces: list[dict], run_dir: Path, *, instructions: dict[str
     for (row, _), c in zip(to_classify, classified):
         merge_classification(row, c)
     return rows
+
+
+# ---------------------------------------------------------------- RETRAIN TRIGGER
+
+def trigger_config(values: dict | None = None) -> TriggerConfig:
+    values = dict(values or {})
+    unknown = set(values) - set(TriggerConfig.__dataclass_fields__)
+    if unknown:
+        raise ValueError(f"unknown retrain trigger keys: {sorted(unknown)}")
+    return TriggerConfig(**values)
+
+
+def classified_from_row(row: dict) -> ClassifiedFailure:
+    """A failures.jsonl row as AgentTune's ClassifiedFailure (classification already done)."""
+    root = row.get("agenttune_root_cause") or (row.get("labels") or ["unclassified"])[0]
+    failure = Failure(trajectory_id=str(row.get("simulation_id")), failure_type="task_failed",
+                      failed_stage_name=f"turn {row.get('first_wrong_turn')}",
+                      context={"task_id": str(row.get("task_id")), "labels": row.get("labels") or []},
+                      judge_score=row.get("reward"))
+    return ClassifiedFailure(failure=failure, root_cause=root,
+                             confidence=float(row.get("agenttune_confidence") or 1.0),
+                             analysis=str(row.get("explanation") or ""))
+
+
+def correction_generator(corrections: dict[str, list[dict]]):
+    """SelfHealLoop generator: one TrainingExample per weight-fix failure.
+
+    ``chosen`` is the teacher's correct run of the same task (an SFT example from
+    scripts/build_sft.py), if one exists. A failure with no correction has neither chosen
+    nor rejected, so AgentTune's buffer counts it as attempted but not accepted, and its
+    drop-rate gate blocks training on a buffer that is mostly uncorrected.
+    """
+    def generate(classified: list[ClassifiedFailure]) -> list[TrainingExample]:
+        out = []
+        for c in classified:
+            task = c.failure.context.get("task_id")
+            fix = corrections.get(task) or []
+            first = next((i for i, m in enumerate(fix) if m.get("role") == "assistant"), len(fix))
+            out.append(TrainingExample(
+                trajectory_id=c.failure.trajectory_id, original_failure_type=c.failure.failure_type,
+                root_cause=c.root_cause, prompt=fix[:first], chosen=fix[first:] or None,
+                is_negative_only=not fix))
+        return out
+
+    return generate
+
+
+def retrain_status(rows: list[dict], corrections: dict[str, list[dict]], config: dict | None = None,
+                   baseline_rewards: list[float] | None = None, rewards: list[float] | None = None) -> dict:
+    """Run AgentTune's SelfHealLoop over the weight-fix failures with a RetrainingTrigger.
+
+    No trainer is passed (training is a separate HF Job, scripts/train_job.py), so the loop
+    only fills the trigger's buffer and asks ``should_trigger()``. ``baseline_rewards``
+    lock the reward-drift baseline; ``rewards`` are this run's episode rewards.
+    """
+    heal = load_heal_loop()
+    cfg = trigger_config(config)
+    if baseline_rewards:
+        cfg.reward_drift_baseline_size = len(baseline_rewards)
+        cfg.reward_drift_window = max(1, len(rewards or []))
+    trigger = RetrainingTrigger(config=cfg)
+    for r in list(baseline_rewards or []) + (list(rewards or []) if baseline_rewards else []):
+        trigger.push_reward(r)
+    weight = [r for r in rows if r.get("route") == "weight_fix" and r.get("outcome_failed", True)]
+    loop = heal.SelfHealLoop(classifier=lambda fs: [classified_from_row(r) for r in weight],
+                             generator=correction_generator(corrections), retraining_trigger=trigger)
+    result = loop.run([classified_from_row(r).failure for r in weight])
+    health = trigger.buffer.health()
+    return {
+        "should_train": bool(result["trigger_fired"]),
+        "reason": result["trigger_reason"],
+        "num_weight_fix_failures": len(weight),
+        "num_with_correction": sum(1 for ex in result["generated"] if ex.chosen),
+        "buffer_health": {k: v for k, v in health.__dict__.items()},
+        "reward_drift": {"baseline_mean": trigger.reward_tracker._baseline_mean,
+                         "current_mean": trigger.reward_tracker.current_mean(),
+                         "drifting": trigger.reward_tracker.is_drifting(cfg.reward_drift_sigma)},
+        "trigger_config": dict(cfg.__dict__),
+        "agenttune_classes": ["SelfHealLoop", "RetrainingTrigger", "TrainingBuffer", "RewardDriftTracker"],
+    }
