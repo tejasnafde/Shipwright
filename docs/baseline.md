@@ -56,6 +56,8 @@ by the gate (`docs/gate.md`).
 - `prompts.json`: the agent's un-converted system prompt and tool schemas, by `prompt_sha`
   (prompted models only). Training data is rendered from it, see `docs/training.md`.
 - `otel_spans.jsonl`: the same runs as OpenTelemetry spans (optional viewer, see `docs/observability.md`).
+- `log.jsonl`, `errors.json`, `repro.json`, `live_spans.jsonl`: logs, failure report, rerun record
+  and live spans; `summary.json` gets `status` (ok / partial / failed). See `docs/debugging.md`.
 
 ## Prompted tool calls (Tiny Aya)
 

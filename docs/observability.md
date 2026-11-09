@@ -3,6 +3,13 @@
 Optional. `traces.jsonl` is the source of truth. The spans are a second view of the same
 data in the OTel format, so standard trace viewers can show a run.
 
+Two span files:
+- `live_spans.jsonl`: spans created while the run runs (run > task > agent turn > LLM call or
+  tool call, and every other external call), with the same trace id as the log lines. On Cloud
+  Run they also go to Cloud Trace. See `docs/debugging.md` (logs, failure report, why.py).
+- `otel_spans.jsonl`: spans rebuilt from traces.jsonl after the run, with the full message text
+  (this page).
+
 ## What a run writes
 
 `scripts/baseline.py` (and every script that calls it: teacher runs, gate evals) writes

@@ -19,8 +19,9 @@ expected cost first. `--help` and `--dry-run` cost nothing.
 
 - Image: `asia-south1-docker.pkg.dev/lexsi-hackathon/shipwright/harness`, built from
   `infra/docker/Dockerfile` by `infra/cloudbuild.yaml`. Each build pushes `harness:<owner>` and
-  `harness:<short sha>`, then points `shipwright-<owner>` at the sha tag. So a job always runs the
-  latest build of its branch.
+  `harness:<short sha>`, then points `shipwright-<owner>` at the pushed digest (and sets
+  `SHIPWRIGHT_IMAGE_DIGEST`). So a job always runs the latest build of its branch, and
+  `repro.json` records the exact image.
 - Artifact Registry cleanup: keeps the 4 branch tags, the 40 newest images, and deletes the rest
   after 1 day.
 - Jobs: region `asia-south1`, 1 CPU, 2 GiB, 1 task, no retries, task timeout 4 h (Cloud Run
@@ -28,7 +29,7 @@ expected cost first. `--help` and `--dry-run` cost nothing.
   Env: `OWNER=<owner>`, `HF_TOKEN` from Secret Manager `SHIPWRIGHT_HF_TOKEN:latest` (a secret
   ref, never a plain env value).
 - Runtime service account `shipwright-runner@`: Vertex AI user, object admin on the runs bucket
-  only, accessor on `SHIPWRIGHT_HF_TOKEN` only, log writer. Vertex calls use its token from the
+  only, accessor on `SHIPWRIGHT_HF_TOKEN` only, log writer, Cloud Trace agent (2026-11-09). Vertex calls use its token from the
   metadata server (`src/shipwright/vertex.py`), not gcloud.
 - Build service account `shipwright-builder@`: pushes to the `shipwright` repo, `run.developer`
   on the 4 jobs only, acts as `shipwright-runner@` only.
@@ -59,6 +60,9 @@ Without `--wait`, the command returns at once; follow the run in the console
 
 ## Read the results
 
+Something failed? `scripts/why.py <execution name>` (docs/debugging.md) prints where and why,
+with the Logs Explorer and Cloud Trace links. The execution name is the run id of every log line.
+
 The entrypoint uploads every run dir the script wrote, and the full console log, even when the
 script fails:
 
@@ -66,6 +70,7 @@ script fails:
 $GC storage ls gs://lexsi-hackathon-runs/ishank/
 $GC storage cp -r gs://lexsi-hackathon-runs/ishank/<run-dir> runs/
 $GC storage cat gs://lexsi-hackathon-runs/ishank/jobs/<execution-name>.log
+$GC storage cat gs://lexsi-hackathon-runs/ishank/jobs/<execution-name>.json   # run dirs, exit code, links
 ```
 
 Project Editors (Ishank, Mitushi) can read and write the bucket and execute the jobs; no extra grant

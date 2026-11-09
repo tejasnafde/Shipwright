@@ -66,6 +66,18 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - `scripts/train_job.py` launches nothing without `--launch`, and prints flavor price x timeout first.
 - Gate (step 05): `docs/gate.md`. `scripts/gate_job.py` (HF Job, vLLM serves base + LoRA) or `scripts/gate_eval.py --local-dry-run` (offline). Config `configs/gate.yaml` (status `proposed` until the team freezes it), systems in `configs/systems/`. Metrics come from AuditKIT; the user model is a required argument (no default).
 
+## Logs and debugging
+
+- How to debug a run: `docs/debugging.md` (`scripts/why.py`, the links, `scripts/rerun.py`).
+- Log with `shipwright.log` (`log.get_logger`, keywords as fields), never `logging.basicConfig` or a
+  new logger setup. Every script ends with `sys.exit(log.run_script(main, step="<step>"))`.
+- Every script writes `log.jsonl`, `errors.json` and `repro.json` into its run dir
+  (`log.attach_run_dir`), and `status` (ok / partial / failed) into `summary.json`.
+- New external call (model, HTTP, GCS, HF Hub): wrap it in `shipwright.instrument.external` (or go
+  through `llm_patch`), so it gets a log line and a span.
+- Never print or log a token or key. `shipwright.log` redacts `hf_`, `ya29.`, `Bearer`, `sk-`; do
+  not rely on that for other formats.
+
 ## Traces
 
 - Source of truth: our `traces.jsonl` per run (format in `docs/baseline.md`), plus `otel_spans.jsonl`
