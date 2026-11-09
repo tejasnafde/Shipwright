@@ -33,10 +33,31 @@ runs; the exact ids go into `gate_inputs.json` and `metrics.jsonl`.
 | target | target-label failure rate drops by > 0 and >= 2.5 points (3 of 120 runs); a tie rejects |
 | non_target | other failure labels rise by <= 5 points |
 | bfcl | BFCL v3 accuracy (simple, multiple, irrelevance; 100 each) drops by <= 2 points; missing BFCL rejects |
+| agenttune_gate | AgentTune `DeploymentGate.evaluate_decision` approves, on >= 108 paired held-out runs |
 
 Rates use valid runs as the denominator. Infra-error runs are excluded everywhere and
-counted in `num_infra_errors`. Labels come from `scripts/classify.py`; `classify.judge_model:
-null` means rule labels only (deterministic, free).
+counted in `num_infra_errors`. Labels come from `scripts/classify.py`; `classify.classifier_model:
+null` means AgentTune's detector and our rule labels only (deterministic, free).
+
+## AgentTune DeploymentGate and AuditKIT together
+
+Promote = AgentTune's `DeploymentGate` approves AND every AuditKIT threshold above passes.
+
+- AgentTune: `agenttune.decide.closed_loop.deployment_gate.DeploymentGate.evaluate_decision`
+  (`agenttune_bridge.agenttune_gate_check`). The test set is the paired held-out runs: per task,
+  the trials that both systems decided (from AuditKIT's per-task counts). Each system's verdict
+  per case is PASS or FAIL, so AgentTune compares the two pass rates and blocks a drop of more
+  than `agenttune_gate.task_regression_tol` (0.0).
+- AgentTune approves an empty test set (both scores fall back to 0). Our check fails when there
+  are fewer paired runs than `min_test_samples`, which is the `valid_runs` floor (108).
+- AuditKIT: `auditkit.agent_eval.AgentEvalRunner` (recorded mode) with
+  `FinalStateAssertion` for pass^1 and pass^k, `ToolCallF1` and the other diagnostics, and
+  BFCL v3 scoring (`src/shipwright/bfcl_eval.py`).
+- `gate_decision.json` has `verdicts.agenttune` (`approved`, `reason`, `num_cases`,
+  `min_test_samples`) and `verdicts.auditkit_thresholds` (`passed`, `failed_checks`). The
+  `metrics.jsonl` row has the same `verdicts`.
+- Trajectory scores are not passed to `evaluate_decision`: they need AgentTune's
+  `AgenticEvalResult` (its own LLM-judged metrics), and our trajectory checks are AuditKIT's.
 
 ## Metrics (AuditKIT)
 
@@ -106,8 +127,8 @@ Local: `runs/gate-round-N-<mode>-<stamp>/`. Job: `mitushigoyal5/shipwright-runs`
 
 - `<system>/`: the tau2 run dir (`traces.jsonl`, `failures.jsonl`, `summary.json`, ...) and `bfcl.json`
 - `metrics_current.json`, `metrics_candidate.json`
-- `gate_decision.json`: `decision`, `reasons`, `checks`, `metrics_current`, `metrics_candidate`,
-  `thresholds`, `warnings` (e.g. config not frozen)
+- `gate_decision.json`: `decision`, `verdicts` (AgentTune and AuditKIT), `reasons`, `checks`,
+  `metrics_current`, `metrics_candidate`, `thresholds`, `warnings` (e.g. config not frozen)
 - `gate_inputs.json`: config, systems with resolved patch ids, targets, user model
 - `metrics.jsonl`: one row per gate run (round, systems, headline metrics, decision). The job
   also appends the row to `metrics.jsonl` at the root of the dataset.

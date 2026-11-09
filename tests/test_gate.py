@@ -33,8 +33,21 @@ def failures(n_target, n_other, n_both=0, target="tool_example_copied"):
     return rows
 
 
+def per_task(pass_1, valid, k=3):
+    """AuditKIT per-task counts: ``valid`` decided runs over the 40 tasks, pass rate ``pass_1``."""
+    decided = [min(k, max(0, valid - k * i)) for i in range(len(TASKS))]
+    left = round((pass_1 or 0) * valid)
+    out = {}
+    for tid, n in zip(TASKS, decided):
+        s = min(n, left)
+        left -= s
+        out[tid] = {"n_success": s, "n_decided": n, "pass_k": None}
+    return out
+
+
 def metrics(pass_1=0.3, pass_k=0.1, valid=120, complete=40, n_target=30, n_other=40, bfcl=50.0, **kw):
     m = {
+        "per_task": per_task(pass_1, valid),
         "system": "x", "task_split": "test", "k": 3, "task_ids": list(TASKS),
         "num_runs": 120, "num_valid_runs": valid, "num_tasks_complete": complete,
         "pass_1": pass_1, "pass_k": pass_k,
@@ -239,3 +252,49 @@ def test_run_with_target_and_other_label_counts_for_both():
     m["failed_run_labels"] = failures(0, 0, n_both=6)
     assert g.target_rate(m, ["tool_example_copied"]) == pytest.approx(6 / 120)
     assert g.non_target_rate(m, ["tool_example_copied"]) == pytest.approx(6 / 120)
+
+
+# ---------------------------------------------------------------- AgentTune DeploymentGate (AND check)
+
+def test_agenttune_approval_alone_is_not_enough():
+    # Same pass rate: AgentTune sees no regression and approves, but the target label did not drop.
+    d = g.decide(metrics(), metrics(), cfg(), ["tool_example_copied"])
+    at = check(d, "agenttune_gate")
+    assert at["passed"] and at["agenttune_approved"]
+    assert d["decision"] == "reject"
+    assert d["verdicts"]["agenttune"]["approved"] and not d["verdicts"]["auditkit_thresholds"]["passed"]
+
+
+def test_agenttune_too_few_samples_rejects_even_though_agenttune_approves():
+    small = {"1": {"n_success": 1, "n_decided": 3}}
+    d = g.decide(metrics(per_task=small), metrics(n_target=10, per_task=small), cfg(), ["tool_example_copied"])
+    at = check(d, "agenttune_gate")
+    assert at["agenttune_approved"] and not at["passed"]  # AgentTune alone would approve
+    assert at["num_cases"] == 3 and at["min_test_samples"] == 108
+    assert d["decision"] == "reject"
+    # No paired runs at all: AgentTune approves an empty set, our floor rejects.
+    d = g.decide(metrics(per_task={}), metrics(n_target=10, per_task={}), cfg(), ["tool_example_copied"])
+    assert check(d, "agenttune_gate")["agenttune_approved"] and d["decision"] == "reject"
+
+
+def test_our_thresholds_alone_are_not_enough():
+    # pass^1 drop of 2 points is inside our margin, but AgentTune's tolerance is 0: it blocks.
+    cur, cand = metrics(), metrics(pass_1=0.28, n_target=10)
+    d = g.decide(cur, cand, cfg(pass_1_max_drop=0.025), ["tool_example_copied"])
+    assert all(c["passed"] for c in d["checks"] if c["name"] != "agenttune_gate")
+    at = check(d, "agenttune_gate")
+    assert not at["agenttune_approved"] and "regressed" in at["agenttune_reason"]
+    assert d["decision"] == "reject" and d["verdicts"]["auditkit_thresholds"]["passed"]
+    # With an AgentTune tolerance that allows the drop, the same candidate promotes.
+    c = cfg(pass_1_max_drop=0.025)
+    c["agenttune_gate"] = {"task_regression_tol": 0.025}
+    assert g.decide(cur, cand, c, ["tool_example_copied"])["decision"] == "promote"
+
+
+def test_paired_test_set_counts_only_shared_decided_trials():
+    from shipwright.agenttune_bridge import paired_test_set
+
+    cases, old, new = paired_test_set({"1": {"n_success": 2, "n_decided": 3}, "2": {"n_success": 0, "n_decided": 3}},
+                                      {"1": {"n_success": 1, "n_decided": 2}, "3": {"n_success": 3, "n_decided": 3}})
+    assert [c["pipeline_id"] for c in cases] == ["1#0", "1#1"]
+    assert old == {"1#0": "PASS", "1#1": "PASS"} and new == {"1#0": "PASS", "1#1": "FAIL"}

@@ -16,6 +16,12 @@ The candidate is promoted only when every check passes:
 6. non_target   other failure labels rise by at most non_target_max_increase (null: off)
 7. bfcl         when BFCL is enabled, candidate >= current - bfcl_max_drop_points
                 (missing BFCL numbers reject)
+8. agenttune_gate  AgentTune ``DeploymentGate.evaluate_decision`` on the paired held-out runs
+                approves (no task regression beyond agenttune_gate.task_regression_tol), and
+                there are at least min_test_samples paired runs (the valid_runs floor).
+                AgentTune alone approves an empty test set; this check does not.
+
+Promote = AgentTune's DeploymentGate approves AND every AuditKIT threshold passes.
 
 A missing metric (None) fails its check. The decision is ``reject`` unless all pass.
 """
@@ -69,7 +75,15 @@ def validate_config(cfg: dict) -> dict:
         raise ValueError("thresholds.min_valid_runs must be at least 1 (never approve on no data)")
     if not 0 < th["min_valid_run_fraction"] <= 1:
         raise ValueError("thresholds.min_valid_run_fraction must be in (0, 1]")
+    tol = agenttune_task_tol(cfg)
+    if not isinstance(tol, (int, float)) or tol < 0:
+        raise ValueError("agenttune_gate.task_regression_tol must be a number >= 0")
     return cfg
+
+
+def agenttune_task_tol(cfg: dict) -> float:
+    """Task regression tolerance for AgentTune's DeploymentGate (default 0: no drop)."""
+    return (cfg.get("agenttune_gate") or {}).get("task_regression_tol", 0.0)
 
 
 def load_config(path: Path) -> dict:
@@ -196,6 +210,13 @@ def check_bfcl(cur: dict, cand: dict, cfg: dict) -> dict:
                   current=c, candidate=n, delta=n - c)
 
 
+def check_agenttune(cur: dict, cand: dict, cfg: dict) -> dict:
+    from shipwright.agenttune_bridge import agenttune_gate_check
+
+    return agenttune_gate_check(cur, cand, min_test_samples=required_valid_runs(cfg),
+                                task_regression_tol=float(agenttune_task_tol(cfg)))
+
+
 # ---------------------------------------------------------------- decision
 
 def public_metrics(m: dict) -> dict:
@@ -217,13 +238,23 @@ def decide(current: dict, candidate: dict, cfg: dict, targets: list[str] | None 
         check_target(current, candidate, targets, th["target_label_min_drop"]),
         check_non_target(current, candidate, targets, th["non_target_max_increase"]),
         check_bfcl(current, candidate, cfg),
+        check_agenttune(current, candidate, cfg),
     ]
     failed = [c for c in checks if not c["passed"]]
     warnings = []
     if cfg.get("status") != "frozen":
         warnings.append("gate config status is 'proposed': the team has not frozen it yet")
+    at = checks[-1]
+    ours_failed = [c for c in checks[:-1] if not c["passed"]]
     return {
         "decision": "reject" if failed else "promote",
+        "verdicts": {
+            "agenttune": {"approved": at["agenttune_approved"], "reason": at["agenttune_reason"],
+                          "check_passed": at["passed"], "num_cases": at["num_cases"],
+                          "min_test_samples": at["min_test_samples"]},
+            "auditkit_thresholds": {"passed": not ours_failed,
+                                    "failed_checks": [c["name"] for c in ours_failed]},
+        },
         "reasons": [c["detail"] for c in failed] or [c["detail"] for c in checks if not c.get("skipped")],
         "checks": checks,
         "warnings": warnings,
@@ -255,6 +286,7 @@ def metrics_row(round_: int, decision: dict, systems: dict) -> dict:
                     "candidate": pick(decision["metrics_candidate"])},
         "decision": decision["decision"],
         "reasons": decision["reasons"],
+        "verdicts": decision.get("verdicts"),
         "config_status": decision["config_status"],
         "config_sha": decision["config_sha"],
     }

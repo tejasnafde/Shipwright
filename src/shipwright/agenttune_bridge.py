@@ -33,6 +33,7 @@ from pathlib import Path
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")  # no price-list fetch at litellm import
 
 from agenttune.decide.closed_loop.contracts import ClassifiedFailure, Failure, TrainingExample
+from agenttune.decide.closed_loop.deployment_gate import DeploymentGate
 from agenttune.decide.closed_loop.failure_detector import FailureDetector
 from agenttune.decide.closed_loop.retraining_trigger import RetrainingTrigger, TriggerConfig
 
@@ -397,3 +398,54 @@ def retrain_status(rows: list[dict], corrections: dict[str, list[dict]], config:
         "trigger_config": dict(cfg.__dict__),
         "agenttune_classes": ["SelfHealLoop", "RetrainingTrigger", "TrainingBuffer", "RewardDriftTracker"],
     }
+
+
+# ---------------------------------------------------------------- GATE
+
+def paired_test_set(cur_tasks: dict, cand_tasks: dict) -> tuple[list[dict], dict, dict]:
+    """DeploymentGate test cases from the per-task AuditKIT results of both systems.
+
+    One case per decided trial that both systems have on the same task (task id, trial
+    slot). Each system's verdict for a case is PASS for its first n_success slots, else
+    FAIL, so a system's score on the set is its pass rate on the paired runs.
+    """
+    cases, old, new = [], {}, {}
+    for tid in sorted(set(cur_tasks) & set(cand_tasks), key=lambda x: (len(x), x)):
+        a, b = cur_tasks[tid], cand_tasks[tid]
+        for j in range(min(a.get("n_decided") or 0, b.get("n_decided") or 0)):
+            key = f"{tid}#{j}"
+            cases.append({"pipeline_id": key, "input_text": key, "expected_verdict": "PASS"})
+            old[key] = "PASS" if j < (a.get("n_success") or 0) else "FAIL"
+            new[key] = "PASS" if j < (b.get("n_success") or 0) else "FAIL"
+    return cases, old, new
+
+
+def agenttune_gate_check(current: dict, candidate: dict, min_test_samples: int,
+                         task_regression_tol: float) -> dict:
+    """AgentTune ``DeploymentGate.evaluate_decision`` as one gate check.
+
+    AgentTune approves when there is no regression, and also when the test set is empty
+    (both scores fall back to 0). We add the floor: fewer than ``min_test_samples`` paired
+    cases fails the check, whatever AgentTune says. Both verdicts are kept.
+    """
+    cases, old, new = paired_test_set(current.get("per_task") or {}, candidate.get("per_task") or {})
+    d = DeploymentGate(seed=0).evaluate_decision(
+        cases, old.get, new.get, task_regression_tol=task_regression_tol)
+    enough = len(cases) >= min_test_samples
+    passed = d.approved and enough
+    if not enough:
+        detail = (f"AgentTune DeploymentGate: only {len(cases)} paired held-out runs, needs"
+                  f" {min_test_samples} (AgentTune alone said: {d.reason})")
+    else:
+        detail = (f"AgentTune DeploymentGate {d.reason}: pass rate {d.task_new:.4f} vs {d.task_old:.4f}"
+                  f" on {len(cases)} paired runs (tol {task_regression_tol})")
+    return {"name": "agenttune_gate", "passed": passed, "detail": detail,
+            "agenttune_approved": d.approved, "agenttune_reason": d.reason,
+            "num_cases": len(cases), "min_test_samples": min_test_samples,
+            "current": d.task_old, "candidate": d.task_new, "delta": d.task_delta}
+
+
+__all__ = [
+    "AGENTTUNE_ROOT_CAUSE_MAP", "agenttune_gate_check", "classify_traces", "detect", "make_classifier",
+    "merge_classification", "retrain_status", "trace_audit_records", "write_audit_log",
+]
