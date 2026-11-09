@@ -301,12 +301,21 @@ def classify_run(
 
 
 def summarize_failures(rows: list[dict], num_runs: int) -> dict:
+    """Counts over failures.jsonl rows. Label, route and layer counts cover failed runs only;
+    passed runs that only AgentTune's detector flagged are counted in num_detector_only."""
+    detected_only = [r for r in rows if r.get("outcome_failed") is False]
+    rows = [r for r in rows if r.get("outcome_failed") is not False]
     labels: Counter = Counter()
     for r in rows:
         labels.update(r["labels"])
     return {
         "num_runs": num_runs,
         "num_failed": len(rows),
+        "num_detector_only": len(detected_only),
+        "per_detected_by": dict(Counter("+".join(r.get("detected_by") or ["outcome"])
+                                        for r in rows + detected_only).most_common()),
+        "per_agenttune_root_cause": dict(Counter(r["agenttune_root_cause"] for r in rows
+                                                 if r.get("agenttune_root_cause")).most_common()),
         "per_label": dict(labels.most_common()),
         "per_route": dict(Counter(r["route"] for r in rows).most_common()),
         "per_fault_layer": dict(Counter(r["fault_layer"] for r in rows).most_common()),

@@ -124,9 +124,9 @@ def baseline_cmd(cfg: dict, system: dict, patch_ids: list[str], out: Path, args:
 
 
 def classify_cmd(cfg: dict, run_dir: Path) -> list[str]:
-    judge = (cfg.get("classify") or {}).get("judge_model")
+    model = (cfg.get("classify") or {}).get("classifier_model")
     cmd = [sys.executable, str(ROOT / "scripts" / "classify.py"), str(run_dir)]
-    return cmd + (["--judge-model", judge] if judge else ["--no-llm"])
+    return cmd + (["--classifier-model", model] if model else ["--no-llm"])
 
 
 def run_bfcl(cfg: dict, system: dict, out: Path, args: argparse.Namespace) -> dict | None:

@@ -20,7 +20,7 @@ max_concurrency: 8
 # argument of scripts/gate_job.py and scripts/gate_eval.py (--user-model).
 
 classify:
-  judge_model: null       # null: rule labels only (deterministic, free). Set a frozen judge to add its labels.
+  classifier_model: null  # litellm id for AgentTune's FailureClassifier. null: AgentTune detector + rules only (free).
 
 thresholds:
   min_valid_runs: 108             # per system, absolute floor (90% of 40 tasks x k=3)

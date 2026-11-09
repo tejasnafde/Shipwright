@@ -9,6 +9,7 @@ description = "Self-healing tool-calling agent on Tiny Aya (Lexsi hackathon, Tra
 requires-python = ">=3.12,<3.14"
 dependencies = [
     # tau2 is installed by scripts/setup_tau2.sh (pinned commit, editable).
+    # agenttune==1.1.3 too, with --no-deps (its torch pin does not install on a CPU Mac).
     "httpx>=0.24.0",
     "auditkit==1.1.6",  # Lexsi AuditKIT: gate metrics (scripts/gate_eval.py)
     "huggingface_hub>=1.0",

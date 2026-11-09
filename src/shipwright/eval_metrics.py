@@ -262,6 +262,8 @@ def compute_metrics(run: dict, k: int, system: str | None = None) -> dict:
     cfg = run.get("run_config") or {}
     trials_per_task = Counter(str(t.get("task_id")) for t in traces)
     failed_valid = sum(1 for t in valid if not t.get("passed"))
+    # Rows for passed runs that only AgentTune's detector flagged are evidence, not failures.
+    failures = [r for r in run["failures"] if r.get("outcome_failed") is not False]
     return {
         "system": system,
         "run_dir": run.get("run_dir"),
@@ -280,7 +282,7 @@ def compute_metrics(run: dict, k: int, system: str | None = None) -> dict:
         "num_tasks_complete": passes["num_tasks_complete"],
         "per_task": passes["per_task"],
         "failure_rate": failed_valid / len(valid) if valid else None,
-        "label_rates": label_rates(run["failures"], valid_ids, len(valid)),
+        "label_rates": label_rates(failures, valid_ids, len(valid)),
         "tool_calls": tool_calls,
         "tool_call_errors": counts["errors"],
         "tool_call_error_rate": counts["errors"] / tool_calls if tool_calls else None,
@@ -289,6 +291,6 @@ def compute_metrics(run: dict, k: int, system: str | None = None) -> dict:
         "auditkit": diagnostic_metrics(diagnostic_rows(traces, run.get("tools"))),
         # Labels of each failed valid run, for the gate's target / non-target checks.
         "failed_run_labels": [{"simulation_id": str(r.get("simulation_id")), "labels": r.get("labels") or []}
-                      for r in run["failures"] if str(r.get("simulation_id")) in valid_ids],
+                      for r in failures if str(r.get("simulation_id")) in valid_ids],
     }
 
