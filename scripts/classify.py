@@ -72,12 +72,20 @@ def make_chat(token: str | None, model: str):
                                  "max_tokens": 2000, "reasoning_effort": "low"})
 
     def chat(messages: list[dict]) -> str:
-        r = post(messages)
-        if r.status_code == 401 and vertex.is_vertex_model(model):
-            vertex.provider().invalidate()  # expired token: get a new one, retry once
+        from shipwright import instrument
+
+        with instrument.external("llm_judge", model, role="judge") as call:
             r = post(messages)
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"].get("content") or ""
+            call["retries"] = 0
+            if r.status_code == 401 and vertex.is_vertex_model(model):
+                vertex.provider().invalidate()  # expired token: get a new one, retry once
+                r = post(messages)
+                call["retries"] = 1
+            call["status"] = r.status_code
+            r.raise_for_status()
+            body = r.json()
+            call.update(instrument.usage_fields(body))
+            return body["choices"][0]["message"].get("content") or ""
 
     return chat
 
@@ -97,6 +105,10 @@ def main() -> int:
                         " (default: the team's choice, Vertex gpt-oss-120b)")
     args = p.parse_args()
 
+    from shipwright import log, repro
+
+    log.attach_run_dir(args.run_dir)
+    log.note_repro(**repro.models_from_args(args))
     traces = [json.loads(line) for line in (args.run_dir / "traces.jsonl").read_text().splitlines() if line]
     instructions = load_instructions(args.run_dir)
     chat = None
@@ -132,4 +144,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from shipwright import log
+
+    sys.exit(log.run_script(main, step="classify"))

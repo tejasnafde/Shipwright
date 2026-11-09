@@ -168,7 +168,11 @@ class TokenProvider:
     def get(self) -> str:
         with self._lock:
             if self._token is None or self._clock() - self._at >= self._ttl:
-                got = self._fetch()
+                from shipwright import instrument
+
+                source = getattr(self._fetch, "__name__", "fetch")
+                with instrument.external("token_fetch", source, refresh=self.fetches > 0):
+                    got = self._fetch()
                 if isinstance(got, tuple):
                     self._token, expires_in = got
                     self._ttl = max(0.0, min(self._max_age, expires_in - TOKEN_EXPIRY_MARGIN_S))

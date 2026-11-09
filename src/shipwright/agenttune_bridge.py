@@ -181,21 +181,28 @@ def make_classifier(model_name: str, api_base: str | None = None):
             """A non-vertex id runs AgentTune's own method. A ``vertex/`` id needs a bearer
             token per call (AgentTune's method passes no api_key), so this does the same
             request and parsing with ``shipwright.vertex.route_kwargs`` and one retry on 401."""
+            from shipwright import instrument
+
             if not vertex.is_vertex_model(self.model_name):
-                return await super()._classify_single(failure)
+                with instrument.external("llm_classifier", self.model_name, role="classifier"):
+                    return await super()._classify_single(failure)
             import litellm
 
             kwargs = {"model": self.model_name, "messages": self._build_prompt(failure),
                       "response_format": {"type": "json_object"}}
             tokens = vertex.provider()
             try:
-                try:
-                    response = await litellm.acompletion(**vertex.route_kwargs(kwargs, tokens))
-                except Exception as e:  # noqa: BLE001
-                    if not vertex.is_auth_error(e):
-                        raise
-                    tokens.invalidate()
-                    response = await litellm.acompletion(**vertex.route_kwargs(kwargs, tokens))
+                with instrument.external("llm_classifier", self.model_name, role="classifier") as call:
+                    call["retries"] = 0
+                    try:
+                        response = await litellm.acompletion(**vertex.route_kwargs(kwargs, tokens))
+                    except Exception as e:  # noqa: BLE001
+                        if not vertex.is_auth_error(e):
+                            raise
+                        tokens.invalidate()
+                        call["retries"] = 1
+                        response = await litellm.acompletion(**vertex.route_kwargs(kwargs, tokens))
+                    call.update(instrument.usage_fields(response))
                 parsed = json.loads(response.choices[0].message.content)
                 root = parsed.get("root_cause", "")
                 return ClassifiedFailure(

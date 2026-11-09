@@ -85,20 +85,26 @@ def main(argv: list[str] | None = None) -> int:
     if not token:
         print("No HF token: expected $SWITCHBOARD_SECRETS_DIR/HF_TOKEN or $HF_TOKEN.", file=sys.stderr)
         return 2
-    job = run_uv_job(
-        str(TRAIN_SCRIPT),
-        script_args=script_args,
-        flavor=args.flavor,
-        timeout=args.timeout,
-        secrets={"HF_TOKEN": token},
-        labels={"app": "lexsi-hackathon", "round": args.revision},
-        namespace=args.namespace,
-        token=token,
-    )
+    from shipwright import instrument
+
+    with instrument.external("hf_job_launch", f"{args.flavor} {TRAIN_SCRIPT.name}", timeout=args.timeout) as call:
+        job = run_uv_job(
+            str(TRAIN_SCRIPT),
+            script_args=script_args,
+            flavor=args.flavor,
+            timeout=args.timeout,
+            secrets={"HF_TOKEN": token},
+            labels={"app": "lexsi-hackathon", "round": args.revision},
+            namespace=args.namespace,
+            token=token,
+        )
+        call["job_id"] = job.id
     print(f"\nLaunched job {job.id}: {getattr(job, 'url', '')}")
     print(f"Logs: hf jobs logs {job.id}    Stop: hf jobs cancel {job.id}")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from shipwright import log
+
+    sys.exit(log.run_script(main, step="train"))

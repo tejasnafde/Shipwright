@@ -124,9 +124,12 @@ def push(out_dir: Path, repo: str, revision: str) -> None:
     api.create_repo(repo, repo_type="dataset", exist_ok=True, private=False)
     if revision != "main":
         api.create_branch(repo, repo_type="dataset", branch=revision, exist_ok=True)
+    from shipwright import instrument
+
     for name in ("sft.jsonl", "sft_stats.json"):
-        api.upload_file(path_or_fileobj=str(out_dir / name), path_in_repo=name, repo_id=repo,
-                        repo_type="dataset", revision=revision, commit_message=f"SFT data ({out_dir.name})")
+        with instrument.external("hf_hub_upload", f"datasets/{repo}@{revision}/{name}"):
+            api.upload_file(path_or_fileobj=str(out_dir / name), path_in_repo=name, repo_id=repo,
+                            repo_type="dataset", revision=revision, commit_message=f"SFT data ({out_dir.name})")
     print(f"Pushed to https://huggingface.co/datasets/{repo}/tree/{revision}")
 
 
@@ -137,6 +140,9 @@ def main(argv: list[str] | None = None) -> int:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = (args.output_dir or ROOT / "runs" / f"sft-{stamp}").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    from shipwright import log
+
+    log.attach_run_dir(out_dir)
 
     import baseline
 
@@ -174,4 +180,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from shipwright import log
+
+    sys.exit(log.run_script(main, step="sft"))

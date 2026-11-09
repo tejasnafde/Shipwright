@@ -7,6 +7,13 @@ Runs ``python scripts/<script.py> args...`` in /app, then uploads every run dir 
 ``gs://$SHIPWRIGHT_RUNS_BUCKET/$OWNER/jobs/<execution>.log``. It uploads after a failure too,
 then exits with the script's exit code.
 
+Debugging (docs/debugging.md): the run id is the Cloud Run execution name; the script gets it as
+``SHIPWRIGHT_RUN_ID`` and joins this process's trace through ``TRACEPARENT``. This entry logs job
+start and end, the exit code and every upload. If the script dies without a report (killed, out of
+memory), it writes ``errors.json`` with the tail of the console log into the run dirs (or into
+``runs/job-<run id>/``). ``gs://$SHIPWRIGHT_RUNS_BUCKET/$OWNER/jobs/<run id>.json`` lists the run
+dirs of the execution, so ``scripts/why.py <run id>`` finds them.
+
 Auth: the service account token from the metadata server (``shipwright.vertex.metadata_token``).
 Nothing here works off GCP, and nothing here needs gcloud.
 
@@ -25,12 +32,16 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
+import json
+
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from shipwright import vertex  # noqa: E402
+from shipwright import instrument, log, report, repro, tracing, vertex  # noqa: E402
+
+logger = log.get_logger("job_entry")
 
 DEFAULT_BUCKET = "lexsi-hackathon-runs"
 UPLOAD_URL = "https://storage.googleapis.com/upload/storage/v1/b/{bucket}/o?uploadType=media&name={name}"
@@ -55,9 +66,32 @@ TOKENS = vertex.TokenProvider(fetch=vertex.metadata_token)
 
 def upload(client: httpx.Client, bucket: str, name: str, data: bytes) -> None:
     token = TOKENS.get()
-    r = client.post(UPLOAD_URL.format(bucket=bucket, name=quote(name, safe="")), content=data,
-                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/octet-stream"})
-    r.raise_for_status()
+    with instrument.external("gcs_upload", f"gs://{bucket}/{name}", bytes=len(data)) as call:
+        r = client.post(UPLOAD_URL.format(bucket=bucket, name=quote(name, safe="")), content=data,
+                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/octet-stream"})
+        call["status"] = r.status_code
+        r.raise_for_status()
+
+
+def ensure_report(run_dir: Path, run_id: str, script: str, args: list[str], code: int, tail: str) -> None:
+    """errors.json for a dir the script left without one (killed, out of memory, crash before setup)."""
+    path = run_dir / "errors.json"
+    if path.exists():
+        try:
+            if json.loads(path.read_text()).get("run_id") == run_id:
+                return
+        except ValueError:
+            pass
+    trace_id = tracing.current_ids()[0]
+    err = {"severity": "ERROR", "run_id": run_id, "step": None, "component": "job_entry",
+           "message": f"{script} exited {code} without a failure report",
+           "error_class": "ExitCode", "error": f"exit {code}", "stack": tail, "trace_id": trace_id}
+    body = report.build(run_dir, run_id=run_id, step="job", exit_code=code, crashed=True, errors=[err],
+                        trace_id=trace_id, project=tracing.project())
+    report.write(run_dir, body)
+    if not (run_dir / "repro.json").exists():
+        rec = repro.collect(run_id=run_id, script=script, argv=args, owner=os.environ.get("OWNER"))
+        (run_dir / "repro.json").write_text(json.dumps(rec, indent=2))
 
 
 def main(argv: list[str]) -> int:
@@ -75,36 +109,94 @@ def main(argv: list[str]) -> int:
         print(f"no such script: scripts/{Path(script).name}", file=sys.stderr)
         return 2
 
+    execution = os.environ.get("CLOUD_RUN_EXECUTION") or ""
+    run_id = os.environ.get("SHIPWRIGHT_RUN_ID") or execution or None
+    if run_id:
+        os.environ["SHIPWRIGHT_RUN_ID"] = run_id
+    run_id = log.setup(component="job_entry")
+    execution = execution or run_id
+    started = time.time()
+    with tracing.span(f"job {path.name}", {"shipwright.run_id": run_id, "shipwright.script": path.name,
+                                            "shipwright.argv": " ".join(argv[1:])[:1000]}, root=True) as sp:
+        code, dirs, log_path = _run_and_upload(owner, bucket, path, argv[1:], run_id, execution)
+        if code:
+            tracing.mark_error(sp, f"exit {code}")
+        trace_id = tracing.current_ids()[0]
+        index = {"run_id": run_id, "owner": owner, "execution": execution, "script": path.name,
+                 "args": argv[1:], "exit_code": code, "started": started, "ended": time.time(),
+                 "run_dirs": dirs, "log": log_path, "trace_id": trace_id,
+                 "links": report.links(run_id, trace_id, tracing.project()), **repro.image_info(),
+                 "git_sha": repro.git_info().get("sha")}
+        try:
+            with httpx.Client(timeout=60) as client:
+                upload(client, bucket, f"{owner}/jobs/{run_id}.json", json.dumps(index, indent=2).encode())
+        except Exception:  # noqa: BLE001
+            logger.warning("job index upload failed", exc_info=True)
+        logger.info("job end", exit_code=code, run_dirs=dirs, log=log_path, links=index["links"],
+                    seconds=round(time.time() - started, 1))
+    tracing.shutdown()
+    return code
+
+
+def _run_and_upload(owner: str, bucket: str, path: Path, args: list[str], run_id: str, execution: str
+                    ) -> tuple[int, list[str], str | None]:
     runs = ROOT / "runs"
     before = run_dirs(runs)
-    cmd = [sys.executable, str(path), *argv[1:]]
+    cmd = [sys.executable, str(path), *args]
+    env = dict(os.environ)
+    tp = tracing.traceparent()
+    if tp:
+        env["TRACEPARENT"] = tp
+    logger.info("job start", script=path.name, args=args, owner=owner, execution=execution)
     print(f"[job_entry] {' '.join(cmd[1:])}", flush=True)
-    log = bytearray()
-    proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        sys.stdout.buffer.write(line)
-        sys.stdout.flush()
-        log += line
-    code = proc.wait()
+    log_buf = bytearray()
+    try:
+        proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            sys.stdout.buffer.write(line)
+            sys.stdout.flush()
+            log_buf += line
+        code = proc.wait()
+    except Exception:  # noqa: BLE001
+        logger.exception("could not run the script")
+        code = 1
     print(f"[job_entry] exit {code}", flush=True)
+    logger.log(40 if code else 20, f"script exit {code}", exit_code=code, script=path.name)
 
-    execution = os.environ.get("CLOUD_RUN_EXECUTION") or time.strftime("local-%Y%m%d-%H%M%S")
+    changed = changed_dirs(before, run_dirs(runs))
+    if code:
+        tail = bytes(log_buf[-6000:]).decode("utf-8", errors="replace")
+        targets = [runs / n for n in changed] or [runs / f"job-{run_id}"]
+        for d in targets:
+            try:
+                ensure_report(d, run_id, path.name, args, code, tail)
+            except Exception:  # noqa: BLE001
+                logger.warning("failure report not written", run_dir=str(d), exc_info=True)
+        changed = changed_dirs(before, run_dirs(runs))
+
     upload_failed = False
+    uploaded: list[str] = []
+    log_path = None
     with httpx.Client(timeout=300) as client:
-        for name in changed_dirs(before, run_dirs(runs)):
+        for name in changed:
             files = [f for f in sorted((runs / name).rglob("*")) if f.is_file()]
-            for f in files:
-                upload(client, bucket, f"{owner}/{name}/{f.relative_to(runs / name).as_posix()}", f.read_bytes())
-            print(f"[job_entry] uploaded {len(files)} files to gs://{bucket}/{owner}/{name}/", flush=True)
+            try:
+                for f in files:
+                    upload(client, bucket, f"{owner}/{name}/{f.relative_to(runs / name).as_posix()}", f.read_bytes())
+                uploaded.append(f"gs://{bucket}/{owner}/{name}/")
+                print(f"[job_entry] uploaded {len(files)} files to gs://{bucket}/{owner}/{name}/", flush=True)
+            except Exception:  # noqa: BLE001
+                logger.error(f"upload of {name} failed", exc_info=True)
+                upload_failed = True
         try:
-            upload(client, bucket, f"{owner}/jobs/{execution}.log", bytes(log))
-            print(f"[job_entry] log at gs://{bucket}/{owner}/jobs/{execution}.log", flush=True)
-        except httpx.HTTPError as e:
+            upload(client, bucket, f"{owner}/jobs/{execution}.log", bytes(log_buf))
+            log_path = f"gs://{bucket}/{owner}/jobs/{execution}.log"
+            print(f"[job_entry] log at {log_path}", flush=True)
+        except Exception as e:  # noqa: BLE001
             print(f"[job_entry] log upload failed: {e}", file=sys.stderr)
             upload_failed = True
-    return code or (1 if upload_failed else 0)
-
+    return code or (1 if upload_failed else 0), uploaded, log_path
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

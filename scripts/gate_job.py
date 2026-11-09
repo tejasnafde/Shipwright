@@ -151,22 +151,29 @@ def main(argv: list[str] | None = None) -> int:
         tar = Path(tmp) / "code.tar.gz"
         subprocess.check_call(["git", "-C", str(ROOT), "archive", "--format=tar.gz", "-o", str(tar), "HEAD",
                                "--", *BUNDLE_PATHS])
-        api.upload_file(path_or_fileobj=str(tar), path_in_repo=bundle, repo_id=args.runs_repo,
-                        repo_type="dataset", commit_message=f"gate round {args.round}: code {sha}")
-    job = run_uv_job(
-        str(GATE_SCRIPT),
-        script_args=script_args(args, bundle),
-        flavor=args.flavor,
-        timeout=args.timeout,
-        secrets=secrets,
-        labels={"app": "lexsi-hackathon", "round": f"round-{args.round}", "step": "gate"},
-        namespace=args.namespace,
-        token=token,
-    )
+        from shipwright import instrument
+
+        with instrument.external("hf_hub_upload", f"datasets/{args.runs_repo}/{bundle}"):
+            api.upload_file(path_or_fileobj=str(tar), path_in_repo=bundle, repo_id=args.runs_repo,
+                            repo_type="dataset", commit_message=f"gate round {args.round}: code {sha}")
+    with instrument.external("hf_job_launch", f"{args.flavor} {GATE_SCRIPT.name}", timeout=args.timeout) as call:
+        job = run_uv_job(
+            str(GATE_SCRIPT),
+            script_args=script_args(args, bundle),
+            flavor=args.flavor,
+            timeout=args.timeout,
+            secrets=secrets,
+            labels={"app": "lexsi-hackathon", "round": f"round-{args.round}", "step": "gate"},
+            namespace=args.namespace,
+            token=token,
+        )
+        call["job_id"] = job.id
     print(f"\nLaunched job {job.id}: {getattr(job, 'url', '')}")
     print(f"Logs: hf jobs logs {job.id}    Stop: hf jobs cancel {job.id}")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from shipwright import log
+
+    sys.exit(log.run_script(main, step="gate"))

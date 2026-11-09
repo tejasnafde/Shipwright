@@ -357,9 +357,12 @@ def push(out: Path, args: argparse.Namespace, row_file: Path, candidate: str) ->
     api = HfApi(token=token)
     api.create_repo(args.runs_repo, repo_type="dataset", exist_ok=True, private=False)
     prefix = f"gate/round-{args.round}/{candidate}"
-    api.upload_folder(folder_path=str(out), repo_id=args.runs_repo, repo_type="dataset", path_in_repo=prefix,
-                      commit_message=f"gate round {args.round}: results",
-                      ignore_patterns=["**/tau2/**"])  # tau2's own results.json duplicates traces.jsonl
+    from shipwright import instrument
+
+    with instrument.external("hf_hub_upload", f"datasets/{args.runs_repo}/{prefix}"):
+        api.upload_folder(folder_path=str(out), repo_id=args.runs_repo, repo_type="dataset", path_in_repo=prefix,
+                          commit_message=f"gate round {args.round}: results",
+                          ignore_patterns=["**/tau2/**"])  # tau2's own results.json duplicates traces.jsonl
     # Append this run's row to the dataset-level metrics.jsonl.
     try:
         old = Path(hf_hub_download(args.runs_repo, "metrics.jsonl", repo_type="dataset", token=token)).read_text()
@@ -367,8 +370,9 @@ def push(out: Path, args: argparse.Namespace, row_file: Path, candidate: str) ->
         old = ""
     merged = out / "_metrics_all.jsonl"
     merged.write_text(old + ("" if not old or old.endswith("\n") else "\n") + row_file.read_text())
-    api.upload_file(path_or_fileobj=str(merged), path_in_repo="metrics.jsonl", repo_id=args.runs_repo,
-                    repo_type="dataset", commit_message=f"metrics.jsonl: gate round {args.round}")
+    with instrument.external("hf_hub_upload", f"datasets/{args.runs_repo}/metrics.jsonl"):
+        api.upload_file(path_or_fileobj=str(merged), path_in_repo="metrics.jsonl", repo_id=args.runs_repo,
+                        repo_type="dataset", commit_message=f"metrics.jsonl: gate round {args.round}")
     print(f"pushed to https://huggingface.co/datasets/{args.runs_repo}/tree/main/{prefix}")
 
 
@@ -392,6 +396,23 @@ def bootstrap(argv: list[str], args: argparse.Namespace) -> None:
     os.execv(python, [python, str(JOB_WORKDIR / "scripts" / "gate_eval.py"), *argv, "--bootstrapped"])
 
 
+def _expected_reject() -> None:
+    try:
+        from shipwright import log
+    except ImportError:
+        return
+    log.expected_exit(1, "the gate rejected the candidate")
+
+
+def _attach(out: Path) -> None:
+    """log.jsonl, errors.json and repro.json in the gate output dir (when run through log.run_script)."""
+    try:
+        from shipwright import log
+    except ImportError:
+        return
+    log.attach_run_dir(out)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     args = parse_args(argv)
@@ -404,6 +425,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg = load_config(args.config)
         out = (args.output_dir or default_out(args.round, "decide")).resolve()
         out.mkdir(parents=True, exist_ok=True)
+        _attach(out)
         names = {"current": args.current_run.name, "candidate": args.candidate_run.name}
         targets = args.target_label or []
         metrics = {who: metrics_for(d, cfg, names[who], None) or missing_metrics(names[who], "no metrics")
@@ -412,6 +434,8 @@ def main(argv: list[str] | None = None) -> int:
                                     {who: {"run_dir": str(d)} for who, d in
                                      (("current", args.current_run), ("candidate", args.candidate_run))}, targets)
         print(f"\nWrote {out}")
+        if decision["decision"] != "promote":
+            _expected_reject()
         return 0 if decision["decision"] == "promote" else 1
 
     cfg, systems, patch_ids, record = load_inputs(args)
@@ -419,6 +443,7 @@ def main(argv: list[str] | None = None) -> int:
     tag = "dry" if args.local_dry_run else "job"
     out = (args.output_dir or (Path("/tmp/gate-out") if args.in_job else default_out(args.round, tag))).resolve()
     out.mkdir(parents=True, exist_ok=True)
+    _attach(out)
     (out / "gate_inputs.json").write_text(json.dumps(
         {"round": args.round, "config": cfg, "systems": record, "targets": targets,
          "user_model": args.user_model, "mode": tag}, indent=1))
@@ -457,4 +482,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    if "--in-job" in sys.argv and "--bootstrapped" not in sys.argv:
+        sys.exit(main())  # first pass in an HF Job: the harness (and shipwright.log) is not installed yet
+    from shipwright import log
+
+    sys.exit(log.run_script(main, step="gate"))

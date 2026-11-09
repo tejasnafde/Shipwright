@@ -19,7 +19,7 @@ import json
 import threading
 from typing import Any, Callable
 
-from shipwright import vertex
+from shipwright import instrument, vertex
 from shipwright.costs import UsageMeter
 from shipwright.prompted_tools import convert_response, is_prompted_model, prepare_request
 from shipwright.traces import MALFORMED_KEY
@@ -111,10 +111,17 @@ def install(
             context = None
             if prompted:
                 kwargs, context = prepare_request(kwargs)
+            attempts = [0]
+
+            def counted(**kw: Any) -> Any:
+                attempts[0] += 1
+                return real(*args, **kw)
+
             if fake_completion is None and vertex.is_vertex_model(model):
-                response = vertex.call_with_refresh(lambda **kw: real(*args, **kw), kwargs)
+                do = lambda: vertex.call_with_refresh(counted, kwargs)  # noqa: E731
             else:
-                response = real(*args, **kwargs)
+                do = lambda: counted(**kwargs)  # noqa: E731
+            response = instrument.llm_call(role, model, kwargs, do, retries=lambda: max(0, attempts[0] - 1))
             if meter is not None:
                 meter.add(role, model, getattr(response, "usage", None))
             if is_nl_judge_request(kwargs):
@@ -126,6 +133,7 @@ def install(
 
         llm_utils.completion = wrapped
         _installed = True
+    instrument.install_tau2()
 
 
 class ModelRerouter:

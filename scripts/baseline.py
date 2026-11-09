@@ -29,6 +29,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from shipwright import log, repro  # noqa: E402
+
+logger = log.get_logger("baseline")
+
 HF_ROUTER = "https://router.huggingface.co/v1"
 DEFAULT_AGENT = "openai/CohereLabs/tiny-aya-global:cohere"
 DEFAULT_USER = "openai/openai/gpt-oss-120b:cerebras"
@@ -105,6 +109,10 @@ def run(
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = (args.output_dir or ROOT / "runs" / f"{prefix}-{stamp}").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    log.attach_run_dir(out_dir)
+    log.note_repro(**repro.models_from_args(args), dry_run=args.dry_run)
+    logger.info("run start", run_dir=str(out_dir), agent_model=args.agent_model, user_model=args.user_model,
+                task_split=args.task_split, dry_run=args.dry_run)
 
     from shipwright import vertex
 
@@ -116,7 +124,7 @@ def run(
     else:
         token = load_token()
         if needs_hf and not token:
-            print("No HF token: expected $SWITCHBOARD_SECRETS_DIR/HF_TOKEN or $HF_TOKEN.", file=sys.stderr)
+            logger.error("No HF token: expected $SWITCHBOARD_SECRETS_DIR/HF_TOKEN or $HF_TOKEN.")
             return None
         if token:
             # litellm's openai provider reads these; nothing token-bearing goes into tau2 config.
@@ -127,10 +135,10 @@ def run(
         if vertex.is_vertex_model(args.agent_model) or vertex.is_vertex_model(args.user_model):
             try:
                 vertex.provider().get()  # fail now, not mid-run, if gcloud cannot mint a token
-            except RuntimeError as e:
-                print(f"Vertex token: {e}", file=sys.stderr)
+            except RuntimeError:
+                logger.error("Vertex token failed", exc_info=True)
                 return None
-            print(f"vertex: project {vertex.project()}, location {vertex.location()}")
+            logger.info("vertex endpoint", project=vertex.project(), location=vertex.location())
 
     from shipwright import llm_patch, prompted_tools
     from shipwright.costs import UsageMeter
@@ -158,7 +166,8 @@ def run(
             repo = args.agent_model.removeprefix("openai/").split(":")[0]
             ok = "tiny-aya" in repo.lower() and "/" in repo and not args.agent_api_base
             repo = repo if ok else context.STUDENT_REPO
-            print(f"token counting: {'tokenizer' if context.load_tokenizer(repo, token) else 'estimate'}")
+            counting = "tokenizer" if context.load_tokenizer(repo, token) else "estimate"
+            logger.info(f"token counting: {counting}", repo=repo)
 
     import tau2.evaluator.evaluator_nl_assertions as nl_assertions
 
@@ -184,7 +193,8 @@ def run(
         # Fail now, not mid-run, if an applied patch does not fit the current tools.
         _, active_patches = apply_patches([t.openai_schema for t in domain_tools], ledger)
         set_tool_patches(ledger)
-        print(f"tool patches active: {active_patches or 'none'}")
+        logger.info(f"tool patches active: {active_patches or 'none'}", patches=active_patches)
+    log.note_repro(tool_patch_ids_active=active_patches)
 
     run_config = {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()}
     run_config["output_dir"] = str(out_dir)
@@ -215,6 +225,7 @@ def run(
         max_retries=0,
     )
     results = run_domain(config)
+    log.fail_point("summary")
 
     sims = [s.model_dump(mode="json") for s in results.simulations]
     traces = [build_trace(s, tool_names) for s in sims]
@@ -233,6 +244,9 @@ def run(
     if prompts:
         (out_dir / "prompts.json").write_text(json.dumps(prompts, indent=1))
     export_spans(traces, out_dir, args, active_patches)
+    log.note_repro(task_ids_run=sorted({str(t["task_id"]) for t in traces}, key=lambda x: (len(x), x)))
+    logger.info("run done", run_dir=str(out_dir), runs=summary["num_runs"], passed=summary["num_passed"],
+                infra_errors=summary["num_infra_errors"])
     return out_dir, traces, summary
 
 
@@ -241,7 +255,7 @@ def export_spans(traces: list[dict], out_dir: Path, args: argparse.Namespace, ac
     try:
         from shipwright.otel import export_run
     except Exception as e:  # noqa: BLE001 - e.g. opentelemetry not installed
-        print(f"warning: OTel spans skipped ({e})")
+        logger.warning(f"OTel spans skipped ({e})")
         return
     provider = "dry_run" if args.dry_run else (
         "openai" if args.agent_api_base else ("vertex" if args.agent_model.startswith("vertex/") else "huggingface"))
@@ -262,4 +276,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(log.run_script(main, step="run"))

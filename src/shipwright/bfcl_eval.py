@@ -102,9 +102,15 @@ def make_chat(api_base: str, model: str, timeout: float = 120):
     client = httpx.Client(timeout=timeout)
 
     def chat(messages: list[dict]) -> str:
-        r = client.post(f"{api_base}/chat/completions",
-                        json={"model": model, "messages": messages, "temperature": 0, "max_tokens": REPLY_TOKENS})
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"].get("content") or ""
+        from shipwright import instrument
+
+        with instrument.external("llm_bfcl", model, role="agent") as call:
+            r = client.post(f"{api_base}/chat/completions",
+                            json={"model": model, "messages": messages, "temperature": 0, "max_tokens": REPLY_TOKENS})
+            call["status"] = r.status_code
+            r.raise_for_status()
+            body = r.json()
+            call.update(instrument.usage_fields(body))
+            return body["choices"][0]["message"].get("content") or ""
 
     return chat
