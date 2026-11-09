@@ -63,6 +63,10 @@ and the tool-fix vs weight-fix comparison.
   not only the parsed tool call. AgentTune's `to_audit_records()` keeps only tool name, arguments
   and status, so add the raw text yourself. Without it, wrong-reasoning failures cannot be classified.
 - Langfuse is optional and only a viewer. Never make code depend on it.
+- 2026-11-09: every run also writes `otel_spans.jsonl` (OTel GenAI spans, built from `traces.jsonl`
+  after the run; an export error only warns). `traces.jsonl` stays the input of the loop.
+  OTLP export only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Viewer and span layout: `docs/observability.md`.
+- `scripts/otel_to_traces.py` converts OTel span files to the `traces.jsonl` shape.
 
 ## Infrastructure
 
