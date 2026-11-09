@@ -63,7 +63,9 @@ and the tool-fix vs weight-fix comparison.
 
 ## Traces
 
-- Source of truth: AgentTune `audit.jsonl`, one file per round, published to an HF dataset.
+- Source of truth: our `traces.jsonl` per run (format in `docs/baseline.md`), plus `otel_spans.jsonl`
+  built from it. Run dirs are published to an HF dataset. AgentTune's `audit.jsonl` is only
+  AgentTune's own format: convert to or from it where an AgentTune API needs it.
 - **Log the raw model output for every turn** (full generated text, including any reasoning),
   not only the parsed tool call. AgentTune's `to_audit_records()` keeps only tool name, arguments
   and status, so add the raw text yourself. Without it, wrong-reasoning failures cannot be classified.
@@ -142,7 +144,8 @@ and the tool-fix vs weight-fix comparison.
 ## Known traps (add new ones here, with the date)
 
 - 2026-11-07: AgentTune `DeploymentGate` approves by default when there are fewer than
-  `min_test_samples` successful runs. Our gate must reject in that case.
+  `min_test_samples` successful runs. Our gate must reject in that case. `FullClosedLoop`'s
+  `GateConfig.min_test_samples` defaults to 1, also in AgentTune's examples (2026-11-09, Ishank).
 - 2026-11-07: Ishank's first repo used Command R7B, which is not an allowed model.
 - 2026-11-07: AgentTune `to_audit_records()` drops the model's text. Log raw output separately.
 - 2026-11-08: HF Jobs default timeout is 30 minutes.
@@ -156,6 +159,9 @@ and the tool-fix vs weight-fix comparison.
 - 2026-11-08: tau2 saves results under its own data dir unless `save_to` is an absolute path. `scripts/baseline.py` passes one.
 - 2026-11-08: AuditKIT `reliability()` lowers k to the number of decided trials when a task has fewer than k (infra errors). `eval_metrics.pass_metrics` scores pass^k only on tasks with k decided trials and counts the rest.
 - 2026-11-08: AuditKIT multi-trial rows keep only the first trial's diagnostics. `eval_metrics` runs a second, one-case-per-run pass for ToolCallF1 and the other diagnostics.
+- 2026-11-09 (Ishank): AgentTune `TrainingExampleGenerator` returns `None` for any root cause other than `wrong_tool` or `loop_collapse`. Our weight fix uses teacher runs (`docs/training.md`) instead.
+- 2026-11-09 (Ishank): `pip install agenttune` fails on a CPU-only macOS machine (torch 2.11 + bitsandbytes force a source build). It installs on Linux x86_64 (CI, HF Jobs). Do not replace AgentTune with a local reimplementation.
+- 2026-11-09: AuditKIT `reliability()` takes `independent=`, while `AgentEvalRunner` takes `reset_confirmed=` (we use the runner). Verdicts are `success` / `failure` / `unknown`, not pass/fail.
 - 2026-11-09: DeepSeek V4.1 Flash on Vertex is served only on the `global` endpoint (a `us-central1` call fails). Vertex has no explicit context cache (`cachedContents`) for MaaS open models; implicit prefix caching (Preview) covers `deepseek-v4.1-flash-maas` from 4096 prompt tokens, not gpt-oss-120b. Our fixed teacher prefix (policy + tool list) is about 2.6k tokens, so hits come from the growing conversation of one run.
 - 2026-11-09: Vertex gpt-oss-120b spends reply tokens on reasoning (`reasoning_content`) first. `vertex.py` raises `max_tokens` below 1024 to 1024; `reasoning_effort: low` is accepted.
 - 2026-11-09: A Vertex token lasts about 1 hour and an HF Job cannot run gcloud. `gate_job.py` passes a token minted at launch (`SHIPWRIGHT_VERTEX_TOKEN`), with no refresh: a gate job with a Vertex user model must finish within about 1 hour.
