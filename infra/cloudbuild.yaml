@@ -5,7 +5,8 @@
 #   gcloud --configuration=personal --project=lexsi-hackathon builds submit --region=asia-south1 \
 #     --config=infra/cloudbuild.yaml --substitutions=_OWNER=tejas,_SHA=$(git rev-parse --short HEAD) .
 #
-# Tags: harness:<owner> (moves) and harness:<sha> (fixed). The job gets the sha tag.
+# Tags: harness:<owner> (moves) and harness:<sha> (fixed). The job gets the pushed digest (image@sha256:...),
+# and SHIPWRIGHT_IMAGE_DIGEST; the image has SHIPWRIGHT_GIT_SHA and SHIPWRIGHT_IMAGE (docs/debugging.md).
 substitutions:
   _OWNER: ""
   _SHA: ""
@@ -43,10 +44,16 @@ steps:
         set -eu
         owner=$$(cat /workspace/owner); sha=$$(cat /workspace/sha)
         docker pull "${_IMAGE}:$$owner" || true
+        full="${COMMIT_SHA}"
+        [ -n "$$full" ] || full="$$sha"
         docker build -f infra/docker/Dockerfile --cache-from "${_IMAGE}:$$owner" \
+          --build-arg GIT_SHA="$$full" --build-arg IMAGE_TAG="${_IMAGE}:$$sha" \
           -t "${_IMAGE}:$$owner" -t "${_IMAGE}:$$sha" .
         docker push "${_IMAGE}:$$sha"
         docker push "${_IMAGE}:$$owner"
+        # image@sha256:... of what was pushed: the job runs exactly this, repro.json records it
+        docker inspect --format='{{index .RepoDigests 0}}' "${_IMAGE}:$$sha" > /workspace/digest
+        cat /workspace/digest
 
   - id: update-job
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
@@ -55,9 +62,9 @@ steps:
       - -c
       - |
         set -eu
-        owner=$$(cat /workspace/owner); sha=$$(cat /workspace/sha)
+        owner=$$(cat /workspace/owner); digest=$$(cat /workspace/digest)
         gcloud run jobs update "shipwright-$$owner" --project=lexsi-hackathon --region=${_REGION} \
-          --image="${_IMAGE}:$$sha" --quiet
+          --image="$$digest" --update-env-vars="SHIPWRIGHT_IMAGE_DIGEST=$${digest##*@}" --quiet
 
 serviceAccount: projects/lexsi-hackathon/serviceAccounts/shipwright-builder@lexsi-hackathon.iam.gserviceaccount.com
 timeout: 1800s

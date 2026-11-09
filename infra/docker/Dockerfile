@@ -31,5 +31,12 @@ ENV PATH=/app/.venv/bin:$PATH \
     LITELLM_LOCAL_MODEL_COST_MAP=True \
     SHIPWRIGHT_VERTEX_AUTH=metadata
 
+# Build facts for repro.json and every log line (docs/debugging.md). Last, so they do not
+# invalidate the dependency layer. The image has no .git: the sha comes from here.
+ARG GIT_SHA=""
+ARG IMAGE_TAG=""
+ENV SHIPWRIGHT_GIT_SHA=$GIT_SHA \
+    SHIPWRIGHT_IMAGE=$IMAGE_TAG
+
 # Args are a script under scripts/ and its flags, e.g. `baseline.py --dry-run --num-tasks 2`.
 ENTRYPOINT ["python", "/app/scripts/job_entry.py"]
