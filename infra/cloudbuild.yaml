@@ -1,0 +1,65 @@
+# Build the harness image and point the branch's Cloud Run Job at it (docs/cloud-runs.md).
+#
+# Branch -> owner: tejas, mitushi, main -> same name; ig/main -> ishank. Triggers pass nothing;
+# a manual build passes _OWNER and _SHA:
+#   gcloud --configuration=personal --project=lexsi-hackathon builds submit --region=asia-south1 \
+#     --config=infra/cloudbuild.yaml --substitutions=_OWNER=tejas,_SHA=$(git rev-parse --short HEAD) .
+#
+# Tags: harness:<owner> (moves) and harness:<sha> (fixed). The job gets the sha tag.
+substitutions:
+  _OWNER: ""
+  _SHA: ""
+  _IMAGE: asia-south1-docker.pkg.dev/lexsi-hackathon/shipwright/harness
+  _REGION: asia-south1
+
+steps:
+  - id: tags
+    name: bash
+    args:
+      - -c
+      - |
+        set -eu
+        owner="${_OWNER}"
+        if [ -z "$$owner" ]; then
+          case "${BRANCH_NAME}" in
+            ig/main) owner=ishank ;;
+            tejas|mitushi|main) owner="${BRANCH_NAME}" ;;
+            *) echo "no Cloud Run Job for branch '${BRANCH_NAME}'"; exit 1 ;;
+          esac
+        fi
+        sha="${_SHA}"
+        [ -n "$$sha" ] || sha="${SHORT_SHA}"
+        [ -n "$$sha" ] || sha="build-$$(echo ${BUILD_ID} | cut -c1-8)"
+        echo "$$owner" > /workspace/owner
+        echo "$$sha" > /workspace/sha
+        echo "owner=$$owner sha=$$sha"
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -eu
+        owner=$$(cat /workspace/owner); sha=$$(cat /workspace/sha)
+        docker pull "${_IMAGE}:$$owner" || true
+        docker build -f infra/docker/Dockerfile --cache-from "${_IMAGE}:$$owner" \
+          -t "${_IMAGE}:$$owner" -t "${_IMAGE}:$$sha" .
+        docker push "${_IMAGE}:$$sha"
+        docker push "${_IMAGE}:$$owner"
+
+  - id: update-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -eu
+        owner=$$(cat /workspace/owner); sha=$$(cat /workspace/sha)
+        gcloud run jobs update "shipwright-$$owner" --project=lexsi-hackathon --region=${_REGION} \
+          --image="${_IMAGE}:$$sha" --quiet
+
+serviceAccount: projects/lexsi-hackathon/serviceAccounts/shipwright-builder@lexsi-hackathon.iam.gserviceaccount.com
+timeout: 1800s
+options:
+  logging: CLOUD_LOGGING_ONLY
