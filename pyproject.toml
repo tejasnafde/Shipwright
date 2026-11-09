@@ -13,6 +13,8 @@ dependencies = [
     "auditkit==1.1.6",  # Lexsi AuditKIT: gate metrics (scripts/gate_eval.py)
     "huggingface_hub>=1.0",
     "pyyaml>=6",
+    "opentelemetry-sdk>=1.30",  # run spans, src/shipwright/otel.py
+    "opentelemetry-exporter-otlp-proto-http>=1.30",  # only used when OTEL_EXPORTER_OTLP_ENDPOINT is set
 ]
 
 [project.optional-dependencies]

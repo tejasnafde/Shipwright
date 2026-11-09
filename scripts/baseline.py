@@ -7,6 +7,7 @@ Writes to the output dir:
   run_config.json    the arguments of this run (no secrets)
   prompts.json       the agent's un-converted system prompt and tool schemas, by prompt_sha
                      (prompted models only; scripts/build_sft.py renders training data from it)
+  otel_spans.jsonl   OpenTelemetry spans built from traces.jsonl (docs/observability.md)
 
 The HF token is read at run time from $SWITCHBOARD_SECRETS_DIR/HF_TOKEN (or $HF_TOKEN).
 It is passed to litellm only through process environment variables, never written to disk.
@@ -221,7 +222,22 @@ def run(
     prompts = prompted_tools.recorded_prompts()
     if prompts:
         (out_dir / "prompts.json").write_text(json.dumps(prompts, indent=1))
+    export_spans(traces, out_dir, args, active_patches)
     return out_dir, traces, summary
+
+
+def export_spans(traces: list[dict], out_dir: Path, args: argparse.Namespace, active_patches: list[str]) -> None:
+    """OTel spans next to traces.jsonl (docs/observability.md). Never raises."""
+    try:
+        from shipwright.otel import export_run
+    except Exception as e:  # noqa: BLE001 - e.g. opentelemetry not installed
+        print(f"warning: OTel spans skipped ({e})")
+        return
+    provider = "dry_run" if args.dry_run else ("openai" if args.agent_api_base else "huggingface")
+    export_run(traces, out_dir, {
+        "agent_model": args.agent_model, "user_model": args.user_model, "domain": args.domain,
+        "task_split": args.task_split, "provider": provider, "active_tool_patches": active_patches,
+    })
 
 
 def main() -> int:

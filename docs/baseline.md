@@ -51,6 +51,7 @@ by the gate (`docs/gate.md`).
 - `run_config.json`: the arguments of the run.
 - `prompts.json`: the agent's un-converted system prompt and tool schemas, by `prompt_sha`
   (prompted models only). Training data is rendered from it, see `docs/training.md`.
+- `otel_spans.jsonl`: the same runs as OpenTelemetry spans (optional viewer, see `docs/observability.md`).
 
 ## Prompted tool calls (Tiny Aya)
 
