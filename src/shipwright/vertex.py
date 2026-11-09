@@ -8,11 +8,16 @@ A ``vertex/`` request goes to litellm as an OpenAI-compatible model, with the Ve
 ``api_base`` and a fresh bearer token per call (``route_kwargs``). Nothing token-bearing goes
 into tau2 config or env vars.
 
-Auth: ``gcloud --configuration=$SHIPWRIGHT_GCLOUD_CONFIG auth print-access-token``. Never
-Application Default Credentials: on Tejas's machine they are a work identity. A token lives
-about 1 hour, so ``TokenProvider`` caches it and gets a new one after 45 minutes (or after a
-401). ``$SHIPWRIGHT_VERTEX_TOKEN`` (a token minted elsewhere, e.g. passed to an HF Job) is used
-as is, with no refresh. The token is never logged or written to disk.
+Auth, in this order:
+  1. ``$SHIPWRIGHT_VERTEX_TOKEN`` (a token minted elsewhere, e.g. passed to an HF Job): used as
+     is, with no refresh.
+  2. On GCP (Cloud Run: ``$CLOUD_RUN_JOB`` or ``$K_SERVICE`` set, or
+     ``SHIPWRIGHT_VERTEX_AUTH=metadata``): the service account token from the metadata server.
+     It comes with ``expires_in``; ``TokenProvider`` refreshes 5 minutes before that.
+  3. Laptops: ``gcloud --configuration=$SHIPWRIGHT_GCLOUD_CONFIG auth print-access-token``. Never
+     Application Default Credentials: on Tejas's machine they are a work identity.
+A token lives about 1 hour, so ``TokenProvider`` caches it and gets a new one after 45 minutes
+(or after a 401). The token is never logged or written to disk.
 
 Env vars:
   SHIPWRIGHT_GCP_PROJECT     default lexsi-hackathon
@@ -20,6 +25,7 @@ Env vars:
   SHIPWRIGHT_GCLOUD          gcloud binary (default: the Homebrew path if it exists, else PATH)
   SHIPWRIGHT_VERTEX_LOCATION default global (DeepSeek V4.1 Flash is served only there)
   SHIPWRIGHT_VERTEX_TOKEN    a static bearer token (no gcloud call, no refresh)
+  SHIPWRIGHT_VERTEX_AUTH     metadata: use the metadata server token (set in the harness image)
 """
 
 from __future__ import annotations
@@ -39,6 +45,9 @@ DEFAULT_LOCATION = "global"
 HOMEBREW_GCLOUD = "/opt/homebrew/share/google-cloud-sdk/bin/gcloud"
 # Tokens from gcloud live about 1 hour; refresh well before that.
 TOKEN_MAX_AGE_S = 45 * 60
+METADATA_TOKEN_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+# Refresh a metadata token this long before it expires.
+TOKEN_EXPIRY_MARGIN_S = 5 * 60
 # gpt-oss spends tokens on reasoning before it answers: a small max_tokens leaves no answer.
 MIN_REPLY_TOKENS = {"openai/gpt-oss-120b-maas": 1024}
 
@@ -105,15 +114,47 @@ def gcloud_token() -> str:
     return token
 
 
-def default_fetch() -> str:
+def on_gcp() -> bool:
+    """True inside Cloud Run (job or service), or when ``SHIPWRIGHT_VERTEX_AUTH=metadata``."""
+    if os.environ.get("SHIPWRIGHT_VERTEX_AUTH", "").strip().lower() == "metadata":
+        return True
+    return bool(os.environ.get("CLOUD_RUN_JOB") or os.environ.get("K_SERVICE"))
+
+
+def metadata_token(get: Callable[..., Any] | None = None) -> tuple[str, float]:
+    """(access token, seconds until it expires) for the attached service account."""
+    import httpx
+
+    get = get or httpx.get
+    try:
+        r = get(METADATA_TOKEN_URL, headers={"Metadata-Flavor": "Google"}, timeout=10)
+        r.raise_for_status()
+        body = r.json()
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(f"metadata server token failed: {type(e).__name__}: {str(e)[:200]}") from None
+    token = str(body.get("access_token") or "")
+    if not token:
+        raise RuntimeError("metadata server returned no access_token")
+    return token, float(body.get("expires_in") or TOKEN_MAX_AGE_S)
+
+
+def default_fetch() -> str | tuple[str, float]:
     static = os.environ.get("SHIPWRIGHT_VERTEX_TOKEN", "").strip()
-    return static or gcloud_token()
+    if static:
+        return static
+    if on_gcp():
+        return metadata_token()
+    return gcloud_token()
 
 
 class TokenProvider:
-    """Cache a bearer token and fetch a new one after ``max_age`` seconds. Thread-safe."""
+    """Cache a bearer token and fetch a new one after ``max_age`` seconds. Thread-safe.
 
-    def __init__(self, fetch: Callable[[], str] | None = None, max_age: float = TOKEN_MAX_AGE_S,
+    ``fetch`` returns a token, or ``(token, expires_in)``: then the token is replaced
+    ``TOKEN_EXPIRY_MARGIN_S`` before it expires, if that is sooner than ``max_age``.
+    """
+
+    def __init__(self, fetch: Callable[[], str | tuple[str, float]] | None = None, max_age: float = TOKEN_MAX_AGE_S,
                  clock: Callable[[], float] = time.monotonic):
         self._fetch = fetch or default_fetch
         self._max_age = max_age
@@ -121,12 +162,18 @@ class TokenProvider:
         self._lock = threading.Lock()
         self._token: str | None = None
         self._at = 0.0
+        self._ttl = max_age
         self.fetches = 0
 
     def get(self) -> str:
         with self._lock:
-            if self._token is None or self._clock() - self._at >= self._max_age:
-                self._token = self._fetch()
+            if self._token is None or self._clock() - self._at >= self._ttl:
+                got = self._fetch()
+                if isinstance(got, tuple):
+                    self._token, expires_in = got
+                    self._ttl = max(0.0, min(self._max_age, expires_in - TOKEN_EXPIRY_MARGIN_S))
+                else:
+                    self._token, self._ttl = got, self._max_age
                 self._at = self._clock()
                 self.fetches += 1
             return self._token
@@ -192,7 +239,7 @@ def endpoint(model: str, hf_token: str | None, hf_base: str) -> tuple[str, str, 
     """
     if is_vertex_model(model):
         tokens = provider()
-        tokens.get()  # fail now (RuntimeError) if gcloud cannot mint a token
+        tokens.get()  # fail now (RuntimeError) if no token can be had
         return f"{api_base()}/chat/completions", model_id(model), lambda: {"Authorization": f"Bearer {tokens.get()}"}
     if not hf_token:
         raise RuntimeError("No HF token: expected $SWITCHBOARD_SECRETS_DIR/HF_TOKEN or $HF_TOKEN.")

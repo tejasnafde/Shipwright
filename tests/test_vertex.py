@@ -232,3 +232,64 @@ def test_teacher_prefix_is_byte_identical_across_requests():
     assert a["messages"][0]["role"] == "system"
     assert a["messages"][0]["content"] == b["messages"][0]["content"]
     assert a["messages"][:2] == b["messages"][:2]
+
+
+# ------------------------------------------------------------------ metadata server (Cloud Run)
+
+class _Resp:
+    def __init__(self, body, status=200):
+        self._body, self.status_code = body, status
+
+    def raise_for_status(self):
+        if self.status_code != 200:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self._body
+
+
+def test_metadata_token_request_and_parse():
+    seen = {}
+
+    def fake_get(url, headers, timeout):
+        seen.update(url=url, headers=headers)
+        return _Resp({"access_token": "ya29.meta", "expires_in": 3599, "token_type": "Bearer"})
+
+    assert vertex.metadata_token(fake_get) == ("ya29.meta", 3599.0)
+    assert seen["url"] == vertex.METADATA_TOKEN_URL
+    assert seen["headers"] == {"Metadata-Flavor": "Google"}
+    with pytest.raises(RuntimeError, match="metadata server"):
+        vertex.metadata_token(lambda *a, **k: _Resp({}, status=404))
+    with pytest.raises(RuntimeError, match="no access_token"):
+        vertex.metadata_token(lambda *a, **k: _Resp({"expires_in": 10}))
+
+
+def test_on_gcp_selects_metadata_over_gcloud(monkeypatch):
+    for name in ("SHIPWRIGHT_VERTEX_TOKEN", "SHIPWRIGHT_VERTEX_AUTH", "CLOUD_RUN_JOB", "K_SERVICE"):
+        monkeypatch.delenv(name, raising=False)
+    assert not vertex.on_gcp()
+    monkeypatch.setattr(vertex, "metadata_token", lambda: ("meta", 3600.0))
+    monkeypatch.setattr(vertex, "gcloud_token", lambda: "gcloud")
+    assert vertex.default_fetch() == "gcloud"
+    monkeypatch.setenv("CLOUD_RUN_JOB", "shipwright-tejas")
+    assert vertex.on_gcp() and vertex.default_fetch() == ("meta", 3600.0)
+    monkeypatch.delenv("CLOUD_RUN_JOB")
+    monkeypatch.setenv("SHIPWRIGHT_VERTEX_AUTH", "metadata")
+    assert vertex.default_fetch() == ("meta", 3600.0)
+    monkeypatch.setenv("SHIPWRIGHT_VERTEX_TOKEN", "static")
+    assert vertex.default_fetch() == "static"  # an explicit token still wins
+
+
+def test_token_with_expiry_refreshes_before_it_expires():
+    now = [0.0]
+    issued = iter([("m1", 600.0), ("m2", 3600.0), ("m3", 3600.0)])
+    tokens = vertex.TokenProvider(fetch=lambda: next(issued), clock=lambda: now[0])
+    assert tokens.get() == "m1"
+    now[0] = 299  # 600 s token, 5 min margin: valid for 300 s
+    assert tokens.get() == "m1"
+    now[0] = 300
+    assert tokens.get() == "m2"
+    now[0] = 300 + 45 * 60 - 1  # a 1 h token is still capped at max_age (45 min)
+    assert tokens.get() == "m2"
+    now[0] = 300 + 45 * 60
+    assert tokens.get() == "m3" and tokens.fetches == 3
