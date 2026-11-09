@@ -1,0 +1,60 @@
+name: Tests and offline dry run
+
+# Adapted from ig/main (Ishank), .github/workflows/ci.yml.
+# Offline only: no secrets, no calls to model APIs. The dry run uses the scripted
+# fake LLM (src/shipwright/fake_llm.py). The only network use is GitHub (tau2-bench
+# at the pinned commit) and PyPI.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"  # do not fetch litellm's price list at import
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            scripts/setup_tau2.sh
+
+      - name: Install (tau2-bench at the pinned commit, shipwright with dev extras)
+        run: ./scripts/setup_tau2.sh
+
+      - name: Unit tests
+        run: .venv/bin/python -m pytest -q
+
+      - name: Offline dry run
+        run: .venv/bin/python scripts/baseline.py --dry-run --num-tasks 2 --output-dir runs/ci-dry
+
+      - name: Classify the dry run (rules only, no judge)
+        run: .venv/bin/python scripts/classify.py runs/ci-dry --no-llm
+
+      - name: OTel spans convert back to the same traces
+        run: |
+          test -s runs/ci-dry/otel_spans.jsonl
+          .venv/bin/python scripts/otel_to_traces.py runs/ci-dry/otel_spans.jsonl -o runs/ci-dry/traces_from_otel.jsonl
+          .venv/bin/python - <<'PY'
+          import json
+          a = [json.loads(l) for l in open("runs/ci-dry/traces.jsonl")]
+          b = [json.loads(l) for l in open("runs/ci-dry/traces_from_otel.jsonl")]
+          assert len(a) == len(b) > 0
+          for x, y in zip(a, b):
+              assert x["agent_turns"] == y["agent_turns"], x["task_id"]
+          print(f"{len(a)} traces match")
+          PY

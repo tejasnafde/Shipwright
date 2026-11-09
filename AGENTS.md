@@ -51,6 +51,8 @@ and the tool-fix vs weight-fix comparison.
 - 2026-11-08: Tiny Aya has no native tool calling (template and HF router drop `tools`). We use prompted JSON tool calls (`src/shipwright/prompted_tools.py`, format in `docs/baseline.md`). Training data must use the same format.
 - Failure labels, rule labels and the router are defined in `src/shipwright/classify.py` (how to run: `docs/baseline.md`).
 - Tool patches: `patches/ledger.jsonl` is committed (small config, not run output). Change a patch status only with `scripts/tool_fix.py`.
+- CI (`.github/workflows/ci.yml`, every push and PR): `setup_tau2.sh`, pytest, the offline dry run,
+  rule-only classify, and the span round trip. No secrets, no model API calls. Keep it offline.
 - `scripts/baseline.py` defaults to the tau2 `train` split so held-out tasks stay unused until the splits are frozen.
 - Weight fix (teacher runs, SFT data, LoRA job): `docs/training.md`. The teacher gets the student's prompted view (`force_prompted`); the teacher model is chosen by the team and passed with `--teacher-model` (no default).
 - `scripts/train_job.py` launches nothing without `--launch`, and prints flavor price x timeout first.
