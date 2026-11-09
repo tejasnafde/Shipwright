@@ -127,20 +127,54 @@ The cost in `summary.json` is an estimate from token counts and assumed prices
 ## Classify and route failures
 
 ```sh
-.venv/bin/python scripts/classify.py runs/baseline-<timestamp> --no-llm   # rules only, no network
-.venv/bin/python scripts/classify.py runs/baseline-<timestamp>            # rules, then the judge
+.venv/bin/python scripts/classify.py runs/baseline-<timestamp> --no-llm   # AgentTune detector + rules, no network
+.venv/bin/python scripts/classify.py runs/baseline-<timestamp> --classifier-model <litellm id>
+.venv/bin/python scripts/round_status.py runs/baseline-<timestamp> --sft runs/sft-<ts>/sft.jsonl
 ```
 
-- DETECT: a run fails when reward < 1. Infra-error runs get the label `environment`, route `no_fix`.
+- DETECT: a run is a failure when reward < 1 (outcome) OR AgentTune's `FailureDetector` flags
+  it (loop_collapse: the same call with the same arguments 3 times; tool_crash: a tool call
+  that errored). Each row records `detected_by`. A passed run that only the detector flags
+  gets route `no_fix` and `outcome_failed: false`; the gate's label rates skip it.
+  Infra-error runs get the label `environment`, route `no_fix`.
 - Rule labels (`src/shipwright/classify.py`): `loop`, `unknown_tool`, `malformed_args`,
   `tool_error_ignored`, `context_overflow`, `invented_id`, `tool_example_copied`
   (an invented id that equals an example value from a tool description, such as `#W0000000`).
-- Judge: `openai/gpt-oss-120b:cerebras` via the HF router, only for failed runs that no rule
-  explains (`--judge-all` judges every failed run). Strict JSON, validated, one retry.
+- CLASSIFY: AgentTune's `FailureClassifier` on every failed run (`--classifier-model`, any
+  litellm id, required unless `--no-llm`). Its root cause maps to our labels:
+  `wrong_tool` -> `wrong_tool`, `wrong_routing` -> `wrong_order`, `incomplete_reasoning` ->
+  `skipped_policy_step`, `hallucinated_output` -> `invented_answer`, `loop_collapse` -> `loop`
+  (`AGENTTUNE_ROOT_CAUSE_MAP`). All are fault layer `model`.
+- Our judge (`--judge`, `openai/gpt-oss-120b:cerebras` via the HF router) is optional, only for
+  failed runs that no rule explains (`--judge-all`: every failed run). Strict JSON, one retry.
   Labels: `wrong_tool`, `bad_arguments`, `invented_id`, `wrong_order`, `skipped_policy_step`,
   `loop`, `invented_answer`, `premature_transfer`, `tool_description_unclear`, `environment`.
+- Fault layer, first match wins: a tool-layer rule (`tool_example_copied`, `context_overflow`),
+  then our judge, then AgentTune's mapped root cause, then the rule layer.
 - ROUTE: fault layer `tool` goes to `tool_fix`, `model` to `weight_fix`, `environment` to `no_fix`.
-- Output in the run dir: `failures.jsonl` (one row per failed run) and `failure_summary.json`.
+- Output in the run dir: `audit.jsonl` (AgentTune audit records), `failures.jsonl` (one row per
+  failure, with `agenttune_root_cause`, `agenttune_failures`, `detected_by`, `source`) and
+  `failure_summary.json`.
+- RETRAIN TRIGGER: `scripts/round_status.py` writes `round_status.json`: `should_train` and
+  AgentTune's reason (config `configs/heal.yaml`).
+
+### AgentTune and AuditKIT classes each step calls
+
+| Step | Class or function | Our addition |
+|---|---|---|
+| Log | `EventLog.to_audit_records()` schema, written by `agenttune_bridge.trace_audit_records` | raw model output per turn in `state_snapshot` |
+| DETECT | `agenttune.decide.closed_loop.failure_detector.FailureDetector.scan_audit_log` | union with reward < 1; rule labels as evidence |
+| CLASSIFY | `failure_classifier.FailureClassifier` (subclass: fuller prompt, rule hits as hints), run by `agentic.heal_loop.as_sync_classifier` | label map, tool-layer rules win, 3-way router |
+| RETRAIN TRIGGER | `agentic.heal_loop.SelfHealLoop` with `retraining_trigger.RetrainingTrigger` (`TrainingBuffer`, `RewardDriftTracker`, `should_trigger()`, `health()`) | teacher SFT examples as corrections |
+| GATE | `deployment_gate.DeploymentGate.evaluate_decision` | min_test_samples floor; AND with AuditKIT pass^1, pass^k, ToolCallF1 and BFCL checks (`docs/gate.md`) |
+
+Not used as is: `Project.heal()` needs an AgentTune `Project` that collected the runs itself
+(ours come from tau2), so we call the same `FailureDetector` on our own audit records, as
+`heal()` does. `SelfHealLoop` runs without a `trainer_factory`: training is a separate HF Job
+(`docs/training.md`). `TrainingExampleGenerator` makes corrections only for `wrong_tool` and
+`loop_collapse` and needs a live replay; our corrections are teacher runs. The
+`agenttune.agentic` package imports torch, so without torch `agenttune_bridge.load_heal_loop`
+loads `heal_loop.py` (which needs only AgentTune's contracts) directly.
 
 ## Tool fixes (left path: patch tool descriptions, no GPU)
 

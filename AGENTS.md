@@ -35,6 +35,11 @@ Check for an existing AgentTune or AuditKIT function before you write a new one.
 What we add: the 3-way router, a tool-patch ledger with rollback, the AuditKIT gate (pass^k, BFCL),
 and the tool-fix vs weight-fix comparison.
 
+2026-11-09: detect, classify, the retrain trigger and the gate call AgentTune classes
+(`src/shipwright/agenttune_bridge.py`, table in `docs/baseline.md`); our rules and AuditKIT thresholds
+add to them. agenttune is installed `--no-deps` (`scripts/setup_tau2.sh`): its torch pin fails on a Mac.
+Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agenttune.agentic` imports torch.
+
 ## Evaluation rules
 
 - Three frozen task splits: **train pool** (the loop learns from it), **held-out** (the gate scores
