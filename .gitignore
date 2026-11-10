@@ -14,3 +14,4 @@ wandb/
 *.log
 .switchboard/
 third_party/
+/branch-diff.md

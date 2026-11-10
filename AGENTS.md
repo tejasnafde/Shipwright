@@ -12,7 +12,8 @@ and gate redeployment on measured accuracy."
 - Agent: a customer support tool-calling agent (tau2-bench retail / airline style).
 - Student model: Tiny Aya Global (`CohereLabs/tiny-aya-global`, 3.35B) with LoRA.
 - The loop: run, log, detect, classify, route (tool fix / weight fix / no fix), gate, promote or roll back.
-- Diagram: `docs/system-design.html`. Background and research: `docs/notes.md`. Cloud setup: `docs/gcp-setup.md`.
+- Diagram: `docs/system-design.html`. Background and research: `docs/notes.md`. Cloud setup:
+  `docs/gcp-setup.md`, `docs/cloud-runs.md`. HF account/token setup: `docs/hf-setup.md`.
 
 ## Hard rules (break one and the submission can be disqualified)
 
@@ -42,8 +43,12 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 
 ## Evaluation rules
 
-- Three frozen task splits: **train pool** (the loop learns from it), **held-out** (the gate scores
-  on it), **hidden** (opened once, for the final report). Never train on held-out or hidden tasks.
+- Three frozen task splits: **train pool** (40 tasks, the loop learns from it), **held-out**
+  (20, the gate scores on it), **hidden** (20, opened once, for the final report). Never train on
+  held-out or hidden tasks. Sized so each failure label shows up more than once or twice a round
+  while keeping judge/teacher API and GPU cost low (`common/config.py`'s frozen-constants pattern
+  was retired 2026-11-10 in favor of writing the numbers directly here and in `configs/gate.yaml`
+  - one source of truth, not two).
 - Frozen before round 1: failure label list, gate thresholds, k for pass^k, seeds, teacher and judge
   model versions. To change one, write the change and the reason in `docs/notes.md` first.
 - The gate never approves by default. Too few test runs means reject.
@@ -91,6 +96,21 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   after the run; an export error only warns). `traces.jsonl` stays the input of the loop.
   OTLP export only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Viewer and span layout: `docs/observability.md`.
 - `scripts/otel_to_traces.py` converts OTel span files to the `traces.jsonl` shape.
+
+## Demo: control-room (2026-11-10, Ishank)
+
+- `src/shipwright/control_room/app.py` (Streamlit) is a read-only replay of a round's real
+  artifacts, step by step: run -> detect -> classify -> route -> generate/patch -> curate/train ->
+  gate -> outcome. It never calls a teacher API, a trainer or the gate itself - only reads what
+  the harness scripts already wrote. Run: `streamlit run src/shipwright/control_room/app.py`.
+- Because a "round" here is several independently-timestamped run dirs, not one folder
+  (`runs/baseline-<ts>/`, a `build_sft.py --output-dir`, `runs/gate-round-N-<mode>-<ts>/`), the app
+  asks for up to three dirs in its sidebar instead of a single round number - the same three a
+  person tracks by hand when running a round for real.
+- Deploys as its own, much smaller Hugging Face Space image: `infra/space/Dockerfile` (no GPU, no
+  AgentTune/AuditKIT, no secrets) - see `infra/space/README.md`. Decided after reviewing a strong
+  submission for a different problem statement: a live, interactive HF Space is clearly rewarded in
+  this judging round (`docs/notes.md`, "Demo format decision").
 
 ## Infrastructure
 
@@ -142,7 +162,9 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 
 - Root: only `README.md`, `AGENTS.md`, `CLAUDE.md`, config files (`.gitignore`, `pyproject.toml`) and top-level dirs.
 - `docs/`: notes, guides, diagrams, the write-up draft.
-- `infra/`: cloud functions and setup scripts.
+- `infra/`: cloud functions and setup scripts. `infra/docker/`: the harness image for Cloud Run
+  Jobs (`infra/cloudbuild.yaml`). `infra/space/`: control-room's own, much smaller image, meant
+  for a Hugging Face Space.
 - `src/`, `tests/`, `scripts/`: code, when it exists.
 - Never commit: generated data, model weights, checkpoints, `runs/` output, notebooks with large outputs,
   `.env`, scratch files. Generated artifacts go to HF, not git. Add new patterns to `.gitignore`.
@@ -190,6 +212,17 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - 2026-11-08: The GitHub repo is private, so an HF Job cannot clone it. `scripts/gate_job.py --launch` uploads `git archive HEAD` to the runs dataset; commit before you launch.
 
 - 2026-11-09: Cloud Trace `batchWrite` returns 200 but stores nothing while `observability.googleapis.com` is off (read gives `_Trace bucket not found`). Tejas must enable that API once; until then use `live_spans.jsonl` and the logs (they work).
+- 2026-11-10 (Ishank): confirmed by actually installing `agenttune==1.1.3 --no-deps` and
+  inspecting the real classes (not just source reading) - `FailureClassifier` has no `classify()`
+  method; the real API is `async def classify_batch(failures)` / `async def _classify_single(f)`,
+  and `_build_prompt()` returns `list[dict]` chat messages, not a string. `DeploymentGate.score_model`
+  calls `model_fn(case["input_text"])` and compares the result case-insensitively against
+  `case["expected_verdict"]` - a test-set item needs exactly those two keys, not `task_id`/anything
+  else. `agenttune_bridge.py`'s `ShipwrightFailureClassifier`/`agenttune_gate_check` already match
+  this; this line exists so the next person who touches that file does not have to re-derive it
+  from source, or worse, from an earlier draft that got it wrong (an `ig/main` prototype of the
+  same classifier/gate wrapper called a `classify()` that does not exist - caught in this merge,
+  never shipped).
 
 ## Keep this file correct
 

@@ -20,6 +20,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# control-room, the read-only demo UI (infra/space/) - no GPU, no agenttune/auditkit,
+# no secrets. Kept separate so the harness image never pulls streamlit.
+space = ["streamlit>=1.38.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/shipwright"]

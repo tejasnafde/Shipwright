@@ -3,7 +3,7 @@
 PY := .venv/bin/python
 RUN ?= runs/dry
 
-.PHONY: setup test dry-run baseline classify
+.PHONY: setup test dry-run baseline classify control-room
 
 setup:
 	./scripts/setup_tau2.sh
@@ -19,3 +19,6 @@ baseline:
 
 classify:
 	$(PY) scripts/classify.py $(RUN)
+
+control-room:
+	$(PY) -m streamlit run src/shipwright/control_room/app.py
