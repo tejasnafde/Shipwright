@@ -1,4 +1,4 @@
-# Harness image for the Cloud Run Jobs shipwright-<owner> (docs/cloud-runs.md).
+# Harness image for the Cloud Run Jobs shipwright-<owner> (docs/setup/cloud-runs.md).
 # Adapted from Ishank's ig/main infra/docker/Dockerfile.
 #
 # CPU only: the agent, user simulator, teacher and judge are remote APIs (HF router, Vertex AI).
@@ -31,7 +31,7 @@ ENV PATH=/app/.venv/bin:$PATH \
     LITELLM_LOCAL_MODEL_COST_MAP=True \
     SHIPWRIGHT_VERTEX_AUTH=metadata
 
-# Build facts for repro.json and every log line (docs/debugging.md). Last, so they do not
+# Build facts for repro.json and every log line (docs/ops/debugging.md). Last, so they do not
 # invalidate the dependency layer. The image has no .git: the sha comes from here.
 ARG GIT_SHA=""
 ARG IMAGE_TAG=""

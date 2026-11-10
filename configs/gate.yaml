@@ -32,7 +32,7 @@ thresholds:
   non_target_max_increase: 0.05   # other failure labels may rise by at most 5 points (null: off)
   bfcl_max_drop_points: 2.0       # BFCL accuracy may drop by at most 2 points
 
-agenttune_gate:           # AgentTune DeploymentGate.evaluate_decision, an extra AND check (docs/gate.md)
+agenttune_gate:           # AgentTune DeploymentGate.evaluate_decision, an extra AND check (docs/pipeline/gate.md)
   task_regression_tol: 0.0  # pass rate on paired held-out runs may not drop; min_test_samples = the valid_runs floor
 
 bfcl:

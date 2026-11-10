@@ -101,7 +101,7 @@ def run(cmd: list[str], log: Path | None = None, cwd: Path | None = None, env: d
 
 
 def baseline_cmd(cfg: dict, system: dict, patch_ids: list[str], out: Path, args: argparse.Namespace) -> list[str]:
-    from shipwright.systems import agent_model_id, baseline_args
+    from shipwright.heal.systems import agent_model_id, baseline_args
 
     held = cfg["heldout"]
     cmd = [
@@ -130,8 +130,8 @@ def classify_cmd(cfg: dict, run_dir: Path) -> list[str]:
 
 
 def run_bfcl(cfg: dict, system: dict, out: Path, args: argparse.Namespace) -> dict | None:
-    from shipwright import bfcl_eval
-    from shipwright.systems import served_name
+    from shipwright.heal import bfcl_eval
+    from shipwright.heal.systems import served_name
 
     bcfg = cfg.get("bfcl") or {}
     if not bcfg.get("enabled"):
@@ -153,7 +153,7 @@ def run_bfcl(cfg: dict, system: dict, out: Path, args: argparse.Namespace) -> di
 
 
 def metrics_for(run_dir: Path, cfg: dict, name: str, bfcl: dict | None) -> dict | None:
-    from shipwright.eval_metrics import compute_metrics, load_run
+    from shipwright.heal.eval_metrics import compute_metrics, load_run
 
     try:
         m = compute_metrics(load_run(run_dir), cfg["k"], system=name)
@@ -174,7 +174,7 @@ def missing_metrics(name: str, reason: str) -> dict:
 
 def decide_and_write(out: Path, cfg: dict, round_: int, metrics: dict[str, dict], systems: dict,
                      targets: list[str]) -> dict:
-    from shipwright.gate import decide, metrics_row
+    from shipwright.heal.gate import decide, metrics_row
 
     for who in ("current", "candidate"):
         (out / f"metrics_{who}.json").write_text(json.dumps(metrics[who], indent=1, default=str))
@@ -195,9 +195,9 @@ def decide_and_write(out: Path, cfg: dict, round_: int, metrics: dict[str, dict]
 
 def load_inputs(args: argparse.Namespace) -> tuple[dict, dict, dict, dict]:
     """Gate config, the two systems and their resolved patch ids."""
-    from shipwright.gate import load_config
-    from shipwright.systems import load_system, resolve_patch_ids
-    from shipwright.tool_fix import load_ledger
+    from shipwright.heal.gate import load_config
+    from shipwright.heal.systems import load_system, resolve_patch_ids
+    from shipwright.heal.tool_fix import load_ledger
 
     cfg = load_config(args.config)
     if args.serve_mode:
@@ -303,7 +303,7 @@ class VLLMServer:
 
 def serve_and_run(cfg: dict, systems: dict, patch_ids: dict, out: Path, args: argparse.Namespace) -> dict:
     """Start vLLM per the serve plan, run tau2 and BFCL for each system. Returns status per system."""
-    from shipwright.systems import serve_plan, served_name
+    from shipwright.heal.systems import serve_plan, served_name
 
     scfg = cfg.get("serve") or {}
     mode = scfg.get("mode", "lora")
@@ -357,7 +357,7 @@ def push(out: Path, args: argparse.Namespace, row_file: Path, candidate: str) ->
     api = HfApi(token=token)
     api.create_repo(args.runs_repo, repo_type="dataset", exist_ok=True, private=False)
     prefix = f"gate/round-{args.round}/{candidate}"
-    from shipwright import instrument
+    from shipwright.observability import instrument
 
     with instrument.external("hf_hub_upload", f"datasets/{args.runs_repo}/{prefix}"):
         api.upload_folder(folder_path=str(out), repo_id=args.runs_repo, repo_type="dataset", path_in_repo=prefix,
@@ -398,7 +398,7 @@ def bootstrap(argv: list[str], args: argparse.Namespace) -> None:
 
 def _expected_reject() -> None:
     try:
-        from shipwright import log
+        from shipwright.observability import log
     except ImportError:
         return
     log.expected_exit(1, "the gate rejected the candidate")
@@ -407,7 +407,7 @@ def _expected_reject() -> None:
 def _attach(out: Path) -> None:
     """log.jsonl, errors.json and repro.json in the gate output dir (when run through log.run_script)."""
     try:
-        from shipwright import log
+        from shipwright.observability import log
     except ImportError:
         return
     log.attach_run_dir(out)
@@ -419,7 +419,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.in_job and not args.bootstrapped:
         bootstrap(argv, args)  # does not return
 
-    from shipwright.gate import load_config
+    from shipwright.heal.gate import load_config
 
     if args.current_run:  # decide only
         cfg = load_config(args.config)
@@ -484,6 +484,6 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     if "--in-job" in sys.argv and "--bootstrapped" not in sys.argv:
         sys.exit(main())  # first pass in an HF Job: the harness (and shipwright.log) is not installed yet
-    from shipwright import log
+    from shipwright.observability import log
 
     sys.exit(log.run_script(main, step="gate"))

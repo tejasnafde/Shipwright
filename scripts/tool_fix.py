@@ -23,8 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from shipwright import tool_fix as tf  # noqa: E402
-from shipwright.vertex import JUDGE_MODEL  # noqa: E402
+from shipwright.heal import tool_fix as tf  # noqa: E402
+from shipwright.llm.vertex import JUDGE_MODEL  # noqa: E402
 
 DEFAULT_LEDGER = ROOT / "patches" / "ledger.jsonl"
 
@@ -104,6 +104,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    from shipwright import log
+    from shipwright.observability import log
 
     sys.exit(log.run_script(main, step="tool_fix"))

@@ -39,12 +39,12 @@
 <p class="sub">Lexsi hackathon, Track 3, problem statement 8. Updated 2026-11-10, grounded in the actual
 AgentTune and AuditKIT source (not just their docs). Status: round 1 has actually run - a real
 baseline against tau2-bench retail, real failures found and classified (AgentTune's
-<code>FailureDetector</code>/<code>FailureClassifier</code>, <code>src/shipwright/agenttune_bridge.py</code>),
+<code>FailureDetector</code>/<code>FailureClassifier</code>, <code>src/shipwright/heal/agenttune_bridge.py</code>),
 35 tool-description patches applied through the ledger, and teacher-generated SFT data built for the
 weight-fix path. No local fallback for AgentTune: it installs <code>--no-deps</code> on Linux (CI,
 Cloud Run Jobs, HF Jobs), not on a CPU-only macOS dev machine (<code>AGENTS.md</code> known traps).
 A real LoRA training run and a real gate decision still need GPU time and the Vertex AI budget, see
-<code>docs/training.md</code> and <code>docs/gate.md</code>.</p>
+<code>docs/pipeline/training.md</code> and <code>docs/pipeline/gate.md</code>.</p>
 
 <svg viewBox="0 0 1120 1230" role="img" aria-label="System diagram of the self-healing loop">
   <defs>
@@ -237,7 +237,7 @@ for a person to watch, covered in the next section. None of them is a 24/7 daemo
   <tr>
     <td><span class="tag">agent-runtime</span></td>
     <td>Runs the tau2-bench tasks for one round against the currently-deployed Tiny Aya Global + LoRA
-      adapter (<code>scripts/baseline.py</code>, via Cloud Run Jobs - <code>docs/cloud-runs.md</code>).
+      adapter (<code>scripts/baseline.py</code>, via Cloud Run Jobs - <code>docs/setup/cloud-runs.md</code>).
       Writes <code>traces.jsonl</code> (every turn's raw output, not only the parsed tool call) plus
       <code>otel_spans.jsonl</code> built from it. Stateless beyond the adapter checkpoint it loads.</td>
     <td>Never needs a teacher-model key, AuditKIT, or write access to the tool ledger. The thing that
@@ -248,7 +248,7 @@ for a person to watch, covered in the next section. None of them is a 24/7 daemo
     <td><span class="tag">self-heal control plane</span></td>
     <td>Run once a round's <code>traces.jsonl</code> exists, not continuously:
       <code>scripts/classify.py</code> (AgentTune's <code>FailureDetector</code> +
-      <code>FailureClassifier</code>, <code>src/shipwright/agenttune_bridge.py</code>, plus our rule
+      <code>FailureClassifier</code>, <code>src/shipwright/heal/agenttune_bridge.py</code>, plus our rule
       labels), <code>scripts/tool_fix.py</code> (the tool-patch ledger), <code>scripts/round_status.py</code>
       (AgentTune's <code>RetrainingTrigger</code>), <code>scripts/train_lora.py</code> (HF Jobs), and
       <code>scripts/gate_eval.py</code> (AgentTune's <code>DeploymentGate</code> + AuditKIT thresholds).
@@ -475,7 +475,7 @@ docs) on 2026-11-09/10.</p>
   <li><b>OpenTelemetry is the capture and viewer layer. No external viewer (Langfuse or otherwise)
     is wired in.</b> <code>traces.jsonl</code> is the loop's own input; <code>otel_spans.jsonl</code>
     is built from it after each run for anyone who wants a GenAI-span view, OTLP export only when
-    <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> is set. See <code>docs/observability.md</code>.</li>
+    <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> is set. See <code>docs/ops/observability.md</code>.</li>
   <li><b>The gate is an AND of checks, never an OR, and missing data is a reject on every one of
     them.</b> AgentTune's <code>DeploymentGate</code> alone (with its min-sample trap fixed) is
     necessary but not sufficient &#8212; it only checks task accuracy. AuditKIT's BFCL regression
@@ -515,8 +515,8 @@ judgment calls:</p>
   <li>Vertex AI access on the <code>lexsi-hackathon</code> GCP project (auth is a <code>gcloud</code>
     access token, not an API key - <code>AGENTS.md</code>, "Infrastructure"). Set a budget alert
     before the first real round.</li>
-  <li>The HF username/org and GitHub org that <code>docs/hf-setup.md</code>,
-    <code>docs/cloud-runs.md</code> and <code>infra/space/README.md</code> currently leave as
+  <li>The HF username/org and GitHub org that <code>docs/setup/hf-setup.md</code>,
+    <code>docs/setup/cloud-runs.md</code> and <code>infra/space/README.md</code> currently leave as
     a placeholder.</li>
 </ul>
 
@@ -529,7 +529,7 @@ done). What is left:</p>
 <ul>
   <li>Real cost per round, now that it has actually run once: Vertex pricing for two models in
     three roles was sized against an estimate before round 1, not a measured round
-    (<code>src/shipwright/costs.py</code> tracks it going forward).</li>
+    (<code>src/shipwright/llm/costs.py</code> tracks it going forward).</li>
 </ul>
 </main>
 </body>

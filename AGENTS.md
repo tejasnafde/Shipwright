@@ -13,7 +13,7 @@ and gate redeployment on measured accuracy."
 - Student model: Tiny Aya Global (`CohereLabs/tiny-aya-global`, 3.35B) with LoRA.
 - The loop: run, log, detect, classify, route (tool fix / weight fix / no fix), gate, promote or roll back.
 - Diagram: `docs/system-design.html`. Background and research: `docs/notes.md`. Cloud setup:
-  `docs/gcp-setup.md`, `docs/cloud-runs.md`. HF account/token setup: `docs/hf-setup.md`.
+  `docs/setup/gcp-setup.md`, `docs/setup/cloud-runs.md`. HF account/token setup: `docs/setup/hf-setup.md`.
 
 ## Hard rules (break one and the submission can be disqualified)
 
@@ -37,7 +37,7 @@ What we add: the 3-way router, a tool-patch ledger with rollback, the AuditKIT g
 and the tool-fix vs weight-fix comparison.
 
 2026-11-09: detect, classify, the retrain trigger and the gate call AgentTune classes
-(`src/shipwright/agenttune_bridge.py`, table in `docs/baseline.md`); our rules and AuditKIT thresholds
+(`src/shipwright/heal/agenttune_bridge.py`, table in `docs/pipeline/baseline.md`); our rules and AuditKIT thresholds
 add to them. agenttune is installed `--no-deps` (`scripts/setup_tau2.sh`): its torch pin fails on a Mac.
 Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agenttune.agentic` imports torch.
 
@@ -56,24 +56,24 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 
 ## Baseline harness
 
-- How to run: `docs/baseline.md`. tau2-bench is pinned in `scripts/setup_tau2.sh` and lives in `third_party/` (git-ignored).
+- How to run: `docs/pipeline/baseline.md`. tau2-bench is pinned in `scripts/setup_tau2.sh` and lives in `third_party/` (git-ignored).
 - Tiny Aya (the agent) runs through HF Inference Providers (router `https://router.huggingface.co/v1`). The token is read at run time from `$SWITCHBOARD_SECRETS_DIR/HF_TOKEN`.
-- 2026-11-09: model ids `vertex/<publisher>/<model>` go to Vertex AI (`src/shipwright/vertex.py`), for the teacher, user simulator, tau2 judge, `classify.py` judge and `tool_fix.py` proposer. All other ids go to the HF router unchanged. Smoke check: `scripts/check_vertex.py`.
+- 2026-11-09: model ids `vertex/<publisher>/<model>` go to Vertex AI (`src/shipwright/llm/vertex.py`), for the teacher, user simulator, tau2 judge, `classify.py` judge and `tool_fix.py` proposer. All other ids go to the HF router unchanged. Smoke check: `scripts/check_vertex.py`.
 - 2026-11-09, team choice: teacher `vertex/deepseek-ai/deepseek-v4.1-flash-maas`; user simulator and judge `vertex/openai/gpt-oss-120b-maas`. `--teacher-model` and `--user-model` stay required with no default; `classify.py --classifier-model` (AgentTune), `--judge-model` and `tool_fix.py --model` default to the Vertex gpt-oss.
-- `summary.json` `cost_estimate_usd` is per role (agent or teacher, user, judge) by provider, with cached prompt tokens at the cached price. Prices: `src/shipwright/costs.py`.
-- 2026-11-08: Tiny Aya has no native tool calling (template and HF router drop `tools`). We use prompted JSON tool calls (`src/shipwright/prompted_tools.py`, format in `docs/baseline.md`). Training data must use the same format.
-- Failure labels, rule labels and the router are defined in `src/shipwright/classify.py` (how to run: `docs/baseline.md`).
+- `summary.json` `cost_estimate_usd` is per role (agent or teacher, user, judge) by provider, with cached prompt tokens at the cached price. Prices: `src/shipwright/llm/costs.py`.
+- 2026-11-08: Tiny Aya has no native tool calling (template and HF router drop `tools`). We use prompted JSON tool calls (`src/shipwright/llm/prompted_tools.py`, format in `docs/pipeline/baseline.md`). Training data must use the same format.
+- Failure labels, rule labels and the router are defined in `src/shipwright/heal/classify.py` (how to run: `docs/pipeline/baseline.md`).
 - Tool patches: `patches/ledger.jsonl` is committed (small config, not run output). Change a patch status only with `scripts/tool_fix.py`.
 - CI (`.github/workflows/ci.yml`, every push and PR): `setup_tau2.sh`, pytest, the offline dry run,
   rule-only classify, and the span round trip. No secrets, no model API calls. Keep it offline.
 - `scripts/baseline.py` defaults to the tau2 `train` split so held-out tasks stay unused until the splits are frozen.
-- Weight fix (teacher runs, SFT data, LoRA job): `docs/training.md`. The teacher gets the student's prompted view (`force_prompted`); the teacher model is passed with `--teacher-model` (no default; team choice above).
+- Weight fix (teacher runs, SFT data, LoRA job): `docs/pipeline/training.md`. The teacher gets the student's prompted view (`force_prompted`); the teacher model is passed with `--teacher-model` (no default; team choice above).
 - `scripts/train_job.py` launches nothing without `--launch`, and prints flavor price x timeout first.
-- Gate (step 05): `docs/gate.md`. `scripts/gate_job.py` (HF Job, vLLM serves base + LoRA) or `scripts/gate_eval.py --local-dry-run` (offline). Config `configs/gate.yaml` (status `proposed` until the team freezes it), systems in `configs/systems/`. Metrics come from AuditKIT; the user model is a required argument (no default).
+- Gate (step 05): `docs/pipeline/gate.md`. `scripts/gate_job.py` (HF Job, vLLM serves base + LoRA) or `scripts/gate_eval.py --local-dry-run` (offline). Config `configs/gate.yaml` (status `proposed` until the team freezes it), systems in `configs/systems/`. Metrics come from AuditKIT; the user model is a required argument (no default).
 
 ## Logs and debugging
 
-- How to debug a run: `docs/debugging.md` (`scripts/why.py`, the links, `scripts/rerun.py`).
+- How to debug a run: `docs/ops/debugging.md` (`scripts/why.py`, the links, `scripts/rerun.py`).
 - Log with `shipwright.log` (`log.get_logger`, keywords as fields), never `logging.basicConfig` or a
   new logger setup. Every script ends with `sys.exit(log.run_script(main, step="<step>"))`.
 - Every script writes `log.jsonl`, `errors.json` and `repro.json` into its run dir
@@ -85,7 +85,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 
 ## Traces
 
-- Source of truth: our `traces.jsonl` per run (format in `docs/baseline.md`), plus `otel_spans.jsonl`
+- Source of truth: our `traces.jsonl` per run (format in `docs/pipeline/baseline.md`), plus `otel_spans.jsonl`
   built from it. Run dirs are published to an HF dataset. AgentTune's `audit.jsonl` is only
   AgentTune's own format: convert to or from it where an AgentTune API needs it.
 - **Log the raw model output for every turn** (full generated text, including any reasoning),
@@ -94,7 +94,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - Langfuse is optional and only a viewer. Never make code depend on it.
 - 2026-11-09: every run also writes `otel_spans.jsonl` (OTel GenAI spans, built from `traces.jsonl`
   after the run; an export error only warns). `traces.jsonl` stays the input of the loop.
-  OTLP export only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Viewer and span layout: `docs/observability.md`.
+  OTLP export only when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Viewer and span layout: `docs/ops/observability.md`.
 - `scripts/otel_to_traces.py` converts OTel span files to the `traces.jsonl` shape.
 
 ## Demo: control-room (2026-11-10, Ishank)
@@ -121,13 +121,13 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   - Tejas's machine: `--configuration=personal --project=lexsi-hackathon`
     (his active config is a work account with no access to this project).
   - Ishank's and Mitushi's machines: `--configuration=lexsi --project=lexsi-hackathon`
-    (the `lexsi` config is made in `docs/gcp-setup.md`, step 2).
+    (the `lexsi` config is made in `docs/setup/gcp-setup.md`, step 2).
   - Python SDKs: pass `project="lexsi-hackathon"` explicitly.
   - A `PERMISSION_DENIED` or `NOT_FOUND` on a resource that exists usually means the wrong config.
 - Label every GCP resource `app=lexsi-hackathon`.
 - **Budget:** alerts every Rs 500. **At Rs 3000 per month, billing switches off for the whole project**
   and everything in it stops. Cost data lags hours, so stop GPU machines as soon as a job ends.
-- **New GCP projects have 0 GPU quota.** Request it before you plan a GPU run (see `docs/gcp-setup.md`).
+- **New GCP projects have 0 GPU quota.** Request it before you plan a GPU run (see `docs/setup/gcp-setup.md`).
 - Use Spot VMs for GPU work and save checkpoints often.
 - **HF credits are shared by the whole team.** No agent starts a credit-spending run (HF Inference
   Providers calls, HF Jobs) unless a human on the team asked for that specific run. State the
@@ -138,7 +138,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   teammates set `lexsi`), cached and refreshed after 45 minutes. Inside Cloud Run the service account token
   comes from the metadata server instead. Never ADC or litellm's `vertex_ai` provider.
   Other env vars: `SHIPWRIGHT_GCP_PROJECT`, `SHIPWRIGHT_GCLOUD`, `SHIPWRIGHT_VERTEX_LOCATION`, `SHIPWRIGHT_VERTEX_TOKEN`
-  (`src/shipwright/vertex.py`). Prices per 1M tokens: DeepSeek V4.1 Flash $0.30 in, $0.03 cached, $1.20 out;
+  (`src/shipwright/llm/vertex.py`). Prices per 1M tokens: DeepSeek V4.1 Flash $0.30 in, $0.03 cached, $1.20 out;
   gpt-oss-120b $0.09 in, $0.36 out. Tiny Aya stays on the HF router (Vertex has no Cohere models); GPUs stay on HF Jobs.
   The same "a human asked for this run" rule applies to Vertex calls.
 - **HF Jobs** (paid from the HF credits): **a job stops after 30 minutes by default. Always pass a
@@ -149,7 +149,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   agent runs that collect traces.
 - **Live runs go through Cloud Run Jobs, never on a laptop (2026-11-09).** Each person has
   `shipwright-<owner>` (owner: tejas, ishank, mitushi, main), which runs its branch's latest image and
-  uploads `runs/<dir>/` to `gs://lexsi-hackathon-runs/<owner>/`. How: `docs/cloud-runs.md`.
+  uploads `runs/<dir>/` to `gs://lexsi-hackathon-runs/<owner>/`. How: `docs/setup/cloud-runs.md`.
   The shared-credit rule above still applies to every job execution. Build images with Cloud Build only.
 
 ## Secrets
@@ -161,11 +161,33 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 ## Repo layout (keep the root clean)
 
 - Root: only `README.md`, `AGENTS.md`, `CLAUDE.md`, config files (`.gitignore`, `pyproject.toml`) and top-level dirs.
-- `docs/`: notes, guides, diagrams, the write-up draft.
+- `docs/` (reorganized 2026-11-10, Ishank): `notes.md` (research log) and `system-design.html`
+  (diagram) at the root; everything else grouped by what it's for -
+  `docs/setup/` (`gcp-setup.md`, `hf-setup.md`, `cloud-runs.md` - accounts, tokens, infra setup),
+  `docs/pipeline/` (`baseline.md`, `gate.md`, `training.md` - how to run each loop step),
+  `docs/ops/` (`debugging.md`, `observability.md` - logs, traces, debugging a run).
 - `infra/`: cloud functions and setup scripts. `infra/docker/`: the harness image for Cloud Run
   Jobs (`infra/cloudbuild.yaml`). `infra/space/`: control-room's own, much smaller image, meant
   for a Hugging Face Space.
-- `src/`, `tests/`, `scripts/`: code, when it exists.
+- `src/shipwright/` (reorganized 2026-11-10, Ishank): grouped by concern, not left flat -
+  `heal/` (detect/classify/route/fix/gate: `agenttune_bridge.py`, `classify.py`, `gate.py`,
+  `tool_fix.py`, `systems.py`, `eval_metrics.py`, `bfcl_eval.py`, `sft_data.py`, `traces.py`),
+  `llm/` (model-call adapters: `vertex.py`, `prompted_tools.py`, `patches.py` - was
+  `llm_patch.py`, `context.py`, `dry_run.py` - was `fake_llm.py`, `costs.py`),
+  `observability/` (`log.py`, `otel_export.py` - was `otel.py`, `otel_import.py` - was
+  `otel_convert.py`, `otel_live.py` - was `tracing.py`, `instrument.py`, `report.py`, `repro.py`,
+  `runinfo.py`), `control_room/` (the demo UI, unchanged). Import as
+  `from shipwright.heal import classify` etc; nothing imports the bare `shipwright.<module>`
+  flat form that existed before this reorg.
+- `tests/`: mirrors `src/shipwright/`'s subpackages (`tests/heal/`, `tests/llm/`,
+  `tests/observability/`); `conftest.py` and `fixtures/` stay at `tests/` root, shared by all of
+  them.
+- `scripts/`: left flat on purpose, not reorganized. Several scripts import a sibling directly
+  (`classify.py` imports `baseline`, `gate_job.py` imports `train_job`) via
+  `sys.path.insert(ROOT / "scripts")`, and `job_entry.py`'s Cloud Run dispatch resolves a script
+  by bare filename under `scripts/` - nesting would need every one of those fixed for a cosmetic
+  gain on a directory that already reads fine at 16 clearly-named files. Don't nest it without
+  also fixing both of those.
 - Never commit: generated data, model weights, checkpoints, `runs/` output, notebooks with large outputs,
   `.env`, scratch files. Generated artifacts go to HF, not git. Add new patterns to `.gitignore`.
 - One topic per commit, with a message that says what changed. No "wip" or "fix" commits on `main`.
@@ -194,8 +216,8 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - 2026-11-07: AgentTune `to_audit_records()` drops the model's text. Log raw output separately.
 - 2026-11-08: HF Jobs default timeout is 30 minutes.
 - 2026-11-08: New GCP projects start with 0 GPU quota, and Google auto-denied our requests for L4 (Compute and Vertex AI training). Use HF Jobs for GPU work until a quota is granted.
-- 2026-11-08: tau2 runs `json.loads` on tool-call arguments, so one malformed call crashes the run. `src/shipwright/llm_patch.py` wraps bad arguments instead.
-- 2026-11-08: Tiny Aya context is 8192 tokens; the cohere provider rejects longer requests. `src/shipwright/context.py` trims the prompt and sets `max_tokens` 700.
+- 2026-11-08: tau2 runs `json.loads` on tool-call arguments, so one malformed call crashes the run. `src/shipwright/llm/patches.py` wraps bad arguments instead.
+- 2026-11-08: Tiny Aya context is 8192 tokens; the cohere provider rejects longer requests. `src/shipwright/llm/context.py` trims the prompt and sets `max_tokens` 700.
 - 2026-11-08: tau2 calls its own default models (NL judge `gpt-5.4-mini-2026-03-17` and others), which do not exist on the HF router. `scripts/baseline.py` reroutes them to the user model.
 - 2026-11-08: Tiny Aya copies example values from tool descriptions (`#W0000000`, `sara_doe_496`, `1008292230`) as real ids: 13 of 19 failures in the first 20-task run. The classifier labels this `tool_example_copied` and routes it to `tool_fix`.
 - 2026-11-08: AgentTune `EventLog` has no system event, and its built-in distill factory trains on every token (TRL `assistant_only_loss` depends on chat template generation markers, not verified for Tiny Aya). `scripts/train_lora.py` adds the system prompt back (`SystemPromptEventLog`) and masks labels itself.
@@ -203,7 +225,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - 2026-11-08: tau2 saves results under its own data dir unless `save_to` is an absolute path. `scripts/baseline.py` passes one.
 - 2026-11-08: AuditKIT `reliability()` lowers k to the number of decided trials when a task has fewer than k (infra errors). `eval_metrics.pass_metrics` scores pass^k only on tasks with k decided trials and counts the rest.
 - 2026-11-08: AuditKIT multi-trial rows keep only the first trial's diagnostics. `eval_metrics` runs a second, one-case-per-run pass for ToolCallF1 and the other diagnostics.
-- 2026-11-09 (Ishank): AgentTune `TrainingExampleGenerator` returns `None` for any root cause other than `wrong_tool` or `loop_collapse`. Our weight fix uses teacher runs (`docs/training.md`) instead.
+- 2026-11-09 (Ishank): AgentTune `TrainingExampleGenerator` returns `None` for any root cause other than `wrong_tool` or `loop_collapse`. Our weight fix uses teacher runs (`docs/pipeline/training.md`) instead.
 - 2026-11-09 (Ishank): `pip install agenttune` fails on a CPU-only macOS machine (torch 2.11 + bitsandbytes force a source build). It installs on Linux x86_64 (CI, HF Jobs). Do not replace AgentTune with a local reimplementation.
 - 2026-11-09: AuditKIT `reliability()` takes `independent=`, while `AgentEvalRunner` takes `reset_confirmed=` (we use the runner). Verdicts are `success` / `failure` / `unknown`, not pass/fail.
 - 2026-11-09: DeepSeek V4.1 Flash on Vertex is served only on the `global` endpoint (a `us-central1` call fails). Vertex has no explicit context cache (`cachedContents`) for MaaS open models; implicit prefix caching (Preview) covers `deepseek-v4.1-flash-maas` from 4096 prompt tokens, not gpt-oss-120b. Our fixed teacher prefix (policy + tool list) is about 2.6k tokens, so hits come from the growing conversation of one run.
@@ -234,7 +256,7 @@ This file corrects itself through you. In the same change as your work:
    with the date and the fix.
 3. **You made a decision that later agents must follow** (a frozen value, a file format, a split):
    add it to the section it belongs to.
-4. **You find a duplicate or a contradiction** between this file, `docs/notes.md` and `docs/gcp-setup.md`:
+4. **You find a duplicate or a contradiction** between this file, `docs/notes.md` and `docs/setup/gcp-setup.md`:
    keep the fact in one place and point to it from the others.
 
 Keep entries short: one fact per line. Delete a trap when the cause is gone.

@@ -11,7 +11,7 @@ AgentTune's FailureClassifier plus our rule labels. --no-llm: detector and rules
 network (CI). --judge: also run our own judge.
 
 --classifier-model and --judge-model default to vertex/openai/gpt-oss-120b-maas on Vertex AI
-(gcloud token, src/shipwright/vertex.py; the team's choice, 2026-11-09). Any other litellm id
+(gcloud token, src/shipwright/llm/vertex.py; the team's choice, 2026-11-09). Any other litellm id
 also works for the classifier; a raw HF router id such as openai/gpt-oss-120b:cerebras works
 for the judge (HF token read like baseline.py).
 """
@@ -30,11 +30,11 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from baseline import HF_ROUTER, load_token  # noqa: E402
-from shipwright import vertex  # noqa: E402
-from shipwright.agenttune_bridge import classify_traces, make_classifier  # noqa: E402
-from shipwright.classify import summarize_failures, tool_example_values  # noqa: E402
-from shipwright.vertex import JUDGE_MODEL  # noqa: E402
-from shipwright.traces import write_jsonl  # noqa: E402
+from shipwright.llm import vertex  # noqa: E402
+from shipwright.heal.agenttune_bridge import classify_traces, make_classifier  # noqa: E402
+from shipwright.heal.classify import summarize_failures, tool_example_values  # noqa: E402
+from shipwright.llm.vertex import JUDGE_MODEL  # noqa: E402
+from shipwright.heal.traces import write_jsonl  # noqa: E402
 
 
 def load_instructions(run_dir: Path) -> dict[str, str]:
@@ -61,7 +61,7 @@ def load_tools(run_dir: Path) -> list[dict]:
 
 def make_chat(token: str | None, model: str):
     """A chat function for the judge or the patch proposer: HF router, or Vertex for vertex/ ids."""
-    from shipwright import vertex
+    from shipwright.llm import vertex
 
     url, body_model, headers = vertex.endpoint(model, token, HF_ROUTER)
     client = httpx.Client(timeout=120)
@@ -72,7 +72,7 @@ def make_chat(token: str | None, model: str):
                                  "max_tokens": 2000, "reasoning_effort": "low"})
 
     def chat(messages: list[dict]) -> str:
-        from shipwright import instrument
+        from shipwright.observability import instrument
 
         with instrument.external("llm_judge", model, role="judge") as call:
             r = post(messages)
@@ -105,7 +105,7 @@ def main() -> int:
                         " (default: the team's choice, Vertex gpt-oss-120b)")
     args = p.parse_args()
 
-    from shipwright import log, repro
+    from shipwright.observability import log, repro
 
     log.attach_run_dir(args.run_dir)
     log.note_repro(**repro.models_from_args(args))
@@ -144,6 +144,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    from shipwright import log
+    from shipwright.observability import log
 
     sys.exit(log.run_script(main, step="classify"))

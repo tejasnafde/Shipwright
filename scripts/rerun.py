@@ -31,7 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from shipwright.runinfo import first_dir, gcloud  # noqa: E402
+from shipwright.observability.runinfo import first_dir, gcloud  # noqa: E402
 
 REGION = "asia-south1"
 # script -> (flag to add, flags to drop) for an offline rerun

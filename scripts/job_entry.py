@@ -1,4 +1,4 @@
-"""Entry point of the harness image (Cloud Run Jobs shipwright-<owner>, docs/cloud-runs.md).
+"""Entry point of the harness image (Cloud Run Jobs shipwright-<owner>, docs/setup/cloud-runs.md).
 
   job_entry.py <script.py> [args...]
 
@@ -7,14 +7,14 @@ Runs ``python scripts/<script.py> args...`` in /app, then uploads every run dir 
 ``gs://$SHIPWRIGHT_RUNS_BUCKET/$OWNER/jobs/<execution>.log``. It uploads after a failure too,
 then exits with the script's exit code.
 
-Debugging (docs/debugging.md): the run id is the Cloud Run execution name; the script gets it as
+Debugging (docs/ops/debugging.md): the run id is the Cloud Run execution name; the script gets it as
 ``SHIPWRIGHT_RUN_ID`` and joins this process's trace through ``TRACEPARENT``. This entry logs job
 start and end, the exit code and every upload. If the script dies without a report (killed, out of
 memory), it writes ``errors.json`` with the tail of the console log into the run dirs (or into
 ``runs/job-<run id>/``). ``gs://$SHIPWRIGHT_RUNS_BUCKET/$OWNER/jobs/<run id>.json`` lists the run
 dirs of the execution, so ``scripts/why.py <run id>`` finds them.
 
-Auth: the service account token from the metadata server (``shipwright.vertex.metadata_token``).
+Auth: the service account token from the metadata server (``shipwright.llm.vertex.metadata_token``).
 Nothing here works off GCP, and nothing here needs gcloud.
 
 Env vars:
@@ -39,7 +39,8 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from shipwright import instrument, log, report, repro, tracing, vertex  # noqa: E402
+from shipwright.observability import instrument, log, otel_live, report, repro  # noqa: E402
+from shipwright.llm import vertex  # noqa: E402
 
 logger = log.get_logger("job_entry")
 
@@ -82,12 +83,12 @@ def ensure_report(run_dir: Path, run_id: str, script: str, args: list[str], code
                 return
         except ValueError:
             pass
-    trace_id = tracing.current_ids()[0]
+    trace_id = otel_live.current_ids()[0]
     err = {"severity": "ERROR", "run_id": run_id, "step": None, "component": "job_entry",
            "message": f"{script} exited {code} without a failure report",
            "error_class": "ExitCode", "error": f"exit {code}", "stack": tail, "trace_id": trace_id}
     body = report.build(run_dir, run_id=run_id, step="job", exit_code=code, crashed=True, errors=[err],
-                        trace_id=trace_id, project=tracing.project())
+                        trace_id=trace_id, project=otel_live.project())
     report.write(run_dir, body)
     if not (run_dir / "repro.json").exists():
         rec = repro.collect(run_id=run_id, script=script, argv=args, owner=os.environ.get("OWNER"))
@@ -116,16 +117,16 @@ def main(argv: list[str]) -> int:
     run_id = log.setup(component="job_entry")
     execution = execution or run_id
     started = time.time()
-    with tracing.span(f"job {path.name}", {"shipwright.run_id": run_id, "shipwright.script": path.name,
+    with otel_live.span(f"job {path.name}", {"shipwright.run_id": run_id, "shipwright.script": path.name,
                                             "shipwright.argv": " ".join(argv[1:])[:1000]}, root=True) as sp:
         code, dirs, log_path = _run_and_upload(owner, bucket, path, argv[1:], run_id, execution)
         if code:
-            tracing.mark_error(sp, f"exit {code}")
-        trace_id = tracing.current_ids()[0]
+            otel_live.mark_error(sp, f"exit {code}")
+        trace_id = otel_live.current_ids()[0]
         index = {"run_id": run_id, "owner": owner, "execution": execution, "script": path.name,
                  "args": argv[1:], "exit_code": code, "started": started, "ended": time.time(),
                  "run_dirs": dirs, "log": log_path, "trace_id": trace_id,
-                 "links": report.links(run_id, trace_id, tracing.project()), **repro.image_info(),
+                 "links": report.links(run_id, trace_id, otel_live.project()), **repro.image_info(),
                  "git_sha": repro.git_info().get("sha")}
         try:
             with httpx.Client(timeout=60) as client:
@@ -134,7 +135,7 @@ def main(argv: list[str]) -> int:
             logger.warning("job index upload failed", exc_info=True)
         logger.info("job end", exit_code=code, run_dirs=dirs, log=log_path, links=index["links"],
                     seconds=round(time.time() - started, 1))
-    tracing.shutdown()
+    otel_live.shutdown()
     return code
 
 
@@ -144,7 +145,7 @@ def _run_and_upload(owner: str, bucket: str, path: Path, args: list[str], run_id
     before = run_dirs(runs)
     cmd = [sys.executable, str(path), *args]
     env = dict(os.environ)
-    tp = tracing.traceparent()
+    tp = otel_live.traceparent()
     if tp:
         env["TRACEPARENT"] = tp
     logger.info("job start", script=path.name, args=args, owner=owner, execution=execution)

@@ -2,7 +2,7 @@ name: Tests and offline dry run
 
 # Adapted from ig/main (Ishank), .github/workflows/ci.yml.
 # Offline only: no secrets, no calls to model APIs. The dry run uses the scripted
-# fake LLM (src/shipwright/fake_llm.py). The only network use is GitHub (tau2-bench
+# fake LLM (src/shipwright/llm/dry_run.py). The only network use is GitHub (tau2-bench
 # at the pinned commit) and PyPI.
 
 on:

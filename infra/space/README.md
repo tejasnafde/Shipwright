@@ -14,7 +14,7 @@ produced (`docs/system-design.html`, "Demo: the loop, round by round").
 artifacts - it is read-only by design). Before building or pushing, make sure `runs/` holds the
 run dir(s) you want the demo to show - a real round's output (`scripts/baseline.py`,
 `scripts/classify.py`, `scripts/round_status.py`, `scripts/gate_eval.py`, in that order, per
-`docs/baseline.md`/`docs/gate.md`), or a `--dry-run`/`--no-llm`/`--local-dry-run` pass of the same
+`docs/pipeline/baseline.md`/`docs/pipeline/gate.md`), or a `--dry-run`/`--no-llm`/`--local-dry-run` pass of the same
 scripts for a quick offline check with no model calls.
 
 ## Build (context is the repo root, same as the main harness image)

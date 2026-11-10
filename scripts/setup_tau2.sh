@@ -20,7 +20,7 @@ fi
 cd "$ROOT"
 [ -d .venv ] || uv venv -q --python 3.12 .venv
 uv pip install -q --python .venv/bin/python -e "$DEST" -e ".[dev]"
-# AgentTune drives detect, classify, the retrain trigger and the gate (src/shipwright/agenttune_bridge.py).
+# AgentTune drives detect, classify, the retrain trigger and the gate (src/shipwright/heal/agenttune_bridge.py).
 # --no-deps: its closed-loop classes need only litellm (from tau2) and pyyaml; its full
 # dependency list pins torch 2.11 + bitsandbytes, which do not install on a CPU-only Mac.
 uv pip install -q --python .venv/bin/python --no-deps "agenttune==$AGENTTUNE_VERSION"

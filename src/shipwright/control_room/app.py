@@ -6,8 +6,8 @@ Unlike a single `runs/round-N/` folder, each step here writes into its own run d
 (`scripts/baseline.py` -> `runs/baseline-<ts>/`, `scripts/build_sft.py` -> its own
 `--output-dir`, `scripts/gate_eval.py` -> `runs/gate-round-N-<mode>-<ts>/`), so this
 app asks for up to three dirs instead of one round number - the same three a person
-tracks by hand when running a round for real (docs/baseline.md, docs/training.md,
-docs/gate.md).
+tracks by hand when running a round for real (docs/pipeline/baseline.md, docs/pipeline/training.md,
+docs/pipeline/gate.md).
 
 Layout: a persistent header (round outcome + KPI tiles + a pipeline stepper showing
 where the loop is and whether each stage is healthy) stays on screen while five tabs

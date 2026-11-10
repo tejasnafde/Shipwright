@@ -7,12 +7,12 @@ Writes to the output dir:
   run_config.json    the arguments of this run (no secrets)
   prompts.json       the agent's un-converted system prompt and tool schemas, by prompt_sha
                      (prompted models only; scripts/build_sft.py renders training data from it)
-  otel_spans.jsonl   OpenTelemetry spans built from traces.jsonl (docs/observability.md)
+  otel_spans.jsonl   OpenTelemetry spans built from traces.jsonl (docs/ops/observability.md)
 
 The HF token is read at run time from $SWITCHBOARD_SECRETS_DIR/HF_TOKEN (or $HF_TOKEN).
 It is passed to litellm only through process environment variables, never written to disk.
 Model ids that start with vertex/ (e.g. vertex/openai/gpt-oss-120b-maas) go to Vertex AI with a
-gcloud token instead (src/shipwright/vertex.py); a run with only vertex/ models needs no HF token.
+gcloud token instead (src/shipwright/llm/vertex.py); a run with only vertex/ models needs no HF token.
 
 --dry-run uses a scripted fake LLM: no network, no token, exercises the full pipeline.
 """
@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from shipwright import log, repro  # noqa: E402
+from shipwright.observability import log, repro  # noqa: E402
 
 logger = log.get_logger("baseline")
 
@@ -83,8 +83,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def cost_estimate(meter, args: argparse.Namespace, role_names: dict[str, str] | None = None) -> dict:
-    """Per-role cost from the usage meter, priced by provider (src/shipwright/costs.py)."""
-    from shipwright.costs import estimate, provider_of
+    """Per-role cost from the usage meter, priced by provider (src/shipwright/llm/costs.py)."""
+    from shipwright.llm.costs import estimate, provider_of
 
     providers = {args.user_model: provider_of(args.user_model, dry_run=args.dry_run),
                  args.agent_model: provider_of(args.agent_model, args.agent_api_base, args.dry_run)}
@@ -114,7 +114,7 @@ def run(
     logger.info("run start", run_dir=str(out_dir), agent_model=args.agent_model, user_model=args.user_model,
                 task_split=args.task_split, dry_run=args.dry_run)
 
-    from shipwright import vertex
+    from shipwright.llm import vertex
 
     token = None
     needs_hf = not (vertex.is_vertex_model(args.user_model)
@@ -140,25 +140,25 @@ def run(
                 return None
             logger.info("vertex endpoint", project=vertex.project(), location=vertex.location())
 
-    from shipwright import llm_patch, prompted_tools
-    from shipwright.costs import UsageMeter
-    from shipwright.traces import build_trace, summarize, write_jsonl
+    from shipwright.llm import patches, prompted_tools
+    from shipwright.llm.costs import UsageMeter
+    from shipwright.heal.traces import build_trace, summarize, write_jsonl
 
     for model, reply_tokens in (prompted_models or {}).items():
         prompted_tools.force_prompted(model, reply_tokens)
 
     # tau2 has built-in default models (NL-assertion judge gpt-5.4-mini, env interface,
     # reviewers). Send every model other than agent and user to the user model.
-    rerouter = llm_patch.ModelRerouter({args.agent_model, args.user_model}, args.user_model)
+    rerouter = patches.ModelRerouter({args.agent_model, args.user_model}, args.user_model)
     meter = UsageMeter()
     roles = {"meter": meter, "agent_model": args.agent_model, "user_model": args.user_model}
     if args.dry_run:
-        from shipwright.fake_llm import make_fake_completion
+        from shipwright.llm.dry_run import make_fake_completion
 
-        llm_patch.install(make_fake_completion(args.agent_model), model_map=rerouter, **roles)
+        patches.install(make_fake_completion(args.agent_model), model_map=rerouter, **roles)
     else:
-        llm_patch.install(model_map=rerouter, **roles)
-        from shipwright import context
+        patches.install(model_map=rerouter, **roles)
+        from shipwright.llm import context
 
         if prompted_tools.is_prompted_model(args.agent_model):
             # Count tokens with the student's tokenizer: the teacher gets the student's budget.
@@ -184,8 +184,8 @@ def run(
     if args.tool_patch_ids is not None and not args.tool_patches:
         raise SystemExit("--tool-patch-ids needs --tool-patches")
     if args.tool_patches:
-        from shipwright.prompted_tools import set_tool_patches
-        from shipwright.tool_fix import apply_patches, load_ledger, select_patches
+        from shipwright.llm.prompted_tools import set_tool_patches
+        from shipwright.heal.tool_fix import apply_patches, load_ledger, select_patches
 
         ledger = load_ledger(args.tool_patches)
         if args.tool_patch_ids is not None:
@@ -251,9 +251,9 @@ def run(
 
 
 def export_spans(traces: list[dict], out_dir: Path, args: argparse.Namespace, active_patches: list[str]) -> None:
-    """OTel spans next to traces.jsonl (docs/observability.md). Never raises."""
+    """OTel spans next to traces.jsonl (docs/ops/observability.md). Never raises."""
     try:
-        from shipwright.otel import export_run
+        from shipwright.observability.otel_export import export_run
     except Exception as e:  # noqa: BLE001 - e.g. opentelemetry not installed
         logger.warning(f"OTel spans skipped ({e})")
         return

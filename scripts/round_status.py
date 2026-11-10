@@ -21,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from shipwright.agenttune_bridge import retrain_status  # noqa: E402
+from shipwright.heal.agenttune_bridge import retrain_status  # noqa: E402
 
 
 def read_jsonl(path: Path) -> list[dict]:

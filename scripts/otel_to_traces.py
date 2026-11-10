@@ -4,7 +4,7 @@ Usage:
   .venv/bin/python scripts/otel_to_traces.py runs/<dir>/otel_spans.jsonl -o runs/<dir>/traces_from_otel.jsonl
 
 The output feeds scripts/classify.py like a traces.jsonl from scripts/baseline.py.
-Mapping: src/shipwright/otel_convert.py.
+Mapping: src/shipwright/observability/otel_import.py.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from shipwright.otel_convert import read_spans, spans_to_traces  # noqa: E402
-from shipwright.traces import write_jsonl  # noqa: E402
+from shipwright.observability.otel_import import read_spans, spans_to_traces  # noqa: E402
+from shipwright.heal.traces import write_jsonl  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:

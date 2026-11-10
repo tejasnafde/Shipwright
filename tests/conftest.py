@@ -11,7 +11,7 @@ import pytest
 def _fresh_log_state():
     saved = {k: os.environ.get(k) for k in ("SHIPWRIGHT_RUN_ID", "TRACEPARENT")}
     yield
-    from shipwright import log
+    from shipwright.observability import log
 
     log.reset_for_tests()
     for k, v in saved.items():

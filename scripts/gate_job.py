@@ -80,15 +80,15 @@ def script_args(args: argparse.Namespace, bundle: str) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    from shipwright.gate import load_config
-    from shipwright.systems import load_system, served_name
+    from shipwright.heal.gate import load_config
+    from shipwright.heal.systems import load_system, served_name
 
     cfg = load_config(args.config)
     systems = {who: load_system(p, ROOT) for who, p in (("current", args.current), ("candidate", args.candidate))}
     price, worst = estimate_cost(args.flavor, args.timeout, args.price_per_hour)
     held = cfg["heldout"]
     runs = 2 * held["num_tasks"] * cfg["k"]
-    from shipwright import vertex
+    from shipwright.llm import vertex
 
     on_vertex = vertex.is_vertex_model(args.user_model)
     user_cost = runs * USER_COST_PER_RUN["vertex" if on_vertex else "hf_router"]
@@ -151,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
         tar = Path(tmp) / "code.tar.gz"
         subprocess.check_call(["git", "-C", str(ROOT), "archive", "--format=tar.gz", "-o", str(tar), "HEAD",
                                "--", *BUNDLE_PATHS])
-        from shipwright import instrument
+        from shipwright.observability import instrument
 
         with instrument.external("hf_hub_upload", f"datasets/{args.runs_repo}/{bundle}"):
             api.upload_file(path_or_fileobj=str(tar), path_in_repo=bundle, repo_id=args.runs_repo,
@@ -174,6 +174,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    from shipwright import log
+    from shipwright.observability import log
 
     sys.exit(log.run_script(main, step="gate"))

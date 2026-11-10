@@ -7,7 +7,7 @@ Usage:
   .venv/bin/python scripts/why.py <ref> --task 3       # one task, turn by turn
 
 Reads errors.json, summary.json, repro.json and log.jsonl (and traces.jsonl for --task), only small
-files. GCS reads use gcloud with $SHIPWRIGHT_GCLOUD_CONFIG (default personal). docs/debugging.md.
+files. GCS reads use gcloud with $SHIPWRIGHT_GCLOUD_CONFIG (default personal). docs/ops/debugging.md.
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from shipwright import report  # noqa: E402
-from shipwright.runinfo import Source, describe, resolve  # noqa: E402
+from shipwright.observability import report  # noqa: E402
+from shipwright.observability.runinfo import Source, describe, resolve  # noqa: E402
 
 KEY_EVENTS = ("script start", "run start", "run done", "script end", "job start", "job end")
 

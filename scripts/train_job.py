@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     if not token:
         print("No HF token: expected $SWITCHBOARD_SECRETS_DIR/HF_TOKEN or $HF_TOKEN.", file=sys.stderr)
         return 2
-    from shipwright import instrument
+    from shipwright.observability import instrument
 
     with instrument.external("hf_job_launch", f"{args.flavor} {TRAIN_SCRIPT.name}", timeout=args.timeout) as call:
         job = run_uv_job(
@@ -105,6 +105,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    from shipwright import log
+    from shipwright.observability import log
 
     sys.exit(log.run_script(main, step="train"))

@@ -1,11 +1,11 @@
 """Teacher runs: a strong model plays the agent on tau2 retail, in the student's format.
 
 The teacher and the user simulator are required arguments (--teacher-model, --user-model); see
-docs/training.md for the team's current choice (Vertex AI).
+docs/pipeline/training.md for the team's current choice (Vertex AI).
 
 The teacher sees exactly the prompt Tiny Aya sees: the compact tool list, the ```json
 block protocol, no native tools, the same 8192-token prompt budget (see
-shipwright.prompted_tools and shipwright.context). Only its reply budget is larger,
+shipwright.llm.prompted_tools and shipwright.llm.context). Only its reply budget is larger,
 because it reasons before it answers. So its trajectories are already in the student
 format, and scripts/build_sft.py turns the successful ones into training data.
 
@@ -122,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     out_dir, traces, summary = result
 
-    from shipwright.traces import write_jsonl
+    from shipwright.heal.traces import write_jsonl
 
     kept = keep_successful(traces)
     write_jsonl(out_dir / "kept.jsonl", kept)
@@ -148,6 +148,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    from shipwright import log
+    from shipwright.observability import log
 
     sys.exit(log.run_script(main, step="teacher"))

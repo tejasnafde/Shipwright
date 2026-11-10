@@ -4,7 +4,7 @@
   --replay RUN_DIR    Tiny Aya's own runs; their successes are mixed in (replay); repeatable
 
 Only runs with reward == 1 are used, and only from train-split runs (run_config.json).
-Every example is rendered as Tiny Aya sees it (see shipwright.sft_data), deduplicated,
+Every example is rendered as Tiny Aya sees it (see shipwright.heal.sft_data), deduplicated,
 and dropped if it has more than --max-tokens tokens or a reply over 700 tokens.
 
 Writes OUT_DIR/sft.jsonl (one {"messages": [...], "source", "task_id", ...} per line)
@@ -23,7 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
 
-from shipwright import context, sft_data  # noqa: E402
+from shipwright.llm import context  # noqa: E402
+from shipwright.heal import sft_data  # noqa: E402
 
 DEFAULT_REPO = "mitushigoyal5/shipwright-sft"
 
@@ -67,7 +68,7 @@ def reconstruct_prompt(domain: str = "retail", seed: int = 300) -> dict:
     """The agent prompt for runs made before prompts.json existed.
 
     Rebuilt the way tau2 builds it (LLMAgent system prompt, domain policy plus the
-    language guidance of the default English run). tests/test_sft_data.py checks it
+    language guidance of the default English run). tests/heal/test_sft_data.py checks it
     against a recorded prompt.
     """
     from tau2.agent.llm_agent import AGENT_INSTRUCTION, SYSTEM_PROMPT
@@ -124,7 +125,7 @@ def push(out_dir: Path, repo: str, revision: str) -> None:
     api.create_repo(repo, repo_type="dataset", exist_ok=True, private=False)
     if revision != "main":
         api.create_branch(repo, repo_type="dataset", branch=revision, exist_ok=True)
-    from shipwright import instrument
+    from shipwright.observability import instrument
 
     for name in ("sft.jsonl", "sft_stats.json"):
         with instrument.external("hf_hub_upload", f"datasets/{repo}@{revision}/{name}"):
@@ -140,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = (args.output_dir or ROOT / "runs" / f"sft-{stamp}").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    from shipwright import log
+    from shipwright.observability import log
 
     log.attach_run_dir(out_dir)
 
@@ -180,6 +181,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    from shipwright import log
+    from shipwright.observability import log
 
     sys.exit(log.run_script(main, step="sft"))

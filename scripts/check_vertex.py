@@ -25,8 +25,8 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from shipwright import vertex  # noqa: E402
-from shipwright.costs import cached_tokens  # noqa: E402
+from shipwright.llm import vertex  # noqa: E402
+from shipwright.llm.costs import cached_tokens  # noqa: E402
 
 MODELS = {
     vertex.TEACHER_MODEL: {"max_tokens": 32},
