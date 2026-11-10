@@ -114,3 +114,19 @@ Suggested upgrades (in order):
 - tools/skill_ledger.py: JSONL audit of every edit with content-addressed before/after snapshots, one-step rollback.
 - agent/curator.py: unused skills go stale, then archived, never deleted.
 - Borrow for our tool-fix branch: the ledger + rollback for each tool patch, and the reviewer fork with a whitelist.
+
+## Task splits fixed (2026-11-11, Mitushi)
+- Problem: AGENTS.md promised train 40 / held-out 20 / hidden 20, but the code trained on the whole tau2
+  retail `train` split (74 tasks) and gated on the whole `test` split (40 tasks). There was no hidden set.
+- tau2 retail has two disjoint splits: train 74, test 40. Runs so far (baseline, teacher, tool patches)
+  used only train tasks, so the test split is untouched.
+- Change: train pool = all 74 train tasks. The 40 test tasks are shuffled with seed 300 and cut in two:
+  held-out 20 (the gate scores on them) and hidden 20 (opened once, for the final report). The ids are
+  written out in `configs/splits.yaml`, so a tau2 update cannot move them.
+- Why not keep gating on all 40: the final numbers would come from the same tasks the gate used to pick
+  rounds. Why not carve the hidden set from train: the run dirs that show which train ids were used are
+  not all in one place, so contamination could not be ruled out.
+- Gate floors resized from 40 tasks x k=3 (120 runs) to 20 x 3 (60 runs): min_valid_runs 108 -> 54,
+  min_complete_tasks 36 -> 18, target_label_min_drop 0.025 -> 0.05 (still 3 runs). non_target_max_increase
+  stays 0.05 (now 3 runs, was 6). Cost: the gate is noisier; pass^1 and pass^3 still may not drop at all.
+- Status stays `proposed` until the team freezes it.
