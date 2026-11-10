@@ -75,6 +75,13 @@ Suggested upgrades (in order):
 ## Self-healing research (2026-11-07, subagent web search; numbers marked "check" are from secondary sources)
 - Taxonomy: MAST, arxiv 2503.13657 (14 failure modes, 3 categories). Add our own "environment/transient" label and exclude it from training.
 - Corrections: Agent-R, arxiv 2501.11425 (splice a correct branch at the first wrong step; code bytedance/Agent-R).
+  Implemented 2026-11-11 (Mitushi), `docs/pipeline/agent-r.md`. Values from the paper: c_uct 0.25, 4 children per
+  expansion at temperature 1, depth 20, beta 0.2, alpha 0.5 / 0.7 / 1.0 per iteration, eta 0.2.
+  Our changes, decided before any Agent-R round: 24 rollouts per task (paper 200 to 300, budget), the revision
+  thought inline before the first good action (paper: an extra Assistant / "OK." turn pair, which our user
+  simulator would have to answer), LoRA lr 2e-4 as in our other training (paper: full fine-tune, lr 2e-5).
+  Paper and code differ on pairs: we pair each bad leaf with its adjacent good leaf (longest shared prefix),
+  as the abstract says; the released code pairs any leaves with a reward gap.
   APIGen-MT, arxiv 2504.03601 (verified multi-turn tool data, keep only runs that reach the goal state; xLAM-2 beats GPT-4o on tau-bench per abstract).
   APIGen, arxiv 2406.18518: verify in 3 steps (format, real execution, semantic).
 - No paper compares tool-layer fixes with weight fixes. That comparison is our own testable claim.

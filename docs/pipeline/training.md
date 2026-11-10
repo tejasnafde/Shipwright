@@ -11,6 +11,10 @@ The weight-fix path for failures that `scripts/classify.py` routes to `weight_fi
 Nothing here spends credits unless you run a command that says so (teacher runs call Vertex AI
 or the HF router; `build_sft.py --push` writes to the Hub; `train_job.py --launch` starts a paid GPU job).
 
+A second source of training data is Agent-R revision runs from the student's own MCTS
+rollouts: `docs/pipeline/agent-r.md` (`build_sft.py --agent-r`). Those records carry a
+`loss_mask`, and `train_lora.py` keeps the masked assistant turns untrained.
+
 ## The teacher sees the student's prompt
 
 `scripts/teacher_runs.py` calls `prompted_tools.force_prompted(teacher)`, so the teacher gets the
