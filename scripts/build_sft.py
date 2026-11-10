@@ -2,6 +2,11 @@
 
   --teacher RUN_DIR   teacher runs (scripts/teacher_runs.py); repeatable
   --replay RUN_DIR    Tiny Aya's own runs; their successes are mixed in (replay); repeatable
+  --agent-r DIR       Agent-R output (scripts/agent_r_revise.py): revision runs, trained only on
+                      the revision thought and the good suffix (records carry ``loss_mask``),
+                      plus the good MCTS leaves; repeatable
+  --general FILE      general chat data (jsonl, messages or ShareGPT), mixed so that agent data
+                      is --eta of the total (Agent-R Eq. 6, eta = 0.2)
 
 Only runs with reward == 1 are used, and only from train-split runs (run_config.json).
 Every example is rendered as Tiny Aya sees it (see shipwright.heal.sft_data), deduplicated,
@@ -34,6 +39,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--teacher", type=Path, action="append", default=[], help="teacher run dir")
     p.add_argument("--replay", type=Path, action="append", default=[], help="Tiny Aya run dir")
     p.add_argument("--max-replay", type=int, default=None, help="cap on replay examples")
+    p.add_argument("--agent-r", type=Path, action="append", default=[], help="agent_r_revise.py output dir")
+    p.add_argument("--general", type=Path, default=None, help="general chat jsonl for the eta mix")
+    p.add_argument("--eta", type=float, default=0.2, help="agent share of the data when --general is set")
     p.add_argument("--long-mode", choices=["window", "drop"], default="window",
                    help="runs longer than the context: cut into windows, or drop")
     p.add_argument("--max-tokens", type=int, default=context.CONTEXT_LIMIT)
@@ -113,6 +121,32 @@ def collect(run_dirs: list[Path], source: str, args: argparse.Namespace, notes: 
     return records
 
 
+def collect_agent_r(dirs: list[Path], args: argparse.Namespace, notes: list[str]) -> list[dict]:
+    """Revision records (masked) and good-leaf records from agent_r_revise.py output dirs."""
+    records: list[dict] = []
+    for d in dirs:
+        cfg = json.loads((d / "run_config.json").read_text())
+        if cfg.get("task_split") != "train" and not args.allow_split:
+            raise SystemExit(f"{d}: task_split is {cfg.get('task_split')!r}, not 'train'. Never train on held-out tasks.")
+        prompts = json.loads((d / "prompts.json").read_text()) if (d / "prompts.json").exists() else {}
+        fallback = next(iter(prompts.values())) if prompts else reconstruct_prompt()
+        n_rev = n_good = 0
+        for line in (d / "revisions.jsonl").read_text().splitlines():
+            if not line.strip():
+                continue
+            rev = json.loads(line)
+            prompt = prompts.get(rev.get("prompt_sha")) or fallback
+            records += sft_data.revision_records(rev, prompt, args.long_mode)
+            n_rev += 1
+        for line in (d / "good.jsonl").read_text().splitlines():
+            if line.strip():
+                t = json.loads(line)
+                records += sft_data.trace_records(t, prompt_for(t, prompts, fallback), "good", args.long_mode)
+                n_good += 1
+        notes.append(f"{d.name}: {n_rev} Agent-R revision runs, {n_good} good MCTS leaves")
+    return records
+
+
 def push(out_dir: Path, repo: str, revision: str) -> None:
     from huggingface_hub import HfApi
 
@@ -136,8 +170,8 @@ def push(out_dir: Path, repo: str, revision: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    if not args.teacher and not args.replay:
-        raise SystemExit("Pass at least one --teacher or --replay run dir.")
+    if not args.teacher and not args.replay and not args.agent_r:
+        raise SystemExit("Pass at least one --teacher, --replay or --agent-r dir.")
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = (args.output_dir or ROOT / "runs" / f"sft-{stamp}").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -156,10 +190,17 @@ def main(argv: list[str] | None = None) -> int:
     replay = collect(args.replay, "replay", args, notes)
     if args.max_replay is not None:
         replay = replay[: args.max_replay]
-    before = len(teacher) + len(replay)
-    records = sft_data.dedupe(teacher + replay)
+    agent_r = collect_agent_r(args.agent_r, args, notes)
+    before = len(teacher) + len(replay) + len(agent_r)
+    records = sft_data.dedupe(agent_r + teacher + replay)
     kept, dropped = sft_data.filter_records(records, args.max_tokens)
     dropped["duplicates"] = before - len(records)
+    mix = None
+    if args.general:
+        rows = [json.loads(x) for x in args.general.read_text().splitlines() if x.strip()]
+        general, _ = sft_data.filter_records(sft_data.general_records(rows), args.max_tokens)
+        kept, mix = sft_data.eta_mix(kept, general, args.eta)
+        mix["general_file"] = str(args.general)
 
     with open(out_dir / "sft.jsonl", "w") as f:
         for r in kept:
@@ -170,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         "max_tokens_limit": args.max_tokens,
         "teacher_runs": [str(p) for p in args.teacher],
         "replay_runs": [str(p) for p in args.replay],
+        "agent_r_dirs": [str(p) for p in args.agent_r],
+        "eta_mix": mix,
         "notes": notes,
     })
     (out_dir / "sft_stats.json").write_text(json.dumps(st, indent=2))

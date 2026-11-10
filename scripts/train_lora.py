@@ -12,6 +12,9 @@ Runs on HF Jobs (see scripts/train_job.py), not locally. Steps:
 1. Download sft.jsonl (scripts/build_sft.py) from the dataset repo.
 2. Turn each example into a full-tier AgentTune ``EventLog``: user turns become
    OBSERVATION events (loss-masked), assistant turns become TEXT events (trained).
+   An example with a ``loss_mask`` (Agent-R revision runs, scripts/agent_r_revise.py)
+   keeps the assistant turns it marks as context masked too: the bad steps before the
+   revision thought are never trained.
    The system prompt (policy + compact tools + JSON block protocol) is kept as the
    first message, loss-masked, so the rows are exactly the student's prompts.
 3. ``agenttune.create_distill_trainer(student, trajectories=..., trainer_factory=...)``
@@ -129,23 +132,40 @@ def make_eventlog_class():
         """
 
         system: str = ""
+        # Event indices of assistant turns that are context only (Agent-R bad steps).
+        context_events: tuple = ()
 
         def as_dataset_rows(self, fmt: str) -> list[dict]:
             rows = super().as_dataset_rows(fmt)
             for r in rows:
-                r["messages"].insert(0, {"role": "system", "content": self.system})
-                r["segment_weights"].insert(0, 0.0)
-                r["loss_mask"].insert(0, True)
+                for i in self.context_events:
+                    r["segment_weights"][i] = 0.0
+                    r["loss_mask"][i] = True
+                if self.system:
+                    r["messages"].insert(0, {"role": "system", "content": self.system})
+                    r["segment_weights"].insert(0, 0.0)
+                    r["loss_mask"].insert(0, True)
             return rows
 
     return SystemPromptEventLog
 
 
-def to_eventlog(cls, messages: list[dict]):
+def context_events(messages: list[dict], loss_mask: list[bool] | None) -> tuple[int, ...]:
+    """Event indices (messages without the system prompt) of masked assistant turns."""
+    if loss_mask is None:
+        return ()
+    if len(loss_mask) != len(messages):
+        raise ValueError("loss_mask must have one entry per message")
+    offset = 1 if messages and messages[0]["role"] == "system" else 0
+    return tuple(i - offset for i, (m, masked) in enumerate(zip(messages, loss_mask, strict=True))
+                 if masked and m["role"] == "assistant")
+
+
+def to_eventlog(cls, messages: list[dict], loss_mask: list[bool] | None = None):
     from agenttune.agentic import Event, EventKind
 
     system, events = split_example(messages)
-    log = cls(tier="full", system=system)
+    log = cls(tier="full", system=system, context_events=context_events(messages, loss_mask))
     for kind, text in events:
         log.append(Event(EventKind.OBSERVATION if kind == "observation" else EventKind.TEXT, {"text": text}))
     return log
@@ -270,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.time()
     records, data_stats = load_examples(args.dataset, args.dataset_revision)
     cls = make_eventlog_class()
-    logs = [to_eventlog(cls, r["messages"]) for r in records]
+    logs = [to_eventlog(cls, r["messages"], r.get("loss_mask")) for r in records]
     factory = MaskedSFTFactory(args)
     trainer = create_distill_trainer(args.student, trajectories=logs, trainer_factory=factory,
                                      output_dir=args.output_dir)
@@ -280,6 +300,8 @@ def main(argv: list[str] | None = None) -> int:
     assert len(rows) == len(records)
     for row, rec in zip(rows, records, strict=True):
         assert row["messages"] == [{"role": m["role"], "content": m["content"]} for m in rec["messages"]]
+        if rec.get("loss_mask") is not None:
+            assert row["loss_mask"] == rec["loss_mask"], "AgentTune loss_mask differs from the Agent-R mask"
     print(f"{len(rows)} AgentTune rows match sft.jsonl", flush=True)
 
     result = trainer.train()
