@@ -119,7 +119,7 @@ class RunInfo:
 
 
 KIND_RANK = {"real": 0, "dry": 1, "demo": 2}
-KIND_LABEL = {"real": "REAL", "dry": "DRY RUN (fake model)", "demo": "DEMO (staged, invented)"}
+KIND_LABEL = {"real": "REAL", "dry": "DRY RUN", "demo": "STAGED"}
 
 # What each dropdown lists: a dir qualifies by the files it holds, not by its name, because
 # cloud runs are named by their owner (r1-baseline-train) and not by a fixed prefix.
@@ -149,15 +149,15 @@ def _describe_run(run_dir: Path) -> RunInfo:
 
 
 def _run_label(info: RunInfo) -> str:
-    parts = [KIND_LABEL[info.kind]]
+    """Run name first: a narrow sidebar dropdown cuts the label off at the right."""
+    parts = [info.name, KIND_LABEL[info.kind]]
     if info.kind != "demo":
-        parts.append(f"by {info.owner}")
-    if info.created:
-        parts.append(info.created + " UTC")
-    parts.append(info.name)
+        parts.append(info.owner)
     if info.passed_text:
         parts.append(info.passed_text)
-    return " | ".join(parts)
+    if info.created:
+        parts.append(info.created + " UTC")
+    return " · ".join(parts)
 
 
 def _candidate_runs(role: str) -> list[RunInfo]:
@@ -793,7 +793,7 @@ def _render_score_check(check: dict) -> None:
 def tab_gate_outcome(data: RoundData) -> None:
     render_demo_banner(data.gate_dir)
     if data.gate_decision is None:
-        st.info("No gate decision in this scenario yet. A baseline alone answers *how bad is "
+        st.info("No gate run selected, or it has no gate_decision.json. A baseline alone answers *how bad is "
                 "the student and why*; the gate needs a trained candidate.")
         return
 
@@ -899,7 +899,7 @@ def tab_follow_task(data: RoundData, after_dir: Path | None, task_id: str) -> No
             elif after_trace:
                 st.error("**Still fails** with the trained student.")
             elif after_dir is None:
-                st.caption("No after dir selected: pick a run made with the trained adapter in the sidebar.")
+                st.caption("No after-training run selected (picker above).")
             else:
                 st.caption("Task not found in the after dir.")
         if after_trace:
@@ -909,7 +909,7 @@ def tab_follow_task(data: RoundData, after_dir: Path | None, task_id: str) -> No
 
 def tab_history(data: RoundData) -> None:
     if not data.metrics_rows:
-        st.info("No metrics.jsonl rows in this scenario's gate dir yet.")
+        st.info("No metrics.jsonl rows: pick a gate run in the Gate & Outcome tab.")
         return
 
     latest = data.metrics_rows[-1]
@@ -1007,26 +1007,43 @@ def select_round() -> RoundSelection:
         st.sidebar.caption(scenario.summary)
 
     st.sidebar.subheader("Run dirs")
+    st.sidebar.caption("The gate run is picked in Gate & Outcome, the after-training run in Follow a Task.")
     baseline_dir = _pick_dir("Baseline run (the agent run being judged)", "baseline", "baseline")
     sft_dir = _pick_dir("Teacher/SFT output dir", "sft", "sft")
-    gate_dir = _pick_dir("Gate-eval output dir", "gate", "gate")
-    after_dir = _pick_dir("After (a run made with the trained adapter)", "baseline", "after", default_to_real_run=False)
     if "round_num" not in st.session_state:
         st.session_state["round_num"] = 1
     round_num = st.sidebar.number_input("Round number (patches/ledger.jsonl)", min_value=0, step=1, key="round_num")
-
-    # The scenario's text only describes the data while the pickers still match it.
-    if scenario and (baseline_dir, sft_dir, gate_dir, after_dir) != (
-            RUNS_DIR / scenario.baseline, _scenario_dir(scenario.sft), _scenario_dir(scenario.gate),
-            _scenario_dir(scenario.after)):
-        scenario = None
-        scenario_name = "Custom selection"
 
     if gcs_runs.gcloud_binary() is not None:
         render_pull_runs_button(st.sidebar.expander("Pull runs from GCS"))
     if "pull_message" in st.session_state:
         st.sidebar.success(st.session_state.pop("pull_message"))
-    return RoundSelection(baseline_dir, sft_dir, gate_dir, after_dir, int(round_num), scenario, scenario_name)
+    return RoundSelection(baseline_dir, sft_dir, None, None, int(round_num), scenario, scenario_name)
+
+
+def pick_gate_dir() -> Path | None:
+    """Drawn at the top of the Gate & Outcome tab; History and the header read the same dir."""
+    return _pick_dir("Gate run", "gate", "gate", container=st)
+
+
+def pick_after_dir(baseline_dir: Path) -> Path | None:
+    """Drawn at the top of Follow a Task, the only tab that reads it."""
+    after_dir = _pick_dir("After: a run made with the trained adapter", "baseline", "after",
+                          container=st, default_to_real_run=False)
+    if after_dir == baseline_dir:
+        st.warning("The after run is the baseline run itself, so it is ignored. "
+                   "Pick a run made with the trained adapter.")
+        return None
+    return after_dir
+
+
+def _scenario_still_matches(selection: RoundSelection) -> bool:
+    """The scenario's text only describes the data while every picker still points at its dirs."""
+    scenario = selection.scenario
+    loaded = (selection.baseline_dir, selection.sft_dir, selection.gate_dir, selection.after_dir)
+    expected = (_scenario_dir(scenario.baseline), _scenario_dir(scenario.sft),
+                _scenario_dir(scenario.gate), _scenario_dir(scenario.after))
+    return loaded == expected
 
 
 def _scenario_dir(name: str | None) -> Path | None:
@@ -1065,16 +1082,25 @@ def main() -> None:
         )
         return
 
+    scenario_slot = st.container()
+    render_reading_guide()
+    header_slot = st.container()
+    st.divider()
+    tabs = st.tabs(["Follow a Task", "Run & Trace", "Classify & Route", "Fix & Train", "Gate & Outcome", "History"])
+    # These two pickers sit inside the tab that uses them, but the header above the tabs reads
+    # the gate dir too, so pick both before loading and fill the header afterwards.
+    with tabs[4]:
+        selection.gate_dir = pick_gate_dir()
+    with tabs[0]:
+        selection.after_dir = pick_after_dir(selection.baseline_dir)
+
     data = RoundData(selection.baseline_dir, selection.sft_dir, selection.gate_dir, selection.round_num)
     task_id = select_task_id(data, selection)
 
-    if selection.scenario:
-        st.info(f"**{selection.scenario_name}.** {selection.scenario.summary}")
-    render_reading_guide()
-    render_header(data)
-    st.divider()
-
-    tabs = st.tabs(["Follow a Task", "Run & Trace", "Classify & Route", "Fix & Train", "Gate & Outcome", "History"])
+    if selection.scenario and _scenario_still_matches(selection):
+        scenario_slot.info(f"**{selection.scenario_name}.** {selection.scenario.summary}")
+    with header_slot:
+        render_header(data)
     with tabs[0]:
         tab_follow_task(data, selection.after_dir, task_id)
     with tabs[1]:
@@ -1087,7 +1113,6 @@ def main() -> None:
         tab_gate_outcome(data)
     with tabs[5]:
         tab_history(data)
-
 
 if __name__ == "__main__":
     main()

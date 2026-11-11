@@ -156,8 +156,10 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   orange "STAGED EXAMPLE" banner wherever one is loaded, so staged and real data are never
   visually confused.
 - 2026-11-11 (Ishank): the sidebar's "Load demo scenario" dropdown (`SCENARIOS` in `app.py`: the
-  real round 1, the staged walkthrough) fills in the manual run-dir pickers, which stay visible
-  below it for overrides. A scenario is listed only when all of its dirs exist. Traces render as
+  real round 1, the staged walkthrough) fills in every run-dir picker. Baseline and teacher/SFT
+  pickers stay in the sidebar; the gate picker sits in Gate & Outcome and the after-training
+  picker in Follow a Task (the only tabs that read them; the header is filled after them, since
+  it reads the gate dir too). A scenario is listed only when all of its dirs exist. Traces render as
   chat bubbles with a raw-JSON expander under each, so no caller may put a trace inside an
   expander (Streamlit cannot nest them).
 
