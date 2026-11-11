@@ -37,7 +37,8 @@ or from `$HF_TOKEN`. The token goes to litellm through process env vars only. It
 .venv/bin/python scripts/baseline.py --num-tasks 20
 ```
 
-Other flags: `--task-split train|test|base` (default `train`, so held-out tasks stay unused),
+Other flags: `--task-split train|test|base` (default `train`, so held-out tasks stay unused; a `test` run
+must pass `--task-ids` and may not include hidden ids unless `--open-hidden`, see `configs/splits.yaml`),
 `--task-ids 0 1 2`, `--trials`, `--agent-model`, `--user-model` (e.g. `vertex/openai/gpt-oss-120b-maas`), `--max-concurrency` (default 4),
 `--output-dir` (default `runs/baseline-<timestamp>/`), `--tool-patch-ids` (with `--tool-patches`:
 exactly these patches, whatever their ledger status), `--agent-api-base` (agent on an

@@ -43,12 +43,11 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 
 ## Evaluation rules
 
-- Three frozen task splits: **train pool** (40 tasks, the loop learns from it), **held-out**
-  (20, the gate scores on it), **hidden** (20, opened once, for the final report). Never train on
-  held-out or hidden tasks. Sized so each failure label shows up more than once or twice a round
-  while keeping judge/teacher API and GPU cost low (`common/config.py`'s frozen-constants pattern
-  was retired 2026-11-10 in favor of writing the numbers directly here and in `configs/gate.yaml`
-  - one source of truth, not two).
+- Three task splits, ids in `configs/splits.yaml` (2026-11-11, why: `docs/notes.md`): **train pool** (the whole
+  tau2 retail `train` split, 74 tasks; the loop learns from it), **held-out** (20 of the 40 `test` tasks; the gate
+  scores on them), **hidden** (the other 20 `test` tasks; opened once, for the final report). Never train on
+  held-out or hidden tasks. `scripts/baseline.py` refuses hidden ids, and a `test` run without `--task-ids`,
+  unless `--open-hidden` is passed (`src/shipwright/heal/splits.py`). Gate floors are sized for 20 tasks x k=3.
 - Frozen before round 1: failure label list, gate thresholds, k for pass^k, seeds, teacher and judge
   model versions. To change one, write the change and the reason in `docs/notes.md` first.
 - The gate never approves by default. Too few test runs means reject.

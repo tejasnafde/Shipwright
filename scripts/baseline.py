@@ -74,6 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--agent-api-base", default=None,
                    help="OpenAI-compatible endpoint for the agent only, e.g. http://localhost:8000/v1 (vLLM)."
                         " The user simulator still goes to the HF router.")
+    p.add_argument("--open-hidden", action="store_true",
+                   help="allow hidden test tasks (configs/splits.yaml): only for the one final-report run")
     p.add_argument("--dry-run", action="store_true", help="fake LLM, no network")
     return p
 
@@ -134,6 +136,14 @@ def prepare(args: argparse.Namespace, out_dir: Path, *, prompted_models: dict[st
     Returns {"meter", "rerouter", "tool_names", "active_patches"}, or None without a token.
     ``fake_completion`` replaces the dry-run fake LLM (scripts/agent_r_search.py).
     """
+    from shipwright.heal import splits
+
+    try:
+        splits.check_run(args.task_split, args.task_ids, getattr(args, "open_hidden", False))
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    if getattr(args, "open_hidden", False):
+        logger.warning("hidden split opened: this run is for the final report only", task_ids=args.task_ids)
     log.note_repro(**repro.models_from_args(args), dry_run=args.dry_run)
     logger.info("run start", run_dir=str(out_dir), agent_model=args.agent_model, user_model=args.user_model,
                 task_split=args.task_split, dry_run=args.dry_run)

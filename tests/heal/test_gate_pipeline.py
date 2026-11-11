@@ -200,3 +200,7 @@ def test_local_dry_run_end_to_end(tmp_path):
     assert d["decision"] == "reject"  # 3 runs per system is far below the floor
     assert d["metrics_candidate"]["active_tool_patches"]
     assert d["metrics_current"]["num_runs"] == 3
+    from shipwright.heal import splits
+
+    ran = {json.loads(x)["task_id"] for x in (out / "base" / "traces.jsonl").read_text().splitlines()}
+    assert ran == {splits.heldout_ids()[0]}  # only held-out ids, never hidden ones
