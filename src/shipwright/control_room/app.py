@@ -22,14 +22,17 @@ from __future__ import annotations
 import html
 import json
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 import streamlit as st
 
+from shipwright.control_room import gcs_runs
+
 RUNS_DIR = Path(__file__).resolve().parents[3] / "runs"
 
 # The four dirs scripts/demo_data.py writes: a round-1 failure, its teacher fix, a staged
-# round-2 pass and a staged gate rejection. "Load demo scenario" below jumps straight to them
+# round-2 pass and a staged gate rejection. "Show staged demo (invented data)" below jumps straight to them
 # instead of making a live demo align three dropdowns by hand.
 DEMO_SCENARIO = {
     "baseline": "baseline-demo-round1", "sft": "sft-demo-fix",
@@ -98,10 +101,69 @@ def _read_json(path: Path) -> dict | None:
     return json.loads(path.read_text()) if path.exists() else None
 
 
-def _candidate_dirs(prefix: str) -> list[str]:
+@dataclass
+class RunInfo:
+    name: str
+    kind: str  # "real", "dry" or "demo"
+    owner: str  # "tejas", "mitushi", "ishank", or "this machine" when the run was not made on Cloud Run
+    created: str  # "MM-DD HH:MM" or ""
+    passed_text: str  # "3/74 passed" or ""
+
+
+KIND_RANK = {"real": 0, "dry": 1, "demo": 2}
+KIND_LABEL = {"real": "REAL", "dry": "DRY RUN (fake model)", "demo": "DEMO (staged, invented)"}
+
+# What each dropdown lists: a dir qualifies by the files it holds, not by its name, because
+# cloud runs are named by their owner (r1-baseline-train) and not by a fixed prefix.
+ROLE_MARKER_FILES = {
+    "baseline": ("traces.jsonl",),
+    "sft": ("kept.jsonl", "sft_stats.json"),
+    "gate": ("gate_decision.json",),
+}
+
+
+def _describe_run(run_dir: Path) -> RunInfo:
+    repro = _read_json(run_dir / "repro.json") or {}
+    arguments = repro.get("argv") or []
+    if (run_dir / "demo.json").exists():
+        kind = "demo"
+    elif any("dry" in str(argument) for argument in arguments) or run_dir.name.startswith("dry"):
+        kind = "dry"
+    else:
+        kind = "real"
+    owner = repro.get("owner") or "this machine"
+    created = (repro.get("created_at") or "")[5:16].replace("T", " ")
+    passed_text = ""
+    summary = _read_json(run_dir / "summary.json") or {}
+    if summary.get("num_runs") is not None and summary.get("num_passed") is not None:
+        passed_text = f"{summary['num_passed']}/{summary['num_runs']} passed"
+    return RunInfo(run_dir.name, kind, owner, created, passed_text)
+
+
+def _run_label(info: RunInfo) -> str:
+    parts = [KIND_LABEL[info.kind]]
+    if info.kind != "demo":
+        parts.append(f"by {info.owner}")
+    if info.created:
+        parts.append(info.created + " UTC")
+    parts.append(info.name)
+    if info.passed_text:
+        parts.append(info.passed_text)
+    return " | ".join(parts)
+
+
+def _candidate_runs(role: str) -> list[RunInfo]:
+    """Run dirs holding this role's files: real runs first, then dry, then demo, newest first."""
     if not RUNS_DIR.exists():
         return []
-    return sorted((p.name for p in RUNS_DIR.glob(f"{prefix}*") if p.is_dir()), reverse=True)
+    marker_files = ROLE_MARKER_FILES[role]
+    infos = []
+    for run_dir in RUNS_DIR.iterdir():
+        if run_dir.is_dir() and any((run_dir / marker).exists() for marker in marker_files):
+            infos.append(_describe_run(run_dir))
+    infos.sort(key=lambda info: info.created, reverse=True)
+    infos.sort(key=lambda info: KIND_RANK[info.kind])
+    return infos
 
 
 def _demo_note(run_dir: Path | None) -> str | None:
@@ -121,19 +183,23 @@ def render_demo_banner(run_dir: Path | None) -> None:
                     f'{note}</div>', unsafe_allow_html=True)
 
 
-def _pick_dir(label: str, prefix: str, key: str, container=None) -> Path | None:
-    """A dropdown of runs/<prefix>* dirs (most recent selected by default), plus a
-    manual path for anything elsewhere. Renders into ``container`` (default: the
-    sidebar itself) so callers can tuck a picker inside an expander."""
+def _pick_dir(label: str, role: str, key: str, container=None, default_to_real_run: bool = True) -> Path | None:
+    """A dropdown of the run dirs that hold this role's files, each labelled REAL, DRY RUN
+    or DEMO with its owner. Defaults to the newest REAL run, never to a dry or demo one.
+    Renders into ``container`` (default: the sidebar itself)."""
     box = container if container is not None else st.sidebar
-    candidates = _candidate_dirs(prefix)
-    options = ["(none)", *candidates, "(enter a path)"]
+    infos = _candidate_runs(role)
+    labels = {info.name: _run_label(info) for info in infos}
+    options = ["(none)", *labels, "(enter a path)"]
     state_key = f"{key}_choice"
-    # Only set a default `index` on first render. Once session_state holds a value for this
-    # key - including one "Load demo scenario" set programmatically - passing `index` too
-    # makes Streamlit warn about a conflicting default; session_state already wins either way.
-    kwargs = {} if state_key in st.session_state else {"index": 1 if candidates else 0}
-    choice = box.selectbox(label, options, key=state_key, **kwargs)
+    # Only set a default `index` on first render: once session_state holds a value for this key
+    # (including one "Show staged demo" set programmatically), passing `index` too makes
+    # Streamlit warn about a conflicting default.
+    kwargs = {}
+    if state_key not in st.session_state:
+        has_real_run = bool(infos) and infos[0].kind == "real"
+        kwargs["index"] = 1 if has_real_run and default_to_real_run else 0
+    choice = box.selectbox(label, options, key=state_key, format_func=lambda name: labels.get(name, name), **kwargs)
     if choice == "(none)":
         return None
     if choice == "(enter a path)":
@@ -286,7 +352,42 @@ def render_pipeline(data: RoundData) -> None:
     st.markdown("".join(parts), unsafe_allow_html=True)
 
 
+def render_run_kind_banner(run_dir: Path) -> None:
+    """Say plainly what the selected baseline run is: real, dry run, or staged demo."""
+    info = _describe_run(run_dir)
+    if info.kind == "demo":
+        return  # render_demo_banner already explains it
+    if info.kind == "dry":
+        st.warning(f"**DRY RUN.** `{info.name}` used a fake model to test the plumbing. "
+                   "Its pass rates and failures mean nothing. Pick a REAL run in the sidebar.")
+    else:
+        st.success(f"**REAL RUN** by **{info.owner}**: `{info.name}`"
+                   + (f", started {info.created} UTC" if info.created else "")
+                   + (f", {info.passed_text}" if info.passed_text else "") + ".")
+
+
+def render_reading_guide() -> None:
+    with st.expander("How to read this (start here)", expanded=False):
+        st.markdown(
+            "**Every run is labelled in the sidebar:** `REAL` = real models on real tau2 tasks (from a "
+            "cloud job or a local run), `DRY RUN` = fake model, plumbing test only, `DEMO` = staged, "
+            "invented data for the walkthrough. The label also names who ran it.\n\n"
+            "**To judge a real run, go through the tabs left to right:**\n"
+            "1. **Run & Trace**: how many tasks the student (Tiny Aya) passed, and the raw conversations.\n"
+            "2. **Classify & Route**: why the failed runs failed (label) and which fix each gets "
+            "(`tool_fix`, `weight_fix`, `no_fix`). Check the label counts look plausible and "
+            "`environment` (infra errors, not the model's fault) is not hiding real failures.\n"
+            "3. **Fix & Train**: needs a teacher/SFT dir (the `+ teacher, gate, round #` box). "
+            "Shows what the teacher did right on the tasks the student failed.\n"
+            "4. **Gate & Outcome**: needs a gate dir. Promote or reject, and which checks failed. "
+            "Until a gate dir is chosen the round shows `ROUND IN PROGRESS`; that is expected for a baseline alone.\n"
+            "5. **Follow a Task**: one task before the fix, the fix, and after. The `after` column needs a "
+            "second baseline run made with a trained adapter, so it stays empty until a trained round exists.\n\n"
+            "A baseline run alone answers: *how bad is the student and why?*")
+
+
 def render_header(data: RoundData) -> None:
+    render_run_kind_banner(data.baseline_dir)
     render_demo_banner(data.baseline_dir)
     decision = data.gate_decision
     outcome_state = "pending"
@@ -708,6 +809,29 @@ def tab_history(data: RoundData) -> None:
     )
 
 
+def render_pull_runs_button() -> None:
+    """Copy runs the team's cloud jobs uploaded to GCS that are not in runs/ yet. Needs gcloud."""
+    if gcs_runs.gcloud_binary() is None:
+        return  # e.g. the Hugging Face Space image has no gcloud
+    owner_choice = st.sidebar.selectbox("Pull runs from GCS", ["all", *gcs_runs.OWNERS], key="pull_owner")
+    if not st.sidebar.button("Pull new runs", width="stretch"):
+        return
+    owners = list(gcs_runs.OWNERS) if owner_choice == "all" else [owner_choice]
+    with st.sidebar, st.spinner("Copying from GCS..."):
+        try:
+            results = gcs_runs.pull_runs(owners, RUNS_DIR)
+        except RuntimeError as error:
+            st.sidebar.error(str(error))
+            return
+    pulled = [result.run_name for result in results if result.status == "pulled"]
+    failed = [f"{result.run_name}: {result.detail}" for result in results if result.status == "failed"]
+    message = f"Pulled {len(pulled)} new run(s): {', '.join(pulled) or 'none, already up to date'}"
+    if failed:
+        message += ". FAILED: " + "; ".join(failed)
+    st.session_state["pull_message"] = message
+    st.rerun()
+
+
 def main() -> None:
     st.set_page_config(page_title="Shipwright control room", layout="wide")
     st.title("Shipwright: the loop, round by round")
@@ -715,7 +839,7 @@ def main() -> None:
 
     demo_ready = all((RUNS_DIR / DEMO_SCENARIO[k]).exists() for k in ("baseline", "sft", "gate", "after"))
     if demo_ready:
-        if st.sidebar.button("Load demo scenario", width="stretch", type="primary"):
+        if st.sidebar.button("Show staged demo (invented data)", width="stretch", type="primary"):
             st.session_state["baseline_choice"] = DEMO_SCENARIO["baseline"]
             st.session_state["sft_choice"] = DEMO_SCENARIO["sft"]
             st.session_state["gate_choice"] = DEMO_SCENARIO["gate"]
@@ -723,14 +847,17 @@ def main() -> None:
             st.session_state["task_id_choice"] = DEMO_SCENARIO["task"]
             st.rerun()
     else:
-        st.sidebar.caption("Run `scripts/demo_data.py` to enable the one-click demo scenario.")
+        st.sidebar.caption("Run `scripts/demo_data.py` to enable the staged demo.")
+    render_pull_runs_button()
+    if "pull_message" in st.session_state:
+        st.sidebar.success(st.session_state.pop("pull_message"))
     st.sidebar.divider()
 
     st.sidebar.header("Round")
-    baseline_dir = _pick_dir("Baseline run", "baseline-", "baseline")
+    baseline_dir = _pick_dir("Baseline run (the agent run being judged)", "baseline", "baseline")
     advanced = st.sidebar.expander("+ teacher, gate, round #")
-    sft_dir = _pick_dir("Teacher/SFT output dir", "sft-", "sft", container=advanced)
-    gate_dir = _pick_dir("Gate-eval output dir", "gate-", "gate", container=advanced)
+    sft_dir = _pick_dir("Teacher/SFT output dir", "sft", "sft", container=advanced)
+    gate_dir = _pick_dir("Gate-eval output dir", "gate", "gate", container=advanced)
     round_num = advanced.number_input("Round number (patches/ledger.jsonl)", min_value=0, step=1, value=1)
 
     if baseline_dir is None or not baseline_dir.exists():
@@ -741,12 +868,13 @@ def main() -> None:
         return
 
     data = RoundData(baseline_dir, sft_dir, gate_dir, int(round_num))
+    render_reading_guide()
 
     st.sidebar.divider()
     st.sidebar.header("Follow a task")
     task_ids = sorted({str(t.get("task_id")) for t in data.traces if t.get("task_id") is not None})
     task_id = st.sidebar.selectbox("Task id", [""] + task_ids, key="task_id_choice") if task_ids else ""
-    after_dir = _pick_dir("Compare to (after)", "baseline-", "after")
+    after_dir = _pick_dir("Compare to (after, a run made with the trained adapter)", "baseline", "after", default_to_real_run=False)
 
     render_header(data)
     st.divider()
