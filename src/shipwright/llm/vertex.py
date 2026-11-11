@@ -177,7 +177,12 @@ class TokenProvider:
 
                 source = getattr(self._fetch, "__name__", "fetch")
                 with instrument.external("token_fetch", source, refresh=self.fetches > 0):
-                    got = retry.call_with_retry(self._fetch, policy=TOKEN_POLICY, what=f"token_fetch {source}")
+                    try:
+                        got = retry.call_with_retry(self._fetch, policy=TOKEN_POLICY, what=f"token_fetch {source}")
+                    except RuntimeError:
+                        raise
+                    except Exception as e:  # callers expect RuntimeError for "no token"
+                        raise RuntimeError(f"{source} token failed: {type(e).__name__}: {str(e)[:200]}") from None
                 if isinstance(got, tuple):
                     self._token, expires_in = got
                     self._ttl = max(0.0, min(self._max_age, expires_in - TOKEN_EXPIRY_MARGIN_S))

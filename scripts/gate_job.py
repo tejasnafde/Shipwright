@@ -174,22 +174,27 @@ def main(argv: list[str] | None = None) -> int:
     secrets = {"HF_TOKEN": token}
     if on_vertex:
         try:
-            secrets["SHIPWRIGHT_VERTEX_TOKEN"] = vertex.metadata_token()[0] if vertex.on_gcp() else vertex.gcloud_token()
+            # A fresh provider: a new token (metadata server on GCP, else gcloud), fetched with retries.
+            secrets["SHIPWRIGHT_VERTEX_TOKEN"] = vertex.TokenProvider().get()
         except RuntimeError as e:
             print(f"Vertex token: {e}", file=sys.stderr)
             return 2
+    from shipwright.observability import instrument, retry
+
     api = HfApi(token=token)
-    api.create_repo(args.runs_repo, repo_type="dataset", exist_ok=True, private=False)
+    retry.call_with_retry(api.create_repo, args.runs_repo, repo_type="dataset", exist_ok=True, private=False,
+                          what="hf_hub create_repo")
     with tempfile.TemporaryDirectory() as tmp:
         tar = Path(tmp) / "code.tar.gz"
         pack_bundle(tar)
-        from shipwright.observability import instrument
-
         with instrument.external("hf_hub_upload", f"datasets/{args.runs_repo}/{bundle}"):
-            api.upload_file(path_or_fileobj=str(tar), path_in_repo=bundle, repo_id=args.runs_repo,
-                            repo_type="dataset", commit_message=f"gate round {args.round}: code {sha}")
+            retry.call_with_retry(api.upload_file, path_or_fileobj=str(tar), path_in_repo=bundle,
+                                  repo_id=args.runs_repo, repo_type="dataset",
+                                  commit_message=f"gate round {args.round}: code {sha}", what="hf_hub_upload")
     with instrument.external("hf_job_launch", f"{args.flavor} {GATE_SCRIPT.name}", timeout=args.timeout) as call:
-        job = run_uv_job(
+        # retry.LAUNCH: retried only when the request surely did not start a (paid) job
+        job = retry.call_with_retry(
+            run_uv_job,
             str(GATE_SCRIPT),
             script_args=script_args(args, bundle),
             flavor=args.flavor,
@@ -198,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
             labels={"app": "lexsi-hackathon", "round": f"round-{args.round}", "step": "gate"},
             namespace=args.namespace,
             token=token,
+            policy=retry.LAUNCH,
+            what="hf_job_launch",
         )
         call["job_id"] = job.id
     print(f"\nLaunched job {job.id}: {getattr(job, 'url', '')}")

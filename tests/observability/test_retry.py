@@ -111,3 +111,21 @@ def test_decorator_and_retry_log_line(caplog):
     with caplog.at_level(logging.WARNING):
         assert fn() == 2
     assert any("retry unit" in r.getMessage() for r in caplog.records)
+
+
+def test_async_form():
+    import asyncio
+
+    errs = [HTTPError(503)]
+    waits = []
+
+    async def fn():
+        if errs:
+            raise errs.pop()
+        return "ok"
+
+    async def sleep(s):
+        waits.append(s)
+
+    assert asyncio.run(retry.acall_with_retry(fn, sleep=sleep)) == "ok"
+    assert len(waits) == 1

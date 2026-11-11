@@ -342,6 +342,29 @@ Research artifact for the Lexsi AI Safety and Alignment Hackathon. Non-commercia
 """
 
 
+
+def hub_retry(fn, *args, **kwargs):
+    """Hub calls after a paid training run must not be lost to a transient error.
+
+    The one exception to "use shipwright.observability.retry": this PEP 723 script runs alone in
+    an HF Job, without the shipwright package. Same rule as retry.DEFAULT: 5 tries, backoff from
+    2 s with jitter, only 408/409/425/429/5xx and connection or timeout errors."""
+    import random
+    import time
+
+    for attempt in range(1, 6):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:  # noqa: BLE001
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            transient = status in (408, 409, 425, 429, 500, 502, 503, 504) or (
+                status is None and any(n in type(e).__name__ for n in ("Timeout", "Connection")))
+            if attempt == 5 or not transient:
+                raise
+            wait = min(60.0, 2.0 * 2 ** (attempt - 1) * (0.5 + random.random()))
+            print(f"retry {fn.__name__}: attempt {attempt}, wait {wait:.1f}s, {type(e).__name__}", flush=True)
+            time.sleep(wait)
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     from agenttune import create_distill_trainer
@@ -393,10 +416,10 @@ def main(argv: list[str] | None = None) -> int:
         from huggingface_hub import HfApi
 
         api = HfApi(token=os.environ.get("HF_TOKEN"))
-        api.create_repo(args.output_repo, exist_ok=True, private=False)
-        api.create_branch(args.output_repo, branch=args.revision, exist_ok=True)
-        api.upload_folder(folder_path=str(out), repo_id=args.output_repo, revision=args.revision,
-                          commit_message=f"LoRA {args.revision}: loss {loss}")
+        hub_retry(api.create_repo, args.output_repo, exist_ok=True, private=False)
+        hub_retry(api.create_branch, args.output_repo, branch=args.revision, exist_ok=True)
+        hub_retry(api.upload_folder, folder_path=str(out), repo_id=args.output_repo, revision=args.revision,
+                  commit_message=f"LoRA {args.revision}: loss {loss}")
         print(f"Pushed https://huggingface.co/{args.output_repo}/tree/{args.revision}", flush=True)
     return 0
 

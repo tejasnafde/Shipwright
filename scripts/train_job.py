@@ -85,10 +85,12 @@ def main(argv: list[str] | None = None) -> int:
     if not token:
         print("No HF token: expected $SWITCHBOARD_SECRETS_DIR/HF_TOKEN or $HF_TOKEN.", file=sys.stderr)
         return 2
-    from shipwright.observability import instrument
+    from shipwright.observability import instrument, retry
 
     with instrument.external("hf_job_launch", f"{args.flavor} {TRAIN_SCRIPT.name}", timeout=args.timeout) as call:
-        job = run_uv_job(
+        # retry.LAUNCH: retried only when the request surely did not start a (paid) job
+        job = retry.call_with_retry(
+            run_uv_job,
             str(TRAIN_SCRIPT),
             script_args=script_args,
             flavor=args.flavor,
@@ -97,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
             labels={"app": "lexsi-hackathon", "round": args.revision},
             namespace=args.namespace,
             token=token,
+            policy=retry.LAUNCH,
+            what="hf_job_launch",
         )
         call["job_id"] = job.id
     print(f"\nLaunched job {job.id}: {getattr(job, 'url', '')}")

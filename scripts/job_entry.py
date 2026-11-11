@@ -43,7 +43,7 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from shipwright.observability import instrument, log, otel_live, report, repro  # noqa: E402
+from shipwright.observability import instrument, log, otel_live, report, repro, retry  # noqa: E402
 from shipwright.llm import vertex  # noqa: E402
 
 logger = log.get_logger("job_entry")
@@ -74,10 +74,13 @@ TOKENS = vertex.TokenProvider(fetch=vertex.metadata_token)
 def upload(client: httpx.Client, bucket: str, name: str, data: bytes) -> None:
     token = TOKENS.get()
     with instrument.external("gcs_upload", f"gs://{bucket}/{name}", bytes=len(data)) as call:
-        r = client.post(UPLOAD_URL.format(bucket=bucket, name=quote(name, safe="")), content=data,
-                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/octet-stream"})
-        call["status"] = r.status_code
-        r.raise_for_status()
+        def once() -> None:  # a GCS object upload is idempotent: same name, same bytes
+            r = client.post(UPLOAD_URL.format(bucket=bucket, name=quote(name, safe="")), content=data,
+                            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/octet-stream"})
+            call["status"] = r.status_code
+            r.raise_for_status()
+
+        retry.call_with_retry(once, what="gcs_upload")
 
 
 def split_fetch(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -97,21 +100,28 @@ def fetch_dir(client: httpx.Client, bucket: str, prefix: str, runs: Path) -> int
     if not name or name in (".", ".."):
         raise ValueError(f"bad --fetch value {prefix!r}")
     headers = {"Authorization": f"Bearer {TOKENS.get()}"}
+
+    def get(url: str, params: dict | None = None) -> httpx.Response:
+        r = client.get(url, params=params, headers=headers)
+        r.raise_for_status()
+        return r
+
+    def get_json(url: str, params: dict) -> dict:
+        return get(url, params).json()
+
     count, page = 0, None
     with instrument.external("gcs_download", f"gs://{bucket}/{prefix}/"):
         while True:
             params = {"prefix": prefix + "/", "fields": "items(name),nextPageToken"}
             if page:
                 params["pageToken"] = page
-            r = client.get(LIST_URL.format(bucket=bucket), params=params, headers=headers)
-            r.raise_for_status()
-            body = r.json()
+            body = retry.call_with_retry(get_json, LIST_URL.format(bucket=bucket), params, what="gcs_list")
             for item in body.get("items", []):
                 rel = item["name"][len(prefix) + 1:]
                 if not rel or rel.endswith("/") or ".." in Path(rel).parts:
                     continue
-                obj = client.get(OBJECT_URL.format(bucket=bucket, name=quote(item["name"], safe="")), headers=headers)
-                obj.raise_for_status()
+                obj = retry.call_with_retry(get, OBJECT_URL.format(bucket=bucket, name=quote(item["name"], safe="")),
+                                            what="gcs_download")
                 dest = runs / name / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(obj.content)
