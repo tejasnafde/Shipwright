@@ -3,7 +3,8 @@
 Without --launch this prints the plan and the cost estimate only: nothing is uploaded,
 nothing runs, nothing is billed. With --launch it
 
-1. packs the committed code (git archive HEAD: src, scripts, configs, patches, pyproject.toml)
+1. packs the committed code (git archive HEAD: src, scripts, configs, patches, pyproject.toml;
+   inside the Cloud Run job, which has no .git, the same paths from the image)
    and uploads it to <runs-repo>/gate/round-N/code/ (the repo is private, so the job
    cannot clone it),
 2. submits gate_eval.py with an explicit timeout (HF Jobs stop after 30 minutes by default).
@@ -67,6 +68,38 @@ def git(*args: str) -> str:
     return subprocess.check_output(["git", "-C", str(ROOT), *args], text=True).strip()
 
 
+def has_git() -> bool:
+    """False in the harness image (Cloud Run Jobs): it has no .git, only the built tree."""
+    return (ROOT / ".git").exists()
+
+
+def code_sha() -> str:
+    """Short sha of the code: git HEAD, or the image's SHIPWRIGHT_GIT_SHA."""
+    if has_git():
+        return git("rev-parse", "--short", "HEAD")
+    import os
+
+    sha = os.environ.get("SHIPWRIGHT_GIT_SHA", "").strip()
+    return sha[:7] if sha else "nogit"
+
+
+def pack_bundle(tar: Path) -> None:
+    """git archive HEAD of BUNDLE_PATHS; without .git, a tar of the same paths as built into the image."""
+    if has_git():
+        subprocess.check_call(["git", "-C", str(ROOT), "archive", "--format=tar.gz", "-o", str(tar), "HEAD",
+                               "--", *BUNDLE_PATHS])
+        return
+    import tarfile
+
+    def skip(info: tarfile.TarInfo) -> tarfile.TarInfo | None:
+        return None if "__pycache__" in info.name or info.name.endswith(".pyc") else info
+
+    with tarfile.open(tar, "w:gz") as tf:
+        for name in BUNDLE_PATHS:
+            if (ROOT / name).exists():
+                tf.add(ROOT / name, arcname=name, filter=skip)
+
+
 def script_args(args: argparse.Namespace, bundle: str) -> list[str]:
     out = ["--in-job", "--round", str(args.round), "--config", rel(args.config),
            "--current", rel(args.current), "--candidate", rel(args.candidate),
@@ -92,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
 
     on_vertex = vertex.is_vertex_model(args.user_model)
     user_cost = runs * USER_COST_PER_RUN["vertex" if on_vertex else "hf_router"]
-    sha = git("rev-parse", "--short", "HEAD")
+    sha = code_sha()
     bundle = f"gate/round-{args.round}/code/shipwright-{sha}.tar.gz"
     targets = args.target_label if args.target_label is not None else systems["candidate"]["targets"]
 
@@ -124,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
           f"{systems['candidate']['name']}")
     print(f"code:      git HEAD {sha} -> {bundle}")
     print(f"namespace: {args.namespace or 'token owner'}")
-    dirty = git("status", "--porcelain", "--", *BUNDLE_PATHS)
+    dirty = git("status", "--porcelain", "--", *BUNDLE_PATHS) if has_git() else ""
     if dirty:
         print("\nwarning: uncommitted changes in the bundle paths are NOT included (git archive HEAD)")
     if not args.launch:
@@ -141,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
     secrets = {"HF_TOKEN": token}
     if on_vertex:
         try:
-            secrets["SHIPWRIGHT_VERTEX_TOKEN"] = vertex.gcloud_token()
+            secrets["SHIPWRIGHT_VERTEX_TOKEN"] = vertex.metadata_token()[0] if vertex.on_gcp() else vertex.gcloud_token()
         except RuntimeError as e:
             print(f"Vertex token: {e}", file=sys.stderr)
             return 2
@@ -149,8 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     api.create_repo(args.runs_repo, repo_type="dataset", exist_ok=True, private=False)
     with tempfile.TemporaryDirectory() as tmp:
         tar = Path(tmp) / "code.tar.gz"
-        subprocess.check_call(["git", "-C", str(ROOT), "archive", "--format=tar.gz", "-o", str(tar), "HEAD",
-                               "--", *BUNDLE_PATHS])
+        pack_bundle(tar)
         from shipwright.observability import instrument
 
         with instrument.external("hf_hub_upload", f"datasets/{args.runs_repo}/{bundle}"):
