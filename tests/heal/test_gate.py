@@ -240,9 +240,9 @@ def test_min_valid_runs_zero_is_refused():
         g.validate_config(cfg(min_valid_runs=0))
 
 
-def test_repo_gate_config_is_valid_and_proposed():
+def test_repo_gate_config_is_valid_and_frozen():
     c = g.load_config(ROOT / "configs" / "gate.yaml")
-    assert c["status"] == "proposed"
+    assert c["status"] == "frozen"
     assert c["heldout"] == {"domain": "retail", "task_split": "test", "num_tasks": 20}
     assert c["k"] == 3 and g.required_valid_runs(c) == 54  # 90% of 20 held-out tasks x 3
 

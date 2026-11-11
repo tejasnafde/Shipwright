@@ -121,3 +121,23 @@ def test_load_run_needs_failures(tmp_path):
     assert run["tools"][0]["function"]["name"] == "get_user_details"
     m = em.compute_metrics(run, k=1)
     assert m["pass_1"] == 1.0 and m["auditkit"]["tool_call_validity"] is not None
+
+
+def test_wilson_interval_matches_published_reference():
+    # 30/30, 95%: "consistent with a true rate of about 88% to 100%"
+    # (github.com/Timidan/lexsi-hack's own 30-task held-out claim) - same n and k.
+    lo, hi = em.wilson_interval(30, 30)
+    assert 0.88 < lo < 0.89 and hi == 1.0
+
+
+def test_wilson_interval_zero_n_and_midpoint():
+    assert em.wilson_interval(0, 0) is None
+    lo, hi = em.wilson_interval(10, 20)
+    assert lo < 0.5 < hi and hi - lo < 0.45  # tighter than the naive +-50% extremes
+
+
+def test_pass_metrics_reports_pooled_ci():
+    traces = with_trials(load("passed_run"), 3)
+    m = em.pass_metrics(em.reliability_rows(traces, k=3), k=3)
+    assert m["pass_1"] == 1.0
+    assert m["pass_1_ci"] is not None and m["pass_1_ci"][1] == 1.0

@@ -47,18 +47,24 @@ def load_run(run_dir: Path) -> dict:
     failures_path = run_dir / "failures.jsonl"
     if not failures_path.exists():
         raise FileNotFoundError(f"{failures_path} missing: run scripts/classify.py on the run first")
-    cfg_path = run_dir / "run_config.json"
-    prompts_path = run_dir / "prompts.json"
+
+    run_config_path = run_dir / "run_config.json"
+    if run_config_path.exists():
+        run_config = json.loads(run_config_path.read_text())
+    else:
+        run_config = {}
+
     tools: list[dict] = []
+    prompts_path = run_dir / "prompts.json"
     if prompts_path.exists():
-        prompts = json.loads(prompts_path.read_text())
-        if prompts:
-            tools = next(iter(prompts.values())).get("tools") or []
+        prompts_by_sha = json.loads(prompts_path.read_text())
+        if prompts_by_sha:
+            tools = next(iter(prompts_by_sha.values())).get("tools") or []
     return {
         "run_dir": str(run_dir),
         "traces": _jsonl(run_dir / "traces.jsonl"),
         "failures": _jsonl(failures_path),
-        "run_config": json.loads(cfg_path.read_text()) if cfg_path.exists() else {},
+        "run_config": run_config,
         "tools": tools,
     }
 
@@ -71,44 +77,51 @@ def is_infra_error(trace: dict) -> bool:
 
 def trace_to_openai_messages(messages: list[dict]) -> list[dict]:
     """tau2 messages (as saved in traces.jsonl) -> OpenAI chat messages for AuditKIT."""
-    out: list[dict] = []
-    for m in messages:
-        role = m.get("role")
+    openai_messages: list[dict] = []
+    for message in messages:
+        role = message.get("role")
         if role == "assistant":
-            msg: dict[str, Any] = {"role": "assistant", "content": m.get("content")}
-            calls = m.get("tool_calls") or []
-            if calls:
-                msg["tool_calls"] = [{
-                    "id": tc.get("id"),
-                    "type": "function",
-                    "function": {"name": tc.get("name"),
-                                 "arguments": json.dumps(tc.get("arguments") or {})},
-                } for tc in calls]
-            out.append(msg)
+            openai_message: dict[str, Any] = {"role": "assistant", "content": message.get("content")}
+            tool_calls = message.get("tool_calls") or []
+            if tool_calls:
+                openai_message["tool_calls"] = [
+                    {
+                        "id": tool_call.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": tool_call.get("name"),
+                            "arguments": json.dumps(tool_call.get("arguments") or {}),
+                        },
+                    }
+                    for tool_call in tool_calls
+                ]
+            openai_messages.append(openai_message)
         elif role == "tool":
-            out.append({"role": "tool", "tool_call_id": m.get("id"), "content": m.get("content") or ""})
+            openai_messages.append(
+                {"role": "tool", "tool_call_id": message.get("id"), "content": message.get("content") or ""}
+            )
         elif role in ("user", "system"):
-            out.append({"role": role, "content": m.get("content") or ""})
-    return out
+            openai_messages.append({"role": role, "content": message.get("content") or ""})
+    return openai_messages
 
 
 def final_answer(messages: list[dict]) -> str | None:
-    for m in reversed(messages):
-        if m.get("role") == "assistant" and m.get("content") and not m.get("tool_calls"):
-            return m["content"]
+    for message in reversed(messages):
+        if message.get("role") == "assistant" and message.get("content") and not message.get("tool_calls"):
+            return message["content"]
     return None
 
 
 def reference_turns(trace: dict) -> list[list[dict]] | None:
     """The task's expected assistant actions (tau2 ``action_checks``), one call per turn."""
-    checks = (trace.get("reward_info") or {}).get("action_checks")
-    if checks is None:
+    action_checks = (trace.get("reward_info") or {}).get("action_checks")
+    if action_checks is None:
         return None
     turns = []
-    for c in checks:
-        a = c.get("action") or {}
-        if a.get("requestor", "assistant") == "assistant" and a.get("name"):
-            turns.append([{"name": a["name"], "arguments": a.get("arguments") or {}}])
+    for action_check in action_checks:
+        action = action_check.get("action") or {}
+        if action.get("requestor", "assistant") == "assistant" and action.get("name"):
+            turns.append([{"name": action["name"], "arguments": action.get("arguments") or {}}])
     return turns
 
 
@@ -117,41 +130,59 @@ def episode_from_trace(trace: dict, case_id: str | None = None):
     from auditkit.agent_eval import episode_from_openai_messages
 
     messages = trace.get("messages") or []
-    ep = episode_from_openai_messages(
+    if case_id is None:
+        case_id = trace.get("task_id")
+    episode = episode_from_openai_messages(
         trace_to_openai_messages(messages),
-        case_id=str(case_id if case_id is not None else trace.get("task_id")),
+        case_id=str(case_id),
         source_id=str(trace.get("simulation_id")),
         final_answer=final_answer(messages),
         source="shipwright_tau2",
     )
-    ep.trial_id = str(trace.get("simulation_id"))
-    ep.source_reward = trace.get("reward")
+    episode.trial_id = str(trace.get("simulation_id"))
+    episode.source_reward = trace.get("reward")
     if not is_infra_error(trace) and trace.get("reward") is not None:
-        ep.final_state = {PASS_KEY: bool(trace.get("passed")), "tau2_reward": trace.get("reward")}
-        ep.coverage["final_state"] = "observed"
-    return ep
+        episode.final_state = {PASS_KEY: bool(trace.get("passed")), "tau2_reward": trace.get("reward")}
+        episode.coverage["final_state"] = "observed"
+    return episode
 
 
-def _case(case_id: str, task: str, tools: list[dict] | None, ref: list | None):
+def _case(case_id: str, task: str, tools: list[dict] | None, reference_turn_list: list | None):
     from auditkit.agent_eval import AgentCase, FinalStateAssertion
 
-    return AgentCase(id=case_id, task=task, category="tau2",
-                     allowed_tools=tools or None, reference_turns=ref,
-                     outcome=FinalStateAssertion(PASS_KEY, equals=True))
+    return AgentCase(
+        id=case_id,
+        task=task,
+        category="tau2",
+        allowed_tools=tools or None,
+        reference_turns=reference_turn_list,
+        outcome=FinalStateAssertion(PASS_KEY, equals=True),
+    )
 
 
 def reliability_rows(traces: list[dict], k: int) -> list:
     """AuditKIT rows, one per task, aggregating its trials (recorded mode)."""
     from auditkit.agent_eval import AgentEvalRunner, AgentEvalSpec
 
-    by_task: dict[str, list[dict]] = {}
-    for t in traces:
-        by_task.setdefault(str(t.get("task_id")), []).append(t)
-    trials = max((len(v) for v in by_task.values()), default=1)
-    episodes = [episode_from_trace(t) for ts in by_task.values() for t in ts]
-    cases = [_case(tid, f"tau2 task {tid}", None, None) for tid in by_task]
-    spec = AgentEvalSpec(cases=cases, mode="recorded", episodes=episodes, trials=max(trials, 1),
-                         reliability_k=k, reset_confirmed=True, scorers=[], name="shipwright-gate-reliability")
+    traces_by_task_id: dict[str, list[dict]] = {}
+    for trace in traces:
+        traces_by_task_id.setdefault(str(trace.get("task_id")), []).append(trace)
+
+    trials_per_task = max((len(task_traces) for task_traces in traces_by_task_id.values()), default=1)
+    episodes = [
+        episode_from_trace(trace) for task_traces in traces_by_task_id.values() for trace in task_traces
+    ]
+    cases = [_case(task_id, f"tau2 task {task_id}", None, None) for task_id in traces_by_task_id]
+    spec = AgentEvalSpec(
+        cases=cases,
+        mode="recorded",
+        episodes=episodes,
+        trials=max(trials_per_task, 1),
+        reliability_k=k,
+        reset_confirmed=True,
+        scorers=[],
+        name="shipwright-gate-reliability",
+    )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return AgentEvalRunner().run(spec).rows
@@ -161,16 +192,23 @@ def diagnostic_rows(traces: list[dict], tools: list[dict] | None) -> list:
     """AuditKIT rows, one per run, with the trajectory diagnostics."""
     from auditkit.agent_eval import AgentEvalRunner, AgentEvalSpec
 
-    valid = [t for t in traces if not is_infra_error(t)]
+    valid_traces = [trace for trace in traces if not is_infra_error(trace)]
     episodes, cases = [], []
-    for t in valid:
-        cid = str(t.get("simulation_id"))
-        episodes.append(episode_from_trace(t, case_id=cid))
-        cases.append(_case(cid, f"tau2 task {t.get('task_id')}", tools, reference_turns(t)))
+    for trace in valid_traces:
+        case_id = str(trace.get("simulation_id"))
+        episodes.append(episode_from_trace(trace, case_id=case_id))
+        cases.append(_case(case_id, f"tau2 task {trace.get('task_id')}", tools, reference_turns(trace)))
     if not cases:
         return []
-    spec = AgentEvalSpec(cases=cases, mode="recorded", episodes=episodes, trials=1,
-                         scorers=DIAGNOSTIC_SCORERS, name="shipwright-gate-diagnostics")
+
+    spec = AgentEvalSpec(
+        cases=cases,
+        mode="recorded",
+        episodes=episodes,
+        trials=1,
+        scorers=DIAGNOSTIC_SCORERS,
+        name="shipwright-gate-diagnostics",
+    )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return AgentEvalRunner().run(spec).rows
@@ -179,118 +217,184 @@ def diagnostic_rows(traces: list[dict], tools: list[dict] | None) -> list:
 # ---------------------------------------------------------------- metrics
 
 def _mean(values: list[float]) -> float | None:
-    return sum(values) / len(values) if values else None
+    if values:
+        return sum(values) / len(values)
+    return None
+
+
+def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float] | None:
+    """Wilson score interval for a binomial proportion (default: 95%).
+
+    More reliable than the normal approximation at small n or p near 0/1 - exactly the
+    regime our held-out set (20 tasks) and gate samples sit in. A result like "20/20" is
+    not the same claim as "the true rate is 100%"; this is the same framing a different
+    Track 3 team used for their own 30-task held-out claim ("consistent with a true rate
+    of 88-100%", github.com/Timidan/lexsi-hack) rather than reporting a bare percentage
+    the sample size cannot support.
+    """
+    if n == 0:
+        return None
+    observed_rate = successes / n
+    denominator = 1 + z * z / n
+    center = (observed_rate + z * z / (2 * n)) / denominator
+    margin = (z * ((observed_rate * (1 - observed_rate) / n + z * z / (4 * n * n)) ** 0.5)) / denominator
+    return (round(max(0.0, center - margin), 4), round(min(1.0, center + margin), 4))
 
 
 def pass_metrics(rows: list, k: int) -> dict:
     """pass^1 and pass^k from AuditKIT rows (one per task).
 
-    pass^1: mean over tasks of successes / decided trials.
+    pass^1: mean over tasks of successes / decided trials. ``pass_1_ci`` is a 95% Wilson
+    interval on the pooled (successes, decided trials) count across all tasks - the
+    standard pass@1 convention of treating every decided trial as one Bernoulli draw, same
+    as pass@k literature generally does, not a claim that trials within one task are fully
+    independent of task difficulty.
     pass^k: mean over tasks of AuditKIT ``all_k``, only for tasks with at least k decided
     trials (AuditKIT would silently lower k otherwise). Other tasks are counted, not scored.
     """
-    p1, pk = [], []
+    task_pass_1_rates = []
+    task_pass_k_values = []
+    total_successes = 0
+    total_decided = 0
     per_task = {}
     for row in rows:
-        rel = row.reliability
-        if rel:
-            n_s, n_d = rel["n_success"], rel["n_decided"]
-            all_k = rel.get("all_k") if rel.get("k") == k and n_d >= k else None
+        reliability = row.reliability
+        if reliability:
+            success_count = reliability["n_success"]
+            decided_count = reliability["n_decided"]
+            has_k_decided_trials = reliability.get("k") == k and decided_count >= k
+            pass_k = reliability.get("all_k") if has_k_decided_trials else None
         else:  # a single trial: no reliability dict
             verdict = (row.outcome or {}).get("verdict")
-            n_s, n_d = int(verdict == "success"), int(verdict in ("success", "failure"))
-            all_k = float(n_s) if k == 1 and n_d == 1 else None
-        if n_d:
-            p1.append(n_s / n_d)
-        if all_k is not None:
-            pk.append(all_k)
-        per_task[row.case_id] = {"n_success": n_s, "n_decided": n_d, "pass_k": all_k}
-    return {"pass_1": _mean(p1), "pass_k": _mean(pk), "num_tasks_scored": len(p1),
-            "num_tasks_complete": len(pk), "per_task": per_task}
+            success_count = int(verdict == "success")
+            decided_count = int(verdict in ("success", "failure"))
+            pass_k = float(success_count) if k == 1 and decided_count == 1 else None
+
+        if decided_count:
+            task_pass_1_rates.append(success_count / decided_count)
+            total_successes += success_count
+            total_decided += decided_count
+        if pass_k is not None:
+            task_pass_k_values.append(pass_k)
+        per_task[row.case_id] = {"n_success": success_count, "n_decided": decided_count, "pass_k": pass_k}
+
+    return {
+        "pass_1": _mean(task_pass_1_rates),
+        "pass_1_ci": wilson_interval(total_successes, total_decided),
+        "pass_k": _mean(task_pass_k_values),
+        "num_tasks_scored": len(task_pass_1_rates),
+        "num_tasks_complete": len(task_pass_k_values),
+        "per_task": per_task,
+    }
 
 
 def diagnostic_metrics(rows: list) -> dict:
-    vals: dict[str, list[float]] = {}
-    ineligible: Counter = Counter()
+    values_by_name: dict[str, list[float]] = {}
+    ineligible_counts: Counter = Counter()
     for row in rows:
-        for name, d in (row.diagnostics or {}).items():
-            if isinstance(d, dict) and isinstance(d.get("value"), (int, float)):
-                vals.setdefault(name, []).append(float(d["value"]))
-        for name, why in (row.ineligible or {}).items():
-            ineligible[f"{name}: {why}"] += 1
-    keep = ("tool_call_f1", "tool_call_precision", "tool_call_recall", "tool_call_exact",
-            "tool_call_validity", "redundant_tool_calls")
-    out: dict[str, Any] = {name: _mean(vals.get(name, [])) for name in keep}
-    out["ineligible"] = dict(ineligible)
-    return out
+        for name, diagnostic in (row.diagnostics or {}).items():
+            if isinstance(diagnostic, dict) and isinstance(diagnostic.get("value"), (int, float)):
+                values_by_name.setdefault(name, []).append(float(diagnostic["value"]))
+        for name, reason in (row.ineligible or {}).items():
+            ineligible_counts[f"{name}: {reason}"] += 1
+
+    reported_names = (
+        "tool_call_f1", "tool_call_precision", "tool_call_recall", "tool_call_exact",
+        "tool_call_validity", "redundant_tool_calls",
+    )
+    metrics: dict[str, Any] = {name: _mean(values_by_name.get(name, [])) for name in reported_names}
+    metrics["ineligible"] = dict(ineligible_counts)
+    return metrics
 
 
 def label_rates(failures: list[dict], valid_ids: set[str], num_valid: int) -> dict[str, float]:
     """Share of valid runs whose failure row carries each label."""
-    counts: Counter = Counter()
-    for row in failures:
-        if str(row.get("simulation_id")) not in valid_ids:
+    run_counts_by_label: Counter = Counter()
+    for failure in failures:
+        if str(failure.get("simulation_id")) not in valid_ids:
             continue
-        counts.update(set(row.get("labels") or []))
-    return {lab: n / num_valid for lab, n in counts.most_common()} if num_valid else {}
+        run_counts_by_label.update(set(failure.get("labels") or []))
+    if not num_valid:
+        return {}
+    return {label: run_count / num_valid for label, run_count in run_counts_by_label.most_common()}
 
 
 def tool_counts(traces: list[dict]) -> dict:
     """Tool calls, failed tool calls (malformed, unknown tool, or a tool error result),
     prompted-JSON parse failures and agent turns, over the given traces."""
-    calls = errors = parse_failures = turns = 0
-    for t in traces:
-        for turn in t.get("agent_turns") or []:
-            turns += 1
-            parse_failures += int(turn.get("tool_call_parse") == "parse_failed")
-            failed = {r.get("id") for r in turn.get("tool_results") or [] if r.get("error")}
-            for tc in turn.get("parsed_tool_calls") or []:
-                calls += 1
-                bad = tc.get("malformed_arguments") or tc.get("unknown_tool") or tc.get("id") in failed
-                errors += int(bool(bad))
-    return {"tool_calls": calls, "errors": errors, "parse_failures": parse_failures, "agent_turns": turns}
+    call_count = error_count = parse_failure_count = turn_count = 0
+    for trace in traces:
+        for turn in trace.get("agent_turns") or []:
+            turn_count += 1
+            parse_failure_count += int(turn.get("tool_call_parse") == "parse_failed")
+            failed_call_ids = {
+                result.get("id") for result in turn.get("tool_results") or [] if result.get("error")
+            }
+            for tool_call in turn.get("parsed_tool_calls") or []:
+                call_count += 1
+                is_failed_call = (
+                    tool_call.get("malformed_arguments")
+                    or tool_call.get("unknown_tool")
+                    or tool_call.get("id") in failed_call_ids
+                )
+                error_count += int(bool(is_failed_call))
+    return {
+        "tool_calls": call_count,
+        "errors": error_count,
+        "parse_failures": parse_failure_count,
+        "agent_turns": turn_count,
+    }
+
+
+def _ratio(numerator: float, denominator: float) -> float | None:
+    if denominator:
+        return numerator / denominator
+    return None
 
 
 def compute_metrics(run: dict, k: int, system: str | None = None) -> dict:
     """The gate's metric dict for one run (see module docstring)."""
     traces = run["traces"]
-    valid = [t for t in traces if not is_infra_error(t)]
-    valid_ids = {str(t.get("simulation_id")) for t in valid}
-    counts = tool_counts(valid)
-    tool_calls = counts["tool_calls"]
-    passes = pass_metrics(reliability_rows(traces, k), k)
-    cfg = run.get("run_config") or {}
-    trials_per_task = Counter(str(t.get("task_id")) for t in traces)
-    failed_valid = sum(1 for t in valid if not t.get("passed"))
+    valid_traces = [trace for trace in traces if not is_infra_error(trace)]
+    valid_ids = {str(trace.get("simulation_id")) for trace in valid_traces}
+    counts = tool_counts(valid_traces)
+    pass_scores = pass_metrics(reliability_rows(traces, k), k)
+    run_config = run.get("run_config") or {}
+    trials_per_task = Counter(str(trace.get("task_id")) for trace in traces)
+    failed_valid_count = sum(1 for trace in valid_traces if not trace.get("passed"))
     # Rows for passed runs that only AgentTune's detector flagged are evidence, not failures.
-    failures = [r for r in run["failures"] if r.get("outcome_failed") is not False]
+    failures = [failure for failure in run["failures"] if failure.get("outcome_failed") is not False]
+    failed_run_labels = [
+        {"simulation_id": str(failure.get("simulation_id")), "labels": failure.get("labels") or []}
+        for failure in failures
+        if str(failure.get("simulation_id")) in valid_ids
+    ]
     return {
         "system": system,
         "run_dir": run.get("run_dir"),
-        "agent_model": cfg.get("agent_model"),
-        "task_split": cfg.get("task_split"),
-        "active_tool_patches": cfg.get("active_tool_patches") or [],
+        "agent_model": run_config.get("agent_model"),
+        "task_split": run_config.get("task_split"),
+        "active_tool_patches": run_config.get("active_tool_patches") or [],
         "k": k,
-        "task_ids": sorted(trials_per_task, key=lambda x: (len(x), x)),
+        "task_ids": sorted(trials_per_task, key=lambda task_id: (len(task_id), task_id)),
         "num_tasks": len(trials_per_task),
         "num_runs": len(traces),
-        "num_valid_runs": len(valid),
-        "num_infra_errors": len(traces) - len(valid),
-        "pass_1": passes["pass_1"],
-        "pass_k": passes["pass_k"],
-        "num_tasks_scored": passes["num_tasks_scored"],
-        "num_tasks_complete": passes["num_tasks_complete"],
-        "per_task": passes["per_task"],
-        "failure_rate": failed_valid / len(valid) if valid else None,
-        "label_rates": label_rates(failures, valid_ids, len(valid)),
-        "tool_calls": tool_calls,
+        "num_valid_runs": len(valid_traces),
+        "num_infra_errors": len(traces) - len(valid_traces),
+        "pass_1": pass_scores["pass_1"],
+        "pass_1_ci": pass_scores["pass_1_ci"],
+        "pass_k": pass_scores["pass_k"],
+        "num_tasks_scored": pass_scores["num_tasks_scored"],
+        "num_tasks_complete": pass_scores["num_tasks_complete"],
+        "per_task": pass_scores["per_task"],
+        "failure_rate": _ratio(failed_valid_count, len(valid_traces)),
+        "label_rates": label_rates(failures, valid_ids, len(valid_traces)),
+        "tool_calls": counts["tool_calls"],
         "tool_call_errors": counts["errors"],
-        "tool_call_error_rate": counts["errors"] / tool_calls if tool_calls else None,
+        "tool_call_error_rate": _ratio(counts["errors"], counts["tool_calls"]),
         "tool_call_parse_failures": counts["parse_failures"],
-        "avg_steps": counts["agent_turns"] / len(valid) if valid else None,
+        "avg_steps": _ratio(counts["agent_turns"], len(valid_traces)),
         "auditkit": diagnostic_metrics(diagnostic_rows(traces, run.get("tools"))),
         # Labels of each failed valid run, for the gate's target / non-target checks.
-        "failed_run_labels": [{"simulation_id": str(r.get("simulation_id")), "labels": r.get("labels") or []}
-                      for r in failures if str(r.get("simulation_id")) in valid_ids],
+        "failed_run_labels": failed_run_labels,
     }
-

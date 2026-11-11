@@ -60,17 +60,19 @@ def prompt_budget() -> int:
 
 
 def count_messages(messages: list[dict]) -> int:
-    return sum(count_tokens(m.get("content") or "") + PER_MESSAGE_TOKENS for m in messages)
+    return sum(count_tokens(message.get("content") or "") + PER_MESSAGE_TOKENS for message in messages)
 
 
 def _merge_same_role(messages: list[dict]) -> list[dict]:
-    out: list[dict] = []
-    for m in messages:
-        if out and m["role"] == out[-1]["role"] and m["role"] != "system":
-            out[-1] = {"role": m["role"], "content": out[-1]["content"] + "\n\n" + m["content"]}
+    merged_messages: list[dict] = []
+    for message in messages:
+        previous_message = merged_messages[-1] if merged_messages else None
+        if previous_message and message["role"] == previous_message["role"] and message["role"] != "system":
+            merged_content = previous_message["content"] + "\n\n" + message["content"]
+            merged_messages[-1] = {"role": message["role"], "content": merged_content}
         else:
-            out.append(dict(m))
-    return out
+            merged_messages.append(dict(message))
+    return merged_messages
 
 
 def fit_messages(messages: list[dict], budget: int | None = None) -> tuple[list[dict], dict]:
@@ -96,35 +98,36 @@ def fit_messages(messages: list[dict], budget: int | None = None) -> tuple[list[
     last_pinned_role = pinned[-1]["role"] if pinned else None
 
     def drop_one() -> int:
-        n = 1
+        dropped_count = 1
         middle.pop(0)
         # Keep turns alternating: do not start the kept turns with the pinned role.
         while len(middle) > 1 and middle[0]["role"] == last_pinned_role:
             middle.pop(0)
-            n += 1
-        return n
+            dropped_count += 1
+        return dropped_count
 
     dropped = 0
-    out = assemble(middle, 0)
-    while len(middle) > 1 and count_messages(out) > budget:
+    fitted_messages = assemble(middle, 0)
+    while len(middle) > 1 and count_messages(fitted_messages) > budget:
         dropped += drop_one()
-        out = assemble(middle, dropped)
+        fitted_messages = assemble(middle, dropped)
 
-    over = count_messages(out) - budget
-    if over > 0 and middle:
-        last = middle[-1]
-        content = last["content"]
+    tokens_over_budget = count_messages(fitted_messages) - budget
+    if tokens_over_budget > 0 and middle:
+        last_message = middle[-1]
+        content = last_message["content"]
         # Characters to cut: over-budget tokens, at a low chars-per-token rate, then grow.
-        cut = min(len(content), math.ceil(over * 2.5) + 40)
+        chars_to_cut = min(len(content), math.ceil(tokens_over_budget * 2.5) + 40)
         while True:
-            keep = len(content) - cut
-            trial = middle[:-1] + [{**last, "content": f"{content[:keep]} [truncated {cut} chars]"}]
-            candidate = assemble(trial, dropped)
-            if count_messages(candidate) <= budget or keep == 0:
-                out = candidate
-                info["truncated_chars"] = cut
+            chars_to_keep = len(content) - chars_to_cut
+            truncated_content = f"{content[:chars_to_keep]} [truncated {chars_to_cut} chars]"
+            trial_middle = middle[:-1] + [{**last_message, "content": truncated_content}]
+            candidate_messages = assemble(trial_middle, dropped)
+            if count_messages(candidate_messages) <= budget or chars_to_keep == 0:
+                fitted_messages = candidate_messages
+                info["truncated_chars"] = chars_to_cut
                 break
-            cut = min(len(content), cut + max(200, cut // 4))
+            chars_to_cut = min(len(content), chars_to_cut + max(200, chars_to_cut // 4))
     info["dropped_messages"] = dropped
-    info["prompt_tokens_est"] = count_messages(out)
-    return out, info
+    info["prompt_tokens_est"] = count_messages(fitted_messages)
+    return fitted_messages, info

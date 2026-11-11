@@ -1,10 +1,10 @@
 # Deploy gate config (step 05 GATE, docs/system-design.html). Read by scripts/gate_eval.py.
 #
-# status: proposed. The team must freeze this file before round 1 (AGENTS.md, Evaluation
-# rules): set status to frozen and frozen_on to the date. After that, a change needs a line
-# with the change and the reason in docs/notes.md first.
-status: proposed
-frozen_on: null
+# Frozen 2026-11-11 on the 20-task held-out split of configs/splits.yaml (not all 40 test tasks) -
+# why: AGENTS.md, "Evaluation rules". Changing a threshold now needs a line with the change and
+# the reason added there first.
+status: frozen
+frozen_on: "2026-11-11"
 
 heldout:
   domain: retail

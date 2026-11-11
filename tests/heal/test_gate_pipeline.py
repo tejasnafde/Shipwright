@@ -204,3 +204,23 @@ def test_local_dry_run_end_to_end(tmp_path):
 
     ran = {json.loads(x)["task_id"] for x in (out / "base" / "traces.jsonl").read_text().splitlines()}
     assert ran == {splits.heldout_ids()[0]}  # only held-out ids, never hidden ones
+
+
+def test_gate_job_bundle_without_git(tmp_path, monkeypatch):
+    """In the Cloud Run image there is no .git: the bundle is a tar of the same paths, the sha from the env."""
+    import tarfile
+
+    (tmp_path / "src" / "pkg").mkdir(parents=True)
+    (tmp_path / "src" / "pkg" / "a.py").write_text("x = 1\n")
+    (tmp_path / "src" / "pkg" / "__pycache__").mkdir()
+    (tmp_path / "src" / "pkg" / "__pycache__" / "a.pyc").write_bytes(b"0")
+    (tmp_path / "pyproject.toml").write_text("[project]\n")
+    monkeypatch.setattr(gate_job, "ROOT", tmp_path)
+    monkeypatch.setenv("SHIPWRIGHT_GIT_SHA", "abcdef0123456")
+    assert not gate_job.has_git() and gate_job.code_sha() == "abcdef0"
+    tar = tmp_path / "code.tar.gz"
+    gate_job.pack_bundle(tar)
+    with tarfile.open(tar) as tf:
+        names = tf.getnames()
+    assert "src/pkg/a.py" in names and "pyproject.toml" in names
+    assert not any("__pycache__" in n for n in names)

@@ -2,11 +2,6 @@
 
   --teacher RUN_DIR   teacher runs (scripts/teacher_runs.py); repeatable
   --replay RUN_DIR    Tiny Aya's own runs; their successes are mixed in (replay); repeatable
-  --agent-r DIR       Agent-R output (scripts/agent_r_revise.py): revision runs, trained only on
-                      the revision thought and the good suffix (records carry ``loss_mask``),
-                      plus the good MCTS leaves; repeatable
-  --general FILE      general chat data (jsonl, messages or ShareGPT), mixed so that agent data
-                      is --eta of the total (Agent-R Eq. 6, eta = 0.2)
 
 Only runs with reward == 1 are used, and only from train-split runs (run_config.json).
 Every example is rendered as Tiny Aya sees it (see shipwright.heal.sft_data), deduplicated,
@@ -35,41 +30,68 @@ DEFAULT_REPO = "mitushigoyal5/shipwright-sft"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--teacher", type=Path, action="append", default=[], help="teacher run dir")
-    p.add_argument("--replay", type=Path, action="append", default=[], help="Tiny Aya run dir")
-    p.add_argument("--max-replay", type=int, default=None, help="cap on replay examples")
-    p.add_argument("--agent-r", type=Path, action="append", default=[], help="agent_r_revise.py output dir")
-    p.add_argument("--general", type=Path, default=None, help="general chat jsonl for the eta mix")
-    p.add_argument("--eta", type=float, default=0.2, help="agent share of the data when --general is set")
-    p.add_argument("--long-mode", choices=["window", "drop"], default="window",
-                   help="runs longer than the context: cut into windows, or drop")
-    p.add_argument("--max-tokens", type=int, default=context.CONTEXT_LIMIT)
-    p.add_argument("--output-dir", type=Path, default=None)
-    p.add_argument("--estimate-tokens", action="store_true",
-                   help="count tokens with the chars estimate (no tokenizer download)")
-    p.add_argument("--allow-split", action="store_true", help="accept runs not on the train split")
-    p.add_argument("--push", action="store_true", help="upload to the HF dataset repo")
-    p.add_argument("--repo", default=DEFAULT_REPO)
-    p.add_argument("--revision", default="main", help="dataset branch, e.g. round-1")
-    return p.parse_args(argv)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # Where the training examples come from.
+    parser.add_argument("--teacher", type=Path, action="append", default=[], help="teacher run dir")
+    parser.add_argument("--replay", type=Path, action="append", default=[], help="Tiny Aya run dir")
+    parser.add_argument("--max-replay", type=int, default=None, help="cap on replay examples")
+    parser.add_argument("--allow-split", action="store_true", help="accept runs not on the train split")
+
+    # Length limits.
+    parser.add_argument(
+        "--long-mode",
+        choices=["window", "drop"],
+        default="window",
+        help="runs longer than the context: cut into windows, or drop",
+    )
+    parser.add_argument("--max-tokens", type=int, default=context.CONTEXT_LIMIT)
+    parser.add_argument(
+        "--estimate-tokens",
+        action="store_true",
+        help="count tokens with the chars estimate (no tokenizer download)",
+    )
+
+    # Output.
+    parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--push", action="store_true", help="upload to the HF dataset repo")
+    parser.add_argument("--repo", default=DEFAULT_REPO)
+    parser.add_argument("--revision", default="main", help="dataset branch, e.g. round-1")
+    return parser.parse_args(argv)
 
 
-def load_run(run_dir: Path, allow_split: bool) -> tuple[list[dict], dict]:
+def read_json_lines(path: Path) -> list[dict]:
+    """Every non-empty line of a .jsonl file, parsed."""
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def check_train_split(run_directory: Path, task_split: str | None, allow_split: bool) -> None:
+    if task_split != "train" and not allow_split:
+        raise SystemExit(
+            f"{run_directory}: task_split is {task_split!r}, not 'train'. Never train on held-out tasks."
+        )
+
+
+def load_run(run_directory: Path, allow_split: bool) -> tuple[list[dict], dict]:
     """Successful traces and prompts of one run dir."""
-    cfg_path = run_dir / "run_config.json"
-    split = json.loads(cfg_path.read_text()).get("task_split") if cfg_path.exists() else None
-    if split != "train" and not allow_split:
-        raise SystemExit(f"{run_dir}: task_split is {split!r}, not 'train'. Never train on held-out tasks.")
-    traces = []
-    with open(run_dir / "traces.jsonl") as f:
-        for line in f:
-            t = json.loads(line)
-            if t.get("passed"):
-                traces.append(t)
-    prompts_path = run_dir / "prompts.json"
-    prompts = json.loads(prompts_path.read_text()) if prompts_path.exists() else {}
-    return traces, prompts
+    run_config_path = run_directory / "run_config.json"
+    if run_config_path.exists():
+        task_split = json.loads(run_config_path.read_text()).get("task_split")
+    else:
+        task_split = None
+    check_train_split(run_directory, task_split, allow_split)
+
+    successful_traces = [trace for trace in read_json_lines(run_directory / "traces.jsonl") if trace.get("passed")]
+
+    prompts_path = run_directory / "prompts.json"
+    if prompts_path.exists():
+        prompts_by_sha = json.loads(prompts_path.read_text())
+    else:
+        prompts_by_sha = {}
+    return successful_traces, prompts_by_sha
 
 
 def reconstruct_prompt(domain: str = "retail", seed: int = 300) -> dict:
@@ -85,69 +107,65 @@ def reconstruct_prompt(domain: str = "retail", seed: int = 300) -> dict:
     from tau2.registry import registry
     from tau2.runner.build import agent_domain_policy
 
-    cfg = TextRunConfig(domain=domain, agent="llm_agent", llm_agent="agent", user="user_simulator",
-                        llm_user="user", task_split_name="train", seed=seed)
-    task = registry.get_tasks_loader(domain)(task_split_name="train")[0]
-    guidance = agent_language_guidance(task_context(cfg, task))
-    env = registry.get_env_constructor(domain)()
-    policy = agent_domain_policy(env, guidance)
-    system = SYSTEM_PROMPT.format(domain_policy=policy, agent_instruction=AGENT_INSTRUCTION)
-    return {"system": system, "tools": [t.openai_schema for t in env.get_tools()]}
+    tau2_config = TextRunConfig(
+        domain=domain,
+        agent="llm_agent",
+        llm_agent="agent",
+        user="user_simulator",
+        llm_user="user",
+        task_split_name="train",
+        seed=seed,
+    )
+    first_task = registry.get_tasks_loader(domain)(task_split_name="train")[0]
+    language_guidance = agent_language_guidance(task_context(tau2_config, first_task))
+    environment = registry.get_env_constructor(domain)()
+    domain_policy = agent_domain_policy(environment, language_guidance)
+    system_prompt = SYSTEM_PROMPT.format(domain_policy=domain_policy, agent_instruction=AGENT_INSTRUCTION)
+    return {"system": system_prompt, "tools": [tool.openai_schema for tool in environment.get_tools()]}
 
 
-def prompt_for(trace: dict, prompts: dict, fallback: dict | None) -> dict | None:
-    shas = {t.get("prompt_sha") for t in trace["agent_turns"] if t.get("prompt_sha")}
-    if len(shas) == 1 and next(iter(shas)) in prompts:
-        return prompts[next(iter(shas))]
-    if len(prompts) == 1 and not shas:
-        return next(iter(prompts.values()))
-    return fallback
+def prompt_for(trace: dict, prompts_by_sha: dict, fallback_prompt: dict | None) -> dict | None:
+    """The recorded prompt of a trace, or fallback_prompt if it cannot be identified."""
+    prompt_shas = {turn.get("prompt_sha") for turn in trace["agent_turns"] if turn.get("prompt_sha")}
+    if len(prompt_shas) == 1:
+        only_sha = next(iter(prompt_shas))
+        if only_sha in prompts_by_sha:
+            return prompts_by_sha[only_sha]
+    if len(prompts_by_sha) == 1 and not prompt_shas:
+        return next(iter(prompts_by_sha.values()))
+    return fallback_prompt
 
 
-def collect(run_dirs: list[Path], source: str, args: argparse.Namespace, notes: list[str]) -> list[dict]:
+def collect(
+    run_directories: list[Path],
+    source: str,
+    build_options: argparse.Namespace,
+    notes: list[str],
+) -> list[dict]:
     records: list[dict] = []
-    fallback = None
-    for run_dir in run_dirs:
-        traces, prompts = load_run(run_dir, args.allow_split)
-        for t in traces:
-            prompt = prompt_for(t, prompts, None)
+    rebuilt_prompt = None
+    for run_directory in run_directories:
+        traces, prompts_by_sha = load_run(run_directory, build_options.allow_split)
+        run_config_path = run_directory / "run_config.json"
+        writer_model = None
+        if run_config_path.exists():
+            writer_model = json.loads(run_config_path.read_text()).get("agent_model")
+        for trace in traces:
+            prompt = prompt_for(trace, prompts_by_sha, None)
             if prompt is None:
-                if fallback is None:
-                    fallback = reconstruct_prompt()
+                if rebuilt_prompt is None:
+                    rebuilt_prompt = reconstruct_prompt()
                     notes.append("some runs had no prompts.json: agent prompt rebuilt from tau2")
-                prompt = fallback
-            records += sft_data.trace_records(t, prompt, source, args.long_mode)
-        notes.append(f"{run_dir.name}: {len(traces)} successful {source} runs")
+                prompt = rebuilt_prompt
+            trace_records = sft_data.trace_records(trace, prompt, source, build_options.long_mode)
+            for record in trace_records:  # which model wrote the targets (teacher id, or Tiny Aya for replay)
+                record["model"] = writer_model
+            records += trace_records
+        notes.append(f"{run_directory.name}: {len(traces)} successful {source} runs")
     return records
 
 
-def collect_agent_r(dirs: list[Path], args: argparse.Namespace, notes: list[str]) -> list[dict]:
-    """Revision records (masked) and good-leaf records from agent_r_revise.py output dirs."""
-    records: list[dict] = []
-    for d in dirs:
-        cfg = json.loads((d / "run_config.json").read_text())
-        if cfg.get("task_split") != "train" and not args.allow_split:
-            raise SystemExit(f"{d}: task_split is {cfg.get('task_split')!r}, not 'train'. Never train on held-out tasks.")
-        prompts = json.loads((d / "prompts.json").read_text()) if (d / "prompts.json").exists() else {}
-        fallback = next(iter(prompts.values())) if prompts else reconstruct_prompt()
-        n_rev = n_good = 0
-        for line in (d / "revisions.jsonl").read_text().splitlines():
-            if not line.strip():
-                continue
-            rev = json.loads(line)
-            prompt = prompts.get(rev.get("prompt_sha")) or fallback
-            records += sft_data.revision_records(rev, prompt, args.long_mode)
-            n_rev += 1
-        for line in (d / "good.jsonl").read_text().splitlines():
-            if line.strip():
-                t = json.loads(line)
-                records += sft_data.trace_records(t, prompt_for(t, prompts, fallback), "good", args.long_mode)
-                n_good += 1
-        notes.append(f"{d.name}: {n_rev} Agent-R revision runs, {n_good} good MCTS leaves")
-    return records
-
-
-def push(out_dir: Path, repo: str, revision: str) -> None:
+def push(output_directory: Path, repo: str, revision: str) -> None:
     from huggingface_hub import HfApi
 
     import baseline
@@ -155,71 +173,87 @@ def push(out_dir: Path, repo: str, revision: str) -> None:
     token = baseline.load_token()
     if not token:
         raise SystemExit("No HF token for --push.")
-    api = HfApi(token=token)
-    api.create_repo(repo, repo_type="dataset", exist_ok=True, private=False)
+    hf_api = HfApi(token=token)
+    hf_api.create_repo(repo, repo_type="dataset", exist_ok=True, private=False)
     if revision != "main":
-        api.create_branch(repo, repo_type="dataset", branch=revision, exist_ok=True)
+        hf_api.create_branch(repo, repo_type="dataset", branch=revision, exist_ok=True)
+
     from shipwright.observability import instrument
 
-    for name in ("sft.jsonl", "sft_stats.json"):
-        with instrument.external("hf_hub_upload", f"datasets/{repo}@{revision}/{name}"):
-            api.upload_file(path_or_fileobj=str(out_dir / name), path_in_repo=name, repo_id=repo,
-                            repo_type="dataset", revision=revision, commit_message=f"SFT data ({out_dir.name})")
+    for file_name in ("sft.jsonl", "sft_stats.json"):
+        with instrument.external("hf_hub_upload", f"datasets/{repo}@{revision}/{file_name}"):
+            hf_api.upload_file(
+                path_or_fileobj=str(output_directory / file_name),
+                path_in_repo=file_name,
+                repo_id=repo,
+                repo_type="dataset",
+                revision=revision,
+                commit_message=f"SFT data ({output_directory.name})",
+            )
     print(f"Pushed to https://huggingface.co/datasets/{repo}/tree/{revision}")
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    if not args.teacher and not args.replay and not args.agent_r:
-        raise SystemExit("Pass at least one --teacher, --replay or --agent-r dir.")
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_dir = (args.output_dir or ROOT / "runs" / f"sft-{stamp}").resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    from shipwright.observability import log
-
-    log.attach_run_dir(out_dir)
-
+def choose_token_counting_method(build_options: argparse.Namespace) -> str:
+    """"tokenizer" if the student's tokenizer loads, else the chars "estimate"."""
     import baseline
 
-    method = "estimate"
-    if not args.estimate_tokens and context.load_tokenizer(context.STUDENT_REPO, baseline.load_token()):
-        method = "tokenizer"
-    notes: list[str] = [f"token counting: {method}"]
+    if build_options.estimate_tokens:
+        return "estimate"
+    if context.load_tokenizer(context.STUDENT_REPO, baseline.load_token()):
+        return "tokenizer"
+    return "estimate"
 
-    teacher = collect(args.teacher, "teacher", args, notes)
-    replay = collect(args.replay, "replay", args, notes)
-    if args.max_replay is not None:
-        replay = replay[: args.max_replay]
-    agent_r = collect_agent_r(args.agent_r, args, notes)
-    before = len(teacher) + len(replay) + len(agent_r)
-    records = sft_data.dedupe(agent_r + teacher + replay)
-    kept, dropped = sft_data.filter_records(records, args.max_tokens)
-    dropped["duplicates"] = before - len(records)
-    mix = None
-    if args.general:
-        rows = [json.loads(x) for x in args.general.read_text().splitlines() if x.strip()]
-        general, _ = sft_data.filter_records(sft_data.general_records(rows), args.max_tokens)
-        kept, mix = sft_data.eta_mix(kept, general, args.eta)
-        mix["general_file"] = str(args.general)
 
-    with open(out_dir / "sft.jsonl", "w") as f:
-        for r in kept:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    st = sft_data.stats(kept, dropped, {
-        "token_count_method": method,
-        "long_mode": args.long_mode,
-        "max_tokens_limit": args.max_tokens,
-        "teacher_runs": [str(p) for p in args.teacher],
-        "replay_runs": [str(p) for p in args.replay],
-        "agent_r_dirs": [str(p) for p in args.agent_r],
-        "eta_mix": mix,
-        "notes": notes,
-    })
-    (out_dir / "sft_stats.json").write_text(json.dumps(st, indent=2))
-    print(json.dumps(st, indent=2))
-    print(f"\nWrote {out_dir}")
-    if args.push:
-        push(out_dir, args.repo, args.revision)
+def main(argv: list[str] | None = None) -> int:
+    build_options = parse_args(argv)
+    if not build_options.teacher and not build_options.replay:
+        raise SystemExit("Pass at least one --teacher or --replay dir.")
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if build_options.output_dir:
+        output_directory = build_options.output_dir.resolve()
+    else:
+        output_directory = (ROOT / "runs" / f"sft-{timestamp}").resolve()
+    output_directory.mkdir(parents=True, exist_ok=True)
+
+    from shipwright.observability import log
+
+    log.attach_run_dir(output_directory)
+
+    token_counting_method = choose_token_counting_method(build_options)
+    notes: list[str] = [f"token counting: {token_counting_method}"]
+
+    teacher_records = collect(build_options.teacher, "teacher", build_options, notes)
+    replay_records = collect(build_options.replay, "replay", build_options, notes)
+    if build_options.max_replay is not None:
+        replay_records = replay_records[: build_options.max_replay]
+
+    record_count_before_dedupe = len(teacher_records) + len(replay_records)
+    deduplicated_records = sft_data.dedupe(teacher_records + replay_records)
+    kept_records, dropped_counts = sft_data.filter_records(deduplicated_records, build_options.max_tokens)
+    dropped_counts["duplicates"] = record_count_before_dedupe - len(deduplicated_records)
+
+    with open(output_directory / "sft.jsonl", "w") as sft_file:
+        for record in kept_records:
+            sft_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    statistics = sft_data.stats(
+        kept_records,
+        dropped_counts,
+        {
+            "token_count_method": token_counting_method,
+            "long_mode": build_options.long_mode,
+            "max_tokens_limit": build_options.max_tokens,
+            "teacher_runs": [str(path) for path in build_options.teacher],
+            "replay_runs": [str(path) for path in build_options.replay],
+            "notes": notes,
+        },
+    )
+    (output_directory / "sft_stats.json").write_text(json.dumps(statistics, indent=2))
+    print(json.dumps(statistics, indent=2))
+    print(f"\nWrote {output_directory}")
+    if build_options.push:
+        push(output_directory, build_options.repo, build_options.revision)
     return 0
 
 

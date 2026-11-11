@@ -38,112 +38,162 @@ DEFAULT_FROM_RUN = ROOT / "runs" / "baseline-20261108-214337"
 TEACHER_REPLY_TOKENS = 4096
 
 
-def weight_fix_task_ids(run_dir: Path) -> list[str]:
+def weight_fix_task_ids(run_directory: Path) -> list[str]:
     """Task ids of the failed runs that classify.py routed to weight_fix, in file order."""
-    ids: list[str] = []
-    with open(run_dir / "failures.jsonl") as f:
-        for line in f:
-            row = json.loads(line)
-            if row.get("route") == "weight_fix" and str(row["task_id"]) not in ids:
-                ids.append(str(row["task_id"]))
-    return ids
+    task_ids: list[str] = []
+    with open(run_directory / "failures.jsonl") as failures_file:
+        for line in failures_file:
+            failure = json.loads(line)
+            task_id = str(failure["task_id"])
+            if failure.get("route") == "weight_fix" and task_id not in task_ids:
+                task_ids.append(task_id)
+    return task_ids
 
 
 def keep_successful(traces: list[dict]) -> list[dict]:
     """Only runs with reward == 1 (build_trace sets ``passed`` for those)."""
-    return [t for t in traces if t.get("passed")]
+    return [trace for trace in traces if trace.get("passed")]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--from-run", type=Path, default=None, help="run dir with failures.jsonl")
-    p.add_argument("--task-ids", nargs="*", default=None)
-    p.add_argument("--all-train", action="store_true", help="run every train task")
-    p.add_argument("--trials", type=int, default=3)
-    p.add_argument("--teacher-model", required=True,
-                   help="vertex/<publisher>/<model> or an HF router litellm id (no default; the team's current"
-                        " choice is vertex/deepseek-ai/deepseek-v4.1-flash-maas; it must allow training on its outputs)")
-    p.add_argument("--user-model", required=True,
-                   help="user simulator and judge (no default; the team's current choice is"
-                        " vertex/openai/gpt-oss-120b-maas)")
-    p.add_argument("--temperature", type=float, default=0.7, help="teacher temperature (variety across trials)")
-    p.add_argument("--reasoning-effort", default="", help="low/medium/high for reasoning teachers such as gpt-oss; empty: not sent")
-    p.add_argument("--reply-tokens", type=int, default=TEACHER_REPLY_TOKENS)
-    p.add_argument("--max-concurrency", type=int, default=4)
-    p.add_argument("--max-steps", type=int, default=100)
-    p.add_argument("--seed", type=int, default=300)
-    p.add_argument("--output-dir", type=Path, default=None)
-    p.add_argument("--dry-run", action="store_true", help="fake LLM, no network")
-    return p.parse_args(argv)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # Which tasks the teacher plays.
+    parser.add_argument("--from-run", type=Path, default=None, help="run dir with failures.jsonl")
+    parser.add_argument("--task-ids", nargs="*", default=None)
+    parser.add_argument("--all-train", action="store_true", help="run every train task")
+    parser.add_argument("--trials", type=int, default=3)
+
+    # Which models play the teacher and the user.
+    parser.add_argument(
+        "--teacher-model",
+        required=True,
+        help="vertex/<publisher>/<model> or an HF router litellm id (no default; the team's current"
+        " choice is vertex/deepseek-ai/deepseek-v4.1-flash-maas; it must allow training on its outputs)",
+    )
+    parser.add_argument(
+        "--user-model",
+        required=True,
+        help="user simulator and judge (no default; the team's current choice is"
+        " vertex/openai/gpt-oss-120b-maas)",
+    )
+    parser.add_argument("--temperature", type=float, default=0.7, help="teacher temperature (variety across trials)")
+    parser.add_argument(
+        "--reasoning-effort",
+        default="",
+        help="low/medium/high for reasoning teachers such as gpt-oss; empty: not sent",
+    )
+    parser.add_argument("--reply-tokens", type=int, default=TEACHER_REPLY_TOKENS)
+
+    # How the run executes.
+    parser.add_argument("--max-concurrency", type=int, default=4)
+    parser.add_argument("--max-steps", type=int, default=100)
+    parser.add_argument("--seed", type=int, default=300)
+    parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--dry-run", action="store_true", help="fake LLM, no network")
+    return parser.parse_args(argv)
 
 
-def resolve_task_ids(args: argparse.Namespace) -> list[str] | None:
+def resolve_task_ids(teacher_options: argparse.Namespace) -> list[str] | None:
     """Explicit ids plus weight_fix ids; None means the whole train split."""
-    if args.all_train:
+    if teacher_options.all_train:
         return None
-    ids = list(args.task_ids or [])
-    from_run = args.from_run or (None if ids else DEFAULT_FROM_RUN)
+
+    task_ids = list(teacher_options.task_ids or [])
+
+    if teacher_options.from_run:
+        from_run = teacher_options.from_run
+    elif task_ids:
+        from_run = None  # explicit ids given: do not also read the default baseline run
+    else:
+        from_run = DEFAULT_FROM_RUN
+
     if from_run:
-        ids += [i for i in weight_fix_task_ids(from_run) if i not in ids]
-    if not ids:
+        for task_id in weight_fix_task_ids(from_run):
+            if task_id not in task_ids:
+                task_ids.append(task_id)
+    if not task_ids:
         raise SystemExit("No task ids: pass --task-ids, --from-run or --all-train.")
-    return ids
+    return task_ids
+
+
+def build_baseline_argv(teacher_options: argparse.Namespace, task_ids: list[str] | None) -> list[str]:
+    """The baseline.py command line for a teacher run (always the train split)."""
+    baseline_argv = [
+        "--task-split", "train",  # never the held-out or hidden split
+        "--trials", str(teacher_options.trials),
+        "--agent-model", teacher_options.teacher_model,
+        "--user-model", teacher_options.user_model,
+        "--agent-temperature", str(teacher_options.temperature),
+        "--max-steps", str(teacher_options.max_steps),
+        "--max-concurrency", str(teacher_options.max_concurrency),
+        "--seed", str(teacher_options.seed),
+    ]
+    if task_ids:
+        baseline_argv += ["--task-ids", *task_ids]
+    else:
+        baseline_argv += ["--num-tasks", "0"]
+    if teacher_options.output_dir:
+        baseline_argv += ["--output-dir", str(teacher_options.output_dir)]
+    if teacher_options.dry_run:
+        baseline_argv.append("--dry-run")
+    return baseline_argv
+
+
+def count_kept_per_task(kept_traces: list[dict]) -> dict[str, int]:
+    kept_per_task: dict[str, int] = {}
+    for trace in kept_traces:
+        task_id = str(trace["task_id"])
+        kept_per_task[task_id] = kept_per_task.get(task_id, 0) + 1
+    return kept_per_task
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    task_ids = resolve_task_ids(args)
-    run_argv = [
-        "--task-split", "train",  # never the held-out or hidden split
-        "--trials", str(args.trials),
-        "--agent-model", args.teacher_model,
-        "--user-model", args.user_model,
-        "--agent-temperature", str(args.temperature),
-        "--max-steps", str(args.max_steps),
-        "--max-concurrency", str(args.max_concurrency),
-        "--seed", str(args.seed),
-    ]
-    run_argv += ["--task-ids", *task_ids] if task_ids else ["--num-tasks", "0"]
-    if args.output_dir:
-        run_argv += ["--output-dir", str(args.output_dir)]
-    if args.dry_run:
-        run_argv.append("--dry-run")
-    run_args = baseline.parse_args(run_argv)
+    teacher_options = parse_args(argv)
+    task_ids = resolve_task_ids(teacher_options)
+    baseline_options = baseline.parse_args(build_baseline_argv(teacher_options, task_ids))
 
-    llm_args = {"reasoning_effort": args.reasoning_effort} if args.reasoning_effort and not args.dry_run else {}
+    if teacher_options.reasoning_effort and not teacher_options.dry_run:
+        teacher_llm_args = {"reasoning_effort": teacher_options.reasoning_effort}
+    else:
+        teacher_llm_args = {}
+
     result = baseline.run(
-        run_args,
+        baseline_options,
         prefix="teacher",
-        prompted_models={args.teacher_model: args.reply_tokens},
-        agent_llm_args=llm_args,
+        prompted_models={teacher_options.teacher_model: teacher_options.reply_tokens},
+        agent_llm_args=teacher_llm_args,
         role_names={"agent": "teacher"},
     )
     if result is None:
         return 2
-    out_dir, traces, summary = result
 
     from shipwright.heal.traces import write_jsonl
 
-    kept = keep_successful(traces)
-    write_jsonl(out_dir / "kept.jsonl", kept)
-    per_task: dict[str, int] = {}
-    for t in kept:
-        per_task[str(t["task_id"])] = per_task.get(str(t["task_id"]), 0) + 1
+    kept_traces = keep_successful(result.traces)
+    write_jsonl(result.run_directory / "kept.jsonl", kept_traces)
+
+    kept_per_task = count_kept_per_task(kept_traces)
+    task_ids_run = {str(trace["task_id"]) for trace in result.traces}
+    cache_hit_rate_by_role = result.summary.get("cache_hit_rate") or {}
     teacher_summary = {
-        "teacher_model": args.teacher_model,
+        "teacher_model": teacher_options.teacher_model,
         "task_ids": task_ids or "all train",
-        "trials": args.trials,
-        "runs": len(traces),
-        "kept": len(kept),
-        "kept_per_task": per_task,
-        "tasks_without_success": sorted({str(t["task_id"]) for t in traces} - set(per_task)),
-        "pass_rate": summary.get("pass_rate"),
-        "cache_hit_rate": (summary.get("cache_hit_rate") or {}).get("agent"),
-        "cost_estimate_usd": summary.get("cost_estimate_usd"),
+        "trials": teacher_options.trials,
+        "runs": len(result.traces),
+        "kept": len(kept_traces),
+        "kept_per_task": kept_per_task,
+        "tasks_without_success": sorted(task_ids_run - set(kept_per_task)),
+        "pass_rate": result.summary.get("pass_rate"),
+        "cache_hit_rate": cache_hit_rate_by_role.get("agent"),
+        "cost_estimate_usd": result.summary.get("cost_estimate_usd"),
     }
-    (out_dir / "teacher_summary.json").write_text(json.dumps(teacher_summary, indent=2))
+    (result.run_directory / "teacher_summary.json").write_text(json.dumps(teacher_summary, indent=2))
     print(json.dumps(teacher_summary, indent=2))
-    print(f"\nWrote {out_dir}")
+    print(f"\nWrote {result.run_directory}")
     return 0
 
 

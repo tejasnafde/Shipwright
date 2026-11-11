@@ -33,35 +33,48 @@ ROUTES = ("none", "tool_fix", "weight_fix")
 _NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 
-def validate_system(cfg: dict, root: Path | None = None) -> dict:
+def validate_system(system_config: dict, root: Path | None = None) -> dict:
     """Check one system config and fill defaults. Raises ValueError on a bad config."""
-    if not isinstance(cfg, dict):
+    if not isinstance(system_config, dict):
         raise ValueError("system config must be a mapping")
-    name = cfg.get("name")
+
+    name = system_config.get("name")
     if not isinstance(name, str) or not _NAME.match(name):
         raise ValueError(f"system name must match {_NAME.pattern}: {name!r}")
-    model = cfg.get("model")
+    model = system_config.get("model")
     if model not in ALLOWED_MODELS:
         raise ValueError(f"{name}: model {model!r} is not an allowed hackathon model")
-    out: dict[str, Any] = {"name": name, "model": model, "adapter": None, "tool_patches": None,
-                           "route": cfg.get("route", "none"), "targets": list(cfg.get("targets") or [])}
-    if out["route"] not in ROUTES:
+
+    system: dict[str, Any] = {
+        "name": name,
+        "model": model,
+        "adapter": None,
+        "tool_patches": None,
+        "route": system_config.get("route", "none"),
+        "targets": list(system_config.get("targets") or []),
+    }
+    if system["route"] not in ROUTES:
         raise ValueError(f"{name}: route must be one of {ROUTES}")
-    adapter = cfg.get("adapter")
+
+    adapter = system_config.get("adapter")
     if adapter:
         if not adapter.get("repo") or not adapter.get("revision"):
             raise ValueError(f"{name}: adapter needs repo and revision")
-        out["adapter"] = {"repo": adapter["repo"], "revision": str(adapter["revision"])}
-    patches = cfg.get("tool_patches")
-    if patches:
-        ids = patches.get("ids", "applied")
-        if not (ids == "applied" or (isinstance(ids, list) and all(isinstance(i, str) for i in ids))):
+        system["adapter"] = {"repo": adapter["repo"], "revision": str(adapter["revision"])}
+
+    tool_patches = system_config.get("tool_patches")
+    if tool_patches:
+        patch_ids = tool_patches.get("ids", "applied")
+        ids_are_a_list_of_strings = isinstance(patch_ids, list) and all(
+            isinstance(patch_id, str) for patch_id in patch_ids
+        )
+        if not (patch_ids == "applied" or ids_are_a_list_of_strings):
             raise ValueError(f"{name}: tool_patches.ids must be 'applied' or a list of ids")
-        ledger = patches.get("ledger") or "patches/ledger.jsonl"
-        out["tool_patches"] = {"ledger": str(ledger), "ids": ids}
-        if root is not None and not (root / ledger).exists():
-            raise ValueError(f"{name}: ledger {ledger} not found under {root}")
-    return out
+        ledger_path = tool_patches.get("ledger") or "patches/ledger.jsonl"
+        system["tool_patches"] = {"ledger": str(ledger_path), "ids": patch_ids}
+        if root is not None and not (root / ledger_path).exists():
+            raise ValueError(f"{name}: ledger {ledger_path} not found under {root}")
+    return system
 
 
 def load_system(path: Path, root: Path | None = None) -> dict:
@@ -90,18 +103,18 @@ def resolve_patch_ids(system: dict, ledger_rows: list[dict]) -> list[str]:
     """The exact patch ids a system runs with (``applied`` is resolved now, for the record)."""
     from shipwright.heal.tool_fix import select_patches
 
-    tp = system.get("tool_patches")
-    if not tp:
+    tool_patches = system.get("tool_patches")
+    if not tool_patches:
         return []
-    return [r["id"] for r in select_patches(ledger_rows, tp["ids"])]
+    return [row["id"] for row in select_patches(ledger_rows, tool_patches["ids"])]
 
 
 def baseline_args(system: dict, patch_ids: list[str], root: Path) -> list[str]:
     """Extra ``scripts/baseline.py`` arguments for this system's tool patches."""
-    tp = system.get("tool_patches")
-    if not tp:
+    tool_patches = system.get("tool_patches")
+    if not tool_patches:
         return []
-    return ["--tool-patches", str(root / tp["ledger"]), "--tool-patch-ids", *patch_ids]
+    return ["--tool-patches", str(root / tool_patches["ledger"]), "--tool-patch-ids", *patch_ids]
 
 
 def serve_plan(systems: list[dict], mode: str = "lora") -> list[dict]:
@@ -112,21 +125,32 @@ def serve_plan(systems: list[dict], mode: str = "lora") -> list[dict]:
     (fallback if vLLM cannot load the LoRA for this architecture).
     All systems must share one base model.
     """
-    models = {s["model"] for s in systems}
-    if len(models) != 1:
-        raise ValueError(f"systems use different base models: {sorted(models)}")
-    base = models.pop()
+    base_models = {system["model"] for system in systems}
+    if len(base_models) != 1:
+        raise ValueError(f"systems use different base models: {sorted(base_models)}")
+    base_model = base_models.pop()
+
     if mode == "lora":
-        loras: dict[str, dict] = {}
-        for s in systems:
-            if s.get("adapter"):
-                loras[served_name(s)] = s["adapter"]
-        return [{"base": base, "served_base": base, "loras": loras, "merged": None,
-                 "systems": [s["name"] for s in systems]}]
+        adapter_by_served_name: dict[str, dict] = {}
+        for system in systems:
+            if system.get("adapter"):
+                adapter_by_served_name[served_name(system)] = system["adapter"]
+        return [{
+            "base": base_model,
+            "served_base": base_model,
+            "loras": adapter_by_served_name,
+            "merged": None,
+            "systems": [system["name"] for system in systems],
+        }]
     if mode == "merged":
-        plan = []
-        for s in systems:
-            plan.append({"base": base, "served_base": served_name(s), "loras": {},
-                         "merged": s.get("adapter"), "systems": [s["name"]]})
-        return plan
+        return [
+            {
+                "base": base_model,
+                "served_base": served_name(system),
+                "loras": {},
+                "merged": system.get("adapter"),
+                "systems": [system["name"]],
+            }
+            for system in systems
+        ]
     raise ValueError(f"serve mode must be lora or merged, got {mode!r}")

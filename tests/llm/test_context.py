@@ -87,3 +87,17 @@ def test_strip_json_fences():
     assert msg.content == '{"results": []}'
     assert is_nl_judge_request({"messages": [{"role": "system", "content": "... metExpectation ..."}]})
     assert not is_nl_judge_request({"messages": [{"role": "system", "content": "You are a user."}]})
+
+
+def test_is_json_reply():
+    from types import SimpleNamespace as NS
+
+    from shipwright.llm.patches import is_json_reply
+
+    def reply(text):
+        return NS(choices=[NS(message=NS(content=text))])
+
+    assert is_json_reply(reply('{"results": []}'))
+    assert not is_json_reply(reply(""))
+    assert not is_json_reply(reply("I think the agent did well."))
+    assert not is_json_reply(NS(choices=[]))

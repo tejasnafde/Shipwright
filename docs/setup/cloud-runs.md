@@ -52,11 +52,22 @@ $GC run jobs execute shipwright-ishank --region=asia-south1 \
 ```
 
 A value that holds a comma needs another delimiter: `--args='^|^baseline.py|--task-ids|1,2'`.
+`--args` rejects a list with the same value twice (`"2" cannot be specified multiple times`, for
+example `--trials 2` with task id 2): write flags as `--trials=2` (2026-11-12).
 Without `--wait`, the command returns at once; follow the run in the console
 (Cloud Run, Jobs, `shipwright-<owner>`, Executions) or with
 `$GC run jobs executions list --job=shipwright-ishank --region=asia-south1`.
 
 `--output-dir` must be under `runs/` (the default is fine): only `runs/<dir>/` is uploaded.
+
+Each execution starts empty. To read the run dir of an earlier execution, put `--fetch <owner>/<dir>`
+(repeatable) before the script: it downloads `gs://lexsi-hackathon-runs/<owner>/<dir>/` to `runs/<dir>/`
+first (2026-11-11). A fetched dir is uploaded again only if the script changes it.
+
+```sh
+$GC run jobs execute shipwright-tejas --region=asia-south1 --wait \
+  --args=--fetch,tejas/r1-baseline-train,classify.py,runs/r1-baseline-train
+```
 
 ## Read the results
 
