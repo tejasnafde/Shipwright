@@ -231,17 +231,27 @@ def is_rate_limit(exc: BaseException) -> bool:
 # Waits (seconds) before the retries of a 429. Vertex gpt-oss-120b MaaS answers 429 at 4 to 6
 # concurrent tau2 runs (2026-11-11: 15 of 74 baseline runs lost as infra errors with no retry).
 RATE_LIMIT_WAITS = (2.0, 5.0, 10.0, 20.0, 40.0)
+# Waits before the retries of a 400 from the user simulator or judge. Vertex gpt-oss-120b answers
+# some valid requests with a 400 that passes on a retry (2026-11-11: 9 bake-off runs lost).
+BAD_REQUEST_WAITS = (2.0, 5.0)
+
+
+def is_bad_request(exc: BaseException) -> bool:
+    return getattr(exc, "status_code", None) == 400 or "BadRequest" in type(exc).__name__
 
 
 def call_with_refresh(call: Callable[..., Any], kwargs: dict, tokens: TokenProvider | None = None,
-                      sleep: Callable[[float], None] = time.sleep) -> Any:
+                      sleep: Callable[[float], None] = time.sleep,
+                      bad_request_waits: tuple[float, ...] = ()) -> Any:
     """Run ``call(**route_kwargs(kwargs))``; on a 401, get a new token and retry once; on a 429,
-    wait and retry (RATE_LIMIT_WAITS, with jitter)."""
+    wait and retry (RATE_LIMIT_WAITS, with jitter); on a 400, wait and retry once per entry of
+    ``bad_request_waits`` (empty by default: only the user simulator and judge pass it)."""
     import random
 
     tokens = tokens or provider()
     refreshed = False
     waits = list(RATE_LIMIT_WAITS)
+    bad_waits = list(bad_request_waits)
     while True:
         try:
             return call(**route_kwargs(kwargs, tokens))
@@ -251,6 +261,8 @@ def call_with_refresh(call: Callable[..., Any], kwargs: dict, tokens: TokenProvi
                 refreshed = True
             elif is_rate_limit(e) and waits:
                 sleep(waits.pop(0) * (1 + random.random() / 2))
+            elif is_bad_request(e) and bad_waits:
+                sleep(bad_waits.pop(0) * (1 + random.random() / 2))
             else:
                 raise
 

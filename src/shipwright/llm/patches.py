@@ -70,6 +70,23 @@ def strip_json_fences(response: Any) -> None:
             choice.message.content = text.strip()
 
 
+# tau2's NL-assertion judge runs json.loads on the reply; gpt-oss sometimes answers with empty
+# or non-JSON text, and the whole run became an infra error (2026-11-11). Ask again this often.
+NL_JUDGE_JSON_RETRIES = 2
+
+
+def is_json_reply(response: Any) -> bool:
+    """True when every choice's content parses as JSON (what tau2's NL judge expects)."""
+
+    choices = getattr(response, "choices", None) or []
+    for choice in choices:
+        try:
+            json.loads(choice.message.content or "")
+        except ValueError:
+            return False
+    return bool(choices)
+
+
 def call_role(original: dict, kwargs: dict, agent_model: str | None, user_model: str | None) -> str:
     """Which role a call belongs to: judge (NL judge or a rerouted tau2 default), agent or user."""
     if is_nl_judge_request(kwargs) or original.get("model") != kwargs.get("model"):
@@ -118,15 +135,21 @@ def install(
                 attempts[0] += 1
                 return real(*args, **kw)
 
+            bad_waits = vertex.BAD_REQUEST_WAITS if role in ("user", "judge") else ()
             if fake_completion is None and vertex.is_vertex_model(model):
-                do = lambda: vertex.call_with_refresh(counted, kwargs)  # noqa: E731
+                do = lambda: vertex.call_with_refresh(counted, kwargs, bad_request_waits=bad_waits)  # noqa: E731
             else:
                 do = lambda: counted(**kwargs)  # noqa: E731
-            response = instrument.llm_call(role, model, kwargs, do, retries=lambda: max(0, attempts[0] - 1))
-            if meter is not None:
-                meter.add(role, model, getattr(response, "usage", None))
-            if is_nl_judge_request(kwargs):
+            nl_judge = is_nl_judge_request(kwargs)
+            for judge_try in range(1 + (NL_JUDGE_JSON_RETRIES if nl_judge else 0)):
+                response = instrument.llm_call(role, model, kwargs, do, retries=lambda: max(0, attempts[0] - 1))
+                if meter is not None:
+                    meter.add(role, model, getattr(response, "usage", None))
+                if not nl_judge:
+                    break
                 strip_json_fences(response)
+                if is_json_reply(response):
+                    break
             if prompted:
                 convert_response(response, context)
             sanitize_tool_calls(response)
