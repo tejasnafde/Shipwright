@@ -176,6 +176,10 @@ def install(
             return response
 
         llm_utils.completion = wrapped_completion
+        # tau2 prices each reply with litellm's price map, which has none of our models: every call
+        # logged an ERROR ("This model isn't mapped yet") and used 0. Cost is metered by
+        # UsageMeter (summary.json cost_estimate_usd), so say 0 without the error.
+        llm_utils.get_response_cost = lambda response: 0.0
         _installed = True
     instrument.install_tau2()
 
