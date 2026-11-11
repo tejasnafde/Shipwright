@@ -261,6 +261,7 @@ def text_run_config(args: argparse.Namespace, out_dir: Path, agent_llm_args: dic
         seed=args.seed,
         save_to=str(out_dir / "tau2"),  # absolute path: tau2 saves here, not under its data dir
         max_retries=0,
+        auto_resume=True,  # a rerun into the same dir skips decided runs and redoes infra errors
     )
 
 

@@ -174,6 +174,27 @@ def make_rollout(config, task, seeds, sims_out: list, lock: threading.Lock, orac
 
 
 def search_task(task, args, config, seeds, lock, sims_out: list, mcts_meta: dict, out_dir: Path) -> dict:
+    """Search one task. A finished task (trees/<id>.done.json) is loaded, not searched again, so a
+    cut-off run resumes when it is started again into the same dir. A crash is logged and returned
+    as an error row: one task never stops the others."""
+    trees = out_dir / "trees"
+    trees.mkdir(exist_ok=True)
+    done = trees / f"{task.id}.done.json"
+    if done.exists():
+        saved = json.loads(done.read_text())
+        with lock:
+            sims_out.extend(saved["sims"])
+            mcts_meta.update(saved["meta"])
+        logger.info("task resumed from an earlier run", task_id=task.id, rollouts=len(saved["sims"]))
+        return {**saved["row"], "resumed": True}
+    try:
+        return _search_task(task, args, config, seeds, lock, sims_out, mcts_meta, trees)
+    except Exception as e:  # noqa: BLE001
+        logger.error("task search crashed", task_id=task.id, exc_info=True)
+        return {"error": f"{type(e).__name__}: {e}"[:500], "possible_pairs_alpha_1": 0, "passed_leaves": 0}
+
+
+def _search_task(task, args, config, seeds, lock, sims_out: list, mcts_meta: dict, trees: Path) -> dict:
     tree = agent_r.Tree(task.id, c_uct=args.c_uct, children=args.children, max_depth=args.max_depth)
     rollout = make_rollout(config, task, seeds, sims_out, lock, args.dry_run)
 
@@ -181,14 +202,18 @@ def search_task(task, args, config, seeds, lock, sims_out: list, mcts_meta: dict
         with lock:
             mcts_meta[r["simulation_id"]] = {"mcts": {"task_id": str(task.id), "path": path}}
 
+    log.fail_point("search_task")
     counts = agent_r.run_search(tree, rollout, args.simulations, on_rollout=record)
-    (out_dir / "trees").mkdir(exist_ok=True)
-    (out_dir / "trees" / f"{task.id}.json").write_text(json.dumps(tree.to_json(), indent=1))
+    (trees / f"{task.id}.json").write_text(json.dumps(tree.to_json(), indent=1))
     rewards = [lf["reward"] for lf in tree.leaves]
     pairs = agent_r.select_pairs(tree.leaves, alpha=1.0)
     row = {**counts, "passed_leaves": sum(r >= 1.0 for r in rewards),
            "mean_reward": round(sum(rewards) / len(rewards), 3) if rewards else None,
            "possible_pairs_alpha_1": len(pairs), "root_q": round(tree.root.q, 3)}
+    with lock:
+        mine = [d for d in sims_out if str(d.get("task_id")) == str(task.id)]
+        meta = {d["id"]: mcts_meta[d["id"]] for d in mine if d["id"] in mcts_meta}
+    (trees / f"{task.id}.done.json").write_text(json.dumps({"row": row, "sims": mine, "meta": meta}))
     logger.info("task searched", task_id=task.id, **row)
     return row
 

@@ -123,6 +123,13 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   (`log.attach_run_dir`), and `status` (ok / partial / failed) into `summary.json`.
 - New external call (model, HTTP, GCS, HF Hub): wrap it in `shipwright.instrument.external` (or go
   through `llm_patch`), so it gets a log line and a span.
+- 2026-11-12 (Tejas): every external call goes through the shared retry helper
+  `shipwright.observability.retry` (`call_with_retry`, `@retry`, `acall_with_retry`; policies `LLM`,
+  `LLM_USER`, `LAUNCH`). Never add a bare call or a new ad-hoc retry loop. Only exception:
+  `scripts/train_lora.py` (`hub_retry`), which runs alone in an HF Job without the package.
+- Long runs must be resumable and isolate failures: one task's exception is an infra error in
+  the results, not a dead run; a rerun into the same `--output-dir` (on Cloud Run: `--fetch` it
+  first) keeps decided runs and redoes infra errors (tau2 `auto_resume`, Agent-R `trees/<id>.done.json`).
 - Never print or log a token or key. `shipwright.log` redacts `hf_`, `ya29.`, `Bearer`, `sk-`; do
   not rely on that for other formats.
 

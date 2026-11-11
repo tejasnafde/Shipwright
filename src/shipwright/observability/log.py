@@ -56,7 +56,7 @@ from typing import Any, Callable, Iterator
 from shipwright.observability import otel_live, report, repro
 
 STEPS = ("run", "detect", "classify", "route", "tool_fix", "teacher", "sft", "train", "gate")
-FAIL_POINTS = ("agent_call", "tool_call", "summary") + STEPS
+FAIL_POINTS = ("agent_call", "tool_call", "search_task", "summary") + STEPS
 ROOT = Path(__file__).resolve().parents[3]
 SEVERITY = {"DEBUG": "DEBUG", "INFO": "INFO", "WARNING": "WARNING", "ERROR": "ERROR", "CRITICAL": "CRITICAL"}
 NOISY = ("httpx", "httpcore", "LiteLLM", "litellm", "urllib3", "opentelemetry", "huggingface_hub", "filelock")
