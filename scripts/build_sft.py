@@ -130,11 +130,18 @@ def collect_agent_r(dirs: list[Path], args: argparse.Namespace, notes: list[str]
             raise SystemExit(f"{d}: task_split is {cfg.get('task_split')!r}, not 'train'. Never train on held-out tasks.")
         prompts = json.loads((d / "prompts.json").read_text()) if (d / "prompts.json").exists() else {}
         fallback = next(iter(prompts.values())) if prompts else reconstruct_prompt()
-        n_rev = n_good = 0
+        n_rev = n_good = n_invalid = 0
+        valid = None
+        if (d / "check.jsonl").exists():  # scripts/agent_r_check.py: keep only revisions that passed it
+            valid = {(r["bad_simulation_id"], r.get("good_simulation_id")) for r in
+                     map(json.loads, (d / "check.jsonl").read_text().splitlines()) if r.get("valid")}
         for line in (d / "revisions.jsonl").read_text().splitlines():
             if not line.strip():
                 continue
             rev = json.loads(line)
+            if valid is not None and (rev.get("bad_simulation_id"), rev.get("good_simulation_id")) not in valid:
+                n_invalid += 1
+                continue
             prompt = prompts.get(rev.get("prompt_sha")) or fallback
             records += sft_data.revision_records(rev, prompt, args.long_mode)
             n_rev += 1
@@ -143,7 +150,8 @@ def collect_agent_r(dirs: list[Path], args: argparse.Namespace, notes: list[str]
                 t = json.loads(line)
                 records += sft_data.trace_records(t, prompt_for(t, prompts, fallback), "good", args.long_mode)
                 n_good += 1
-        notes.append(f"{d.name}: {n_rev} Agent-R revision runs, {n_good} good MCTS leaves")
+        checked = "unchecked" if valid is None else f"{n_invalid} dropped by agent_r_check"
+        notes.append(f"{d.name}: {n_rev} Agent-R revision runs ({checked}), {n_good} good MCTS leaves")
     return records
 
 

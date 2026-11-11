@@ -107,6 +107,11 @@ make agent-r-dry RUN=runs/dry
 # 2. Revisions (critic calls: at most one per bad step after the divergence point)
 .venv/bin/python scripts/agent_r_revise.py runs/agent-r-search-<ts> --iteration 1
 
+# 2b. Check the revisions (offline): tau2's evaluator re-grades each spliced run (strict replay
+#     catches spliced tool results that disagree with the real DB), plus format, loss masks and
+#     the 8192-token limit. Writes check.jsonl and check_summary.json; exit 1 if none is valid.
+.venv/bin/python scripts/agent_r_check.py runs/agent-r-revise-<ts>
+
 # 3. SFT data, then the usual push and training job (docs/pipeline/training.md)
 .venv/bin/python scripts/build_sft.py --agent-r runs/agent-r-revise-<ts> \
     --teacher runs/teacher-<ts> --general data/sharegpt_sample.jsonl --eta 0.2 \
