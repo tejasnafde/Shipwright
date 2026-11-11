@@ -48,6 +48,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--output-dir", type=Path, default=None)
     p.add_argument("--estimate-tokens", action="store_true",
                    help="count tokens with the chars estimate (no tokenizer download)")
+    p.add_argument("--tool-patches", type=Path, default=None, metavar="LEDGER",
+                   help="render every example with the ledger's applied tool patches (the gate's tool list)")
     p.add_argument("--allow-split", action="store_true", help="accept runs not on the train split")
     p.add_argument("--push", action="store_true", help="upload to the HF dataset repo")
     p.add_argument("--repo", default=DEFAULT_REPO)
@@ -95,6 +97,30 @@ def reconstruct_prompt(domain: str = "retail", seed: int = 300) -> dict:
     return {"system": system, "tools": [t.openai_schema for t in env.get_tools()]}
 
 
+def patch_prompt(prompt: dict | None, rows: list[dict] | None) -> dict | None:
+    """``prompt`` with every applied patch in ``rows``; fields already patched stay as they are.
+
+    Teacher runs used the original tool descriptions, the gate uses the patched ones: render
+    the training data with the tool list the gated system sees.
+    """
+    if not prompt or not rows:
+        return prompt
+    from shipwright.heal import tool_fix
+
+    tools = tool_fix.tool_map(prompt["tools"])
+    todo = []
+    for r in rows:
+        if r.get("status") != "applied":
+            continue
+        current = tool_fix.sha256(tool_fix.get_field(tools[r["tool"]], r["field"]))
+        if current == r["sha256_before"]:
+            todo.append(r)
+        elif current != r["sha256_after"]:
+            raise ValueError(f"patch {r['id']}: {r['tool']}.{r['field']} matches neither its before nor after text")
+    patched, _ = tool_fix.apply_patches(prompt["tools"], todo)
+    return {**prompt, "tools": patched}
+
+
 def prompt_for(trace: dict, prompts: dict, fallback: dict | None) -> dict | None:
     shas = {t.get("prompt_sha") for t in trace["agent_turns"] if t.get("prompt_sha")}
     if len(shas) == 1 and next(iter(shas)) in prompts:
@@ -118,7 +144,7 @@ def collect(run_dirs: list[Path], source: str, args: argparse.Namespace, notes: 
                     fallback = reconstruct_prompt()
                     notes.append("some runs had no prompts.json: agent prompt rebuilt from tau2")
                 prompt = fallback
-            recs = sft_data.trace_records(t, prompt, source, args.long_mode)
+            recs = sft_data.trace_records(t, patch_prompt(prompt, args.patch_rows), source, args.long_mode)
             for r in recs:  # which model wrote the targets (teacher id, or Tiny Aya for replay)
                 r["model"] = model
             records += recs
@@ -147,13 +173,14 @@ def collect_agent_r(dirs: list[Path], args: argparse.Namespace, notes: list[str]
             if valid is not None and (rev.get("bad_simulation_id"), rev.get("good_simulation_id")) not in valid:
                 n_invalid += 1
                 continue
-            prompt = prompts.get(rev.get("prompt_sha")) or fallback
+            prompt = patch_prompt(prompts.get(rev.get("prompt_sha")) or fallback, args.patch_rows)
             records += sft_data.revision_records(rev, prompt, args.long_mode)
             n_rev += 1
         for line in (d / "good.jsonl").read_text().splitlines():
             if line.strip():
                 t = json.loads(line)
-                records += sft_data.trace_records(t, prompt_for(t, prompts, fallback), "good", args.long_mode)
+                records += sft_data.trace_records(t, patch_prompt(prompt_for(t, prompts, fallback), args.patch_rows),
+                                                  "good", args.long_mode)
                 n_good += 1
         checked = "unchecked" if valid is None else f"{n_invalid} dropped by agent_r_check"
         notes.append(f"{d.name}: {n_rev} Agent-R revision runs ({checked}), {n_good} good MCTS leaves")
@@ -202,6 +229,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.estimate_tokens and context.load_tokenizer(context.STUDENT_REPO, baseline.load_token()):
         method = "tokenizer"
     notes: list[str] = [f"token counting: {method}"]
+    args.patch_rows = None
+    if args.tool_patches:
+        args.patch_rows = [json.loads(x) for x in args.tool_patches.read_text().splitlines() if x.strip()]
+        applied = sum(r.get("status") == "applied" for r in args.patch_rows)
+        notes.append(f"tool list: {applied} applied patches from {args.tool_patches}")
 
     teacher = collect(args.teacher, "teacher", args, notes)
     replay = collect(args.replay, "replay", args, notes)
