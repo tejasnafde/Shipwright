@@ -245,6 +245,23 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   from source, or worse, from an earlier draft that got it wrong (an `ig/main` prototype of the
   same classifier/gate wrapper called a `classify()` that does not exist - caught in this merge,
   never shipped).
+- 2026-11-11 (Ishank): Tiny Aya's 262,144-token vocabulary makes the training-time logits tensor
+  (`[seq_len, vocab]`) the real memory bottleneck for `scripts/train_lora.py`, not the base model's
+  own weights or LoRA's ~30M trainable params - at our 8192-token `--max-seq-len`, one bf16 logits
+  tensor alone is ~4.3 GB before gradients. Found independently by a different Track 3 team hitting
+  the same wall on a 16 GB T4 for their DPO trainer (github.com/Timidan/lexsi-hack,
+  `scripts/train_dpo.py`): a `logits_to_keep` window that skips projecting the loss-masked prefix
+  through the lm_head. Ported as `windowed_sft_trainer()` in `train_lora.py`, adapted for our own
+  `SFTTrainer` subclass (`create_distill_trainer`'s default factory builds a plain TRL
+  `SFTTrainer`, not DPOTrainer - confirmed by reading `agenttune.agentic.distill_trainer` source
+  directly) and computing the loss by hand on the returned logits rather than trusting any
+  model-specific `labels=`+`logits_to_keep` interaction, which was not verified against Tiny Aya's
+  real modeling code (no GPU here to check). Only applies when `--batch-size 1` (the default);
+  falls back to the unwindowed loss otherwise, and also falls back if the loaded model rejects a
+  plain int `logits_to_keep` kwarg. Confirm on the real GPU host before trusting the memory
+  savings in a real training run - the *correctness* of the windowed loss itself does not depend on
+  anything Tiny-Aya-specific (`logits_to_keep` as a plain int is a long-standing, architecture-
+  independent `transformers` API), only the *memory savings* are unverified.
 
 ## Keep this file correct
 

@@ -151,6 +151,64 @@ def to_eventlog(cls, messages: list[dict]):
     return log
 
 
+def windowed_sft_trainer():
+    """A TRL ``SFTTrainer`` subclass that skips computing logits for the loss-masked
+    prefix before the first trained token.
+
+    Tiny Aya's 262,144-token vocabulary makes the full ``[seq_len, vocab]`` logits
+    tensor the memory bottleneck, not the base model's own weights or LoRA's ~30M
+    trainable params - at our own 8192-token ``--max-seq-len``, one bf16 logits
+    tensor alone is already seq_len x vocab x 2 bytes ~= 4.3 GB before gradients or
+    activations. Independently found and fixed the same way for the same model on a
+    16 GB T4 by a different team's DPO trainer: github.com/Timidan/lexsi-hack,
+    ``scripts/train_dpo.py`` (``logits_to_keep`` + a windowed loss, there for
+    ``trl.DPOTrainer``; here for our own ``SFTTrainer`` subclass instead, since
+    ``create_distill_trainer``'s default factory builds a plain TRL ``SFTTrainer``,
+    confirmed by reading ``agenttune.agentic.distill_trainer`` source directly).
+
+    Safe to apply here specifically because ``per_device_train_batch_size=1`` (no
+    per-example window to reconcile across a batch), and ``logits_to_keep`` as a
+    plain Python int ("only project the last N positions through the lm_head") is a
+    long-standing, architecture-independent `transformers` generation API, not
+    something that needs verifying per model family. The loss itself is computed by
+    hand on the returned (smaller) logits tensor, not via the model's own ``labels=``
+    path, specifically so correctness here does not depend on how any particular
+    model class threads ``labels`` through ``logits_to_keep`` internally - that
+    interaction is genuinely model-specific and was NOT verified against Tiny Aya's
+    real modeling code (this repo has no GPU to check on). If the loaded model
+    rejects a plain int ``logits_to_keep`` kwarg, this falls back to the unwindowed
+    loss rather than guess.
+    """
+    from trl import SFTTrainer
+
+    class WindowedSFTTrainer(SFTTrainer):
+        def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+            import torch
+            import torch.nn.functional as F
+
+            labels = inputs.get("labels")
+            if labels is None or labels.shape[0] != 1:
+                return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+            row = labels[0]
+            trained = (row != -100).nonzero(as_tuple=True)[0]
+            if trained.numel() == 0:
+                return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+            start = int(trained[0].item())
+            keep = row.shape[0] - start
+            model_inputs = {k: v for k, v in inputs.items() if k != "labels"}
+            try:
+                outputs = model(**model_inputs, logits_to_keep=keep)
+            except TypeError:
+                return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+            logits = outputs.logits
+            target = row[start:].unsqueeze(0)
+            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)).float(), target.reshape(-1),
+                                   ignore_index=-100)
+            return (loss, outputs) if return_outputs else loss
+
+    return WindowedSFTTrainer
+
+
 class MaskedSFTFactory:
     """AgentTune trainer_factory: Tiny Aya + LoRA + TRL SFTTrainer, loss on assistant turns only."""
 
@@ -222,8 +280,9 @@ class MaskedSFTFactory:
         )
         lora = LoraConfig(r=a.lora_r, lora_alpha=a.lora_alpha, lora_dropout=a.lora_dropout,
                           bias="none", task_type="CAUSAL_LM", target_modules=LORA_TARGETS)
-        self.trainer = SFTTrainer(model=student, args=cfg, train_dataset=Dataset.from_list(rows),
-                                  processing_class=self.tokenizer, peft_config=lora)
+        trainer_cls = windowed_sft_trainer() if a.batch_size == 1 else SFTTrainer
+        self.trainer = trainer_cls(model=student, args=cfg, train_dataset=Dataset.from_list(rows),
+                                   processing_class=self.tokenizer, peft_config=lora)
         return self.trainer
 
 
