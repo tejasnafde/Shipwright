@@ -45,15 +45,6 @@ jobs:
       - name: Classify the dry run (rules only, no judge)
         run: .venv/bin/python scripts/classify.py runs/ci-dry --no-llm
 
-      - name: Agent-R offline dry run (MCTS search, revisions, SFT with loss masks)
-        run: |
-          .venv/bin/python scripts/agent_r_search.py --dry-run --user-model dry-user --task-ids 0 1 \
-              --simulations 8 --output-dir runs/ci-agent-r-search
-          .venv/bin/python scripts/agent_r_revise.py runs/ci-agent-r-search --dry-run --output-dir runs/ci-agent-r-revise
-          .venv/bin/python scripts/agent_r_check.py runs/ci-agent-r-revise --estimate-tokens
-          .venv/bin/python scripts/build_sft.py --agent-r runs/ci-agent-r-revise --estimate-tokens \
-              --output-dir runs/ci-agent-r-sft
-
       - name: OTel spans convert back to the same traces
         run: |
           test -s runs/ci-dry/otel_spans.jsonl

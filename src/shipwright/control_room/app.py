@@ -594,7 +594,7 @@ def tab_fix_train(data: RoundData) -> None:
     st.divider()
     st.markdown("### Model-fault branch - teacher generation")
     st.caption(
-        "Generation is automated here too (teacher replay, or Agent-R's self-critique), but the "
+        "Generation is automated here too (teacher replay), but the "
         "approval step is the opposite of the tool-patch branch above: no human sign-off, because a "
         "new LoRA adapter can be sandboxed and measured against the held-out set before it ever "
         "replaces the one actually serving - that measurement is the 8-check gate, not a person's "
@@ -763,7 +763,7 @@ def tab_follow_task(data: RoundData, after_dir: Path | None, task_id: str) -> No
             with st.expander("Full teacher run"):
                 _render_task_trace(fix)
         else:
-            st.caption("No teacher/Agent-R correction for this task id in the selected SFT dir - "
+            st.caption("No teacher correction for this task id in the selected SFT dir - "
                        "pick one in the sidebar, or this task's fix came from a tool patch instead "
                        "(see Fix & Train).")
         st.markdown("</div>", unsafe_allow_html=True)

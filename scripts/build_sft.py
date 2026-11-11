@@ -2,11 +2,6 @@
 
   --teacher RUN_DIR   teacher runs (scripts/teacher_runs.py); repeatable
   --replay RUN_DIR    Tiny Aya's own runs; their successes are mixed in (replay); repeatable
-  --agent-r DIR       Agent-R output (scripts/agent_r_revise.py): revision runs, trained only on
-                      the revision thought and the good suffix (records carry ``loss_mask``),
-                      plus the good MCTS leaves; repeatable
-  --general FILE      general chat data (jsonl, messages or ShareGPT), mixed so that agent data
-                      is --eta of the total (Agent-R Eq. 6, eta = 0.2)
 
 Only runs with reward == 1 are used, and only from train-split runs (run_config.json).
 Every example is rendered as Tiny Aya sees it (see shipwright.heal.sft_data), deduplicated,
@@ -44,12 +39,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--teacher", type=Path, action="append", default=[], help="teacher run dir")
     parser.add_argument("--replay", type=Path, action="append", default=[], help="Tiny Aya run dir")
     parser.add_argument("--max-replay", type=int, default=None, help="cap on replay examples")
-    parser.add_argument("--agent-r", type=Path, action="append", default=[], help="agent_r_revise.py output dir")
     parser.add_argument("--allow-split", action="store_true", help="accept runs not on the train split")
-
-    # Mixing in general chat data.
-    parser.add_argument("--general", type=Path, default=None, help="general chat jsonl for the eta mix")
-    parser.add_argument("--eta", type=float, default=0.2, help="agent share of the data when --general is set")
 
     # Length limits.
     parser.add_argument(
@@ -175,70 +165,6 @@ def collect(
     return records
 
 
-def load_valid_revision_pairs(run_directory: Path) -> set[tuple] | None:
-    """(bad, good) simulation ids of the revisions that passed scripts/agent_r_check.py.
-
-    None when the run dir has no check.jsonl (the revisions are then used unchecked).
-    """
-    check_path = run_directory / "check.jsonl"
-    if not check_path.exists():
-        return None
-    return {
-        (check["bad_simulation_id"], check.get("good_simulation_id"))
-        for check in read_json_lines(check_path)
-        if check.get("valid")
-    }
-
-
-def collect_agent_r(
-    run_directories: list[Path],
-    build_options: argparse.Namespace,
-    notes: list[str],
-) -> list[dict]:
-    """Revision records (masked) and good-leaf records from agent_r_revise.py output dirs."""
-    records: list[dict] = []
-    for run_directory in run_directories:
-        run_config = json.loads((run_directory / "run_config.json").read_text())
-        check_train_split(run_directory, run_config.get("task_split"), build_options.allow_split)
-
-        prompts_path = run_directory / "prompts.json"
-        if prompts_path.exists():
-            prompts_by_sha = json.loads(prompts_path.read_text())
-        else:
-            prompts_by_sha = {}
-        if prompts_by_sha:
-            fallback_prompt = next(iter(prompts_by_sha.values()))
-        else:
-            fallback_prompt = reconstruct_prompt()
-
-        valid_pairs = load_valid_revision_pairs(run_directory)
-        kept_revision_count = 0
-        invalid_revision_count = 0
-        for revision in read_json_lines(run_directory / "revisions.jsonl"):
-            pair = (revision.get("bad_simulation_id"), revision.get("good_simulation_id"))
-            if valid_pairs is not None and pair not in valid_pairs:
-                invalid_revision_count += 1
-                continue
-            prompt = prompts_by_sha.get(revision.get("prompt_sha")) or fallback_prompt
-            records += sft_data.revision_records(revision, prompt, build_options.long_mode)
-            kept_revision_count += 1
-
-        good_traces = read_json_lines(run_directory / "good.jsonl")
-        for trace in good_traces:
-            prompt = prompt_for(trace, prompts_by_sha, fallback_prompt)
-            records += sft_data.trace_records(trace, prompt, "good", build_options.long_mode)
-
-        if valid_pairs is None:
-            check_status = "unchecked"
-        else:
-            check_status = f"{invalid_revision_count} dropped by agent_r_check"
-        notes.append(
-            f"{run_directory.name}: {kept_revision_count} Agent-R revision runs ({check_status}),"
-            f" {len(good_traces)} good MCTS leaves"
-        )
-    return records
-
-
 def push(output_directory: Path, repo: str, revision: str) -> None:
     from huggingface_hub import HfApi
 
@@ -280,8 +206,8 @@ def choose_token_counting_method(build_options: argparse.Namespace) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     build_options = parse_args(argv)
-    if not build_options.teacher and not build_options.replay and not build_options.agent_r:
-        raise SystemExit("Pass at least one --teacher, --replay or --agent-r dir.")
+    if not build_options.teacher and not build_options.replay:
+        raise SystemExit("Pass at least one --teacher or --replay dir.")
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     if build_options.output_dir:
@@ -301,21 +227,11 @@ def main(argv: list[str] | None = None) -> int:
     replay_records = collect(build_options.replay, "replay", build_options, notes)
     if build_options.max_replay is not None:
         replay_records = replay_records[: build_options.max_replay]
-    agent_r_records = collect_agent_r(build_options.agent_r, build_options, notes)
 
-    record_count_before_dedupe = len(teacher_records) + len(replay_records) + len(agent_r_records)
-    deduplicated_records = sft_data.dedupe(agent_r_records + teacher_records + replay_records)
+    record_count_before_dedupe = len(teacher_records) + len(replay_records)
+    deduplicated_records = sft_data.dedupe(teacher_records + replay_records)
     kept_records, dropped_counts = sft_data.filter_records(deduplicated_records, build_options.max_tokens)
     dropped_counts["duplicates"] = record_count_before_dedupe - len(deduplicated_records)
-
-    eta_mix_report = None
-    if build_options.general:
-        general_rows = read_json_lines(build_options.general)
-        general_records, _ = sft_data.filter_records(
-            sft_data.general_records(general_rows), build_options.max_tokens
-        )
-        kept_records, eta_mix_report = sft_data.eta_mix(kept_records, general_records, build_options.eta)
-        eta_mix_report["general_file"] = str(build_options.general)
 
     with open(output_directory / "sft.jsonl", "w") as sft_file:
         for record in kept_records:
@@ -330,8 +246,6 @@ def main(argv: list[str] | None = None) -> int:
             "max_tokens_limit": build_options.max_tokens,
             "teacher_runs": [str(path) for path in build_options.teacher],
             "replay_runs": [str(path) for path in build_options.replay],
-            "agent_r_dirs": [str(path) for path in build_options.agent_r],
-            "eta_mix": eta_mix_report,
             "notes": notes,
         },
     )

@@ -52,7 +52,7 @@ AgentTune already has the self-healing loop: `Project.heal()`, `FailureDetector`
 Check for an existing AgentTune or AuditKIT function before you write a new one.
 
 What we add: the 3-way router, a tool-patch ledger with rollback, the AuditKIT gate (pass^k, BFCL),
-the tool-fix vs weight-fix comparison, and Agent-R revision data for the weight fix (below).
+and the tool-fix vs weight-fix comparison.
 
 Design inspiration drawn from outside Track 3 too: the tool-patch ledger + one-step rollback
 follows NousResearch/hermes-agent's `skill_ledger.py` pattern (JSONL audit, content-addressed
@@ -104,14 +104,9 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - `scripts/baseline.py` defaults to the tau2 `train` split so held-out tasks stay unused until the splits are frozen.
 - Weight fix (teacher runs, SFT data, LoRA job): `docs/pipeline/training.md`. The teacher gets the student's prompted view (`force_prompted`); the teacher model is passed with `--teacher-model` (no default; team choice above).
 - `scripts/train_job.py` launches nothing without `--launch`, and prints flavor price x timeout first.
-- 2026-11-11 (Mitushi): Agent-R (arxiv 2501.11425) is a second weight-fix data source: MCTS over Tiny Aya's own
-  tau2 runs, the actor finds its first bad step, and a revision run (bad prefix masked, revision thought + good
-  suffix trained) goes into `sft.jsonl` with a per-message `loss_mask`. How: `docs/pipeline/agent-r.md`.
-  Logic in `src/shipwright/heal/agent_r.py`; scripts `agent_r_search.py`, `agent_r_revise.py`, `build_sft.py --agent-r`.
-- A record with `loss_mask` must keep it through AgentTune: `train_lora.py` asserts the EventLog rows have the
-  same mask. Never train on the masked (bad) assistant turns.
-- MCTS branching sets tau2 `Task.initial_state.message_history` to the node prefix; tau2 replays its tool calls
-  strictly. Build branches only through `scripts/agent_r_search.py` (`run_single_task`), not by editing tau2.
+- 2026-11-11: Agent-R (MCTS revision data) was removed as scope creep: 1 valid revision for about $1 in round 1.
+  The only weight-fix data source is teacher replay. Do not add a second data source before a full round has
+  reached a gate decision.
 - Gate (step 05): `docs/pipeline/gate.md`. `scripts/gate_job.py` (HF Job, vLLM serves base + LoRA) or `scripts/gate_eval.py --local-dry-run` (offline). Config `configs/gate.yaml` (status `proposed` until the team freezes it), systems in `configs/systems/`. Metrics come from AuditKIT; the user model is a required argument (no default).
 
 ## Logs and debugging
@@ -283,9 +278,9 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - 2026-11-09: DeepSeek V4.1 Flash on Vertex is served only on the `global` endpoint (a `us-central1` call fails). Vertex has no explicit context cache (`cachedContents`) for MaaS open models; implicit prefix caching (Preview) covers `deepseek-v4.1-flash-maas` from 4096 prompt tokens, not gpt-oss-120b. Our fixed teacher prefix (policy + tool list) is about 2.6k tokens, so hits come from the growing conversation of one run.
 - 2026-11-09: Vertex gpt-oss-120b spends reply tokens on reasoning (`reasoning_content`) first. `vertex.py` raises `max_tokens` below 1024 to 1024; `reasoning_effort: low` is accepted.
 - 2026-11-09: A Vertex token lasts about 1 hour and an HF Job cannot run gcloud. `gate_job.py` passes a token minted at launch (`SHIPWRIGHT_VERTEX_TOKEN`), with no refresh: a gate job with a Vertex user model must finish within about 1 hour. 20 tasks x k=3 x 2 systems (120 tau2 runs) at `max_concurrency: 8` is the scenario this was sized for; don't raise `heldout.num_tasks` back toward 40 without also moving the user model off Vertex (an HF router model instead), or the run risks losing its user simulator partway through.
-- 2026-11-11: In tests, `agenttune.agentic` cannot be imported without torch. `tests/heal/test_agent_r.py` loads
-  `agenttune/agentic/events.py` by file path; register the module in `sys.modules` before `exec_module`, or its
-  dataclasses fail (`'NoneType' object has no attribute '__dict__'`).
+- 2026-11-11: In tests, `agenttune.agentic` cannot be imported without torch. Load `agenttune/agentic/events.py` by file
+  path and register the module in `sys.modules` before `exec_module`, or its dataclasses fail
+  (`'NoneType' object has no attribute '__dict__'`).
 - 2026-11-11: The prompted-tools few-shot example used `#W1234567`, and the student copied it as a real order id (28 of 74 round 1 baseline traces, `invented_id` 34 of 71 failures). It now uses `<...>` placeholders (`prompted_tools.py`). Never put a real-looking id in a prompt example; any baseline or teacher run made before this change used the old prompt and is not comparable with new runs.
 - 2026-11-08: The GitHub repo is private, so an HF Job cannot clone it. `scripts/gate_job.py --launch` uploads `git archive HEAD` to the runs dataset; commit before you launch.
 

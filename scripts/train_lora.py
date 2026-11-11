@@ -12,9 +12,6 @@ Runs on HF Jobs (see scripts/train_job.py), not locally. Steps:
 1. Download sft.jsonl (scripts/build_sft.py) from the dataset repo.
 2. Turn each example into a full-tier AgentTune ``EventLog``: user turns become
    OBSERVATION events (loss-masked), assistant turns become TEXT events (trained).
-   An example with a ``loss_mask`` (Agent-R revision runs, scripts/agent_r_revise.py)
-   keeps the assistant turns it marks as context masked too: the bad steps before the
-   revision thought are never trained.
    The system prompt (policy + compact tools + JSON block protocol) is kept as the
    first message, loss-masked, so the rows are exactly the student's prompts.
 3. ``agenttune.create_distill_trainer(student, trajectories=..., trainer_factory=...)``
@@ -155,15 +152,10 @@ def make_eventlog_class():
         """
 
         system: str = ""
-        # Event indices of assistant turns that are context only (Agent-R bad steps).
-        context_events: tuple = ()
 
         def as_dataset_rows(self, fmt: str) -> list[dict]:
             rows = super().as_dataset_rows(fmt)
             for row in rows:
-                for event_index in self.context_events:
-                    row["segment_weights"][event_index] = 0.0
-                    row["loss_mask"][event_index] = True
                 if self.system:
                     row["messages"].insert(0, {"role": "system", "content": self.system})
                     row["segment_weights"].insert(0, 0.0)
@@ -173,31 +165,11 @@ def make_eventlog_class():
     return SystemPromptEventLog
 
 
-def context_events(messages: list[dict], loss_mask: list[bool] | None) -> tuple[int, ...]:
-    """Event indices (messages without the system prompt) of masked assistant turns."""
-    if loss_mask is None:
-        return ()
-    if len(loss_mask) != len(messages):
-        raise ValueError("loss_mask must have one entry per message")
-
-    has_system_prompt = bool(messages) and messages[0]["role"] == "system"
-    system_message_count = 1 if has_system_prompt else 0
-    masked_assistant_event_indices = []
-    for message_index, (message, is_masked) in enumerate(zip(messages, loss_mask, strict=True)):
-        if is_masked and message["role"] == "assistant":
-            masked_assistant_event_indices.append(message_index - system_message_count)
-    return tuple(masked_assistant_event_indices)
-
-
-def to_eventlog(eventlog_class, messages: list[dict], loss_mask: list[bool] | None = None):
+def to_eventlog(eventlog_class, messages: list[dict]):
     from agenttune.agentic import Event, EventKind
 
     system_prompt, events = split_example(messages)
-    event_log = eventlog_class(
-        tier="full",
-        system=system_prompt,
-        context_events=context_events(messages, loss_mask),
-    )
+    event_log = eventlog_class(tier="full", system=system_prompt)
     for event_kind, text in events:
         if event_kind == "observation":
             agenttune_kind = EventKind.OBSERVATION
@@ -419,8 +391,6 @@ def check_rows_match_records(agenttune_rows: list[dict], records: list[dict]) ->
     for row, record in zip(agenttune_rows, records, strict=True):
         expected_messages = [{"role": m["role"], "content": m["content"]} for m in record["messages"]]
         assert row["messages"] == expected_messages
-        if record.get("loss_mask") is not None:
-            assert row["loss_mask"] == record["loss_mask"], "AgentTune loss_mask differs from the Agent-R mask"
 
 
 def push_adapter(training_options: argparse.Namespace, adapter_directory: Path, final_loss) -> None:
@@ -445,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
     started_at = time.time()
     records, data_stats = load_examples(training_options.dataset, training_options.dataset_revision)
     eventlog_class = make_eventlog_class()
-    event_logs = [to_eventlog(eventlog_class, record["messages"], record.get("loss_mask")) for record in records]
+    event_logs = [to_eventlog(eventlog_class, record["messages"]) for record in records]
     trainer_factory = MaskedSFTFactory(training_options)
     trainer = create_distill_trainer(
         training_options.student,

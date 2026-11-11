@@ -222,7 +222,7 @@
     <li><a href="#proof">What's actually run</a></li>
     <li><a href="#loop">The loop</a></li>
     <li><a href="#steps">Walking through it</a></li>
-    <li><a href="#fixes">Two ways to fix a mistake</a></li>
+    <li><a href="#fixes">Fixing a mistake in the weights</a></li>
     <li><a href="#models">The models, and why</a></li>
     <li><a href="#eval">Evaluation you can trust</a></li>
     <li><a href="#libs">Library integration map</a></li>
@@ -285,8 +285,7 @@ weight-fix split actually working, not asserted.</p>
 <section id="loop">
 <h2>3. The loop</h2>
 <p>One round, start to finish. Detect and classify always run; which branch fires depends on what went
-wrong, and the two weight-fix sources (teacher replay and Agent-R) run independently and feed the same
-training set. The diagram is the whole shape at a glance; the numbered cards below walk through each
+wrong, and the weight fix is fed by teacher replay. The diagram is the whole shape at a glance; the numbered cards below walk through each
 box in plain language.</p>
 
 <pre class="mermaid">
@@ -298,11 +297,9 @@ flowchart TD
     E --> F{"05 Route"}
     F -->|tool fault| G["Patch the tool: ledger + rollback"]
     F -->|model fault| H["Teacher replay"]
-    F -->|model fault| I["Agent-R: MCTS + self-critique"]
     F -->|environment fault| J["Retry or skip - never used as training data"]
     G -. unfixed failures .-> H
     H --> K["06 Curate"]
-    I --> K
     K --> L["07 Train - LoRA via AgentTune"]
     L --> M{"08 Gate - 8 checks, all required"}
     M -->|promote| N["Adapter live, keep the tool patch"]
@@ -414,7 +411,7 @@ flowchart TD
   </div>
   <div class="branch model">
     <h4>Model weight gate</h4>
-    <p>Automated generation (teacher replay, Agent-R) &rarr; <b>automated</b> approval.</p>
+    <p>Automated generation (teacher replay) &rarr; <b>automated</b> approval.</p>
     <p class="small">A new LoRA adapter doesn't touch anything until it's promoted: it can be
       loaded side by side with the one actually serving, scored on the same held-out tasks, and
       compared before it ever replaces anything. That side-by-side measurement <i>is</i> the eight
@@ -431,7 +428,7 @@ flowchart TD
   <div class="flow-connector" style="margin-left:50%"></div>
   <div class="flow-step classify">
     <div class="flow-num">06</div>
-    <div class="flow-body"><h4>Curate</h4><p class="small">Model-fault examples from both sources (teacher replay and Agent-R) are deduplicated and
+    <div class="flow-body"><h4>Curate</h4><p class="small">Model-fault examples from teacher replay are deduplicated and
       written as training rows in Tiny Aya's own prompt format - the same format it sees at inference
       time, so training data and live prompts never silently diverge.</p>
       <div class="flow-lib">scripts/build_sft.py</div></div>
@@ -440,8 +437,8 @@ flowchart TD
   <div class="flow-step classify">
     <div class="flow-num">07</div>
     <div class="flow-body"><h4>Train</h4><p class="small">A LoRA adapter (about 30M trainable parameters, &lt;1% of the model) trains on the curated
-      set. The loss is masked to the parts actually worth learning from - never the bad steps a
-      revision run is correcting away from.</p>
+      set. The loss is masked to the assistant's own turns: the customer's turns and tool results are
+      context, never trained on.</p>
       <div class="flow-lib">AgentTune create_distill_trainer, TRL SFTTrainer</div></div>
   </div>
   <div class="flow-connector"></div>
@@ -501,14 +498,13 @@ signal - the opposite of what a self-healing loop is supposed to do.</p>
 </section>
 
 <section id="fixes">
-<h2>5. Two ways to fix a mistake</h2>
-<p>A model-fault failure can be corrected from two different sources, run independently, feeding the same
-curated training set. They don't compete - a round can use either, both, or neither, depending on what
-failures actually showed up.</p>
+<h2>5. Fixing a mistake in the weights</h2>
+<p>A model-fault failure is corrected with training examples from a stronger teacher model. Tool faults
+are patched in the tool description instead (see the loop above).</p>
 
-<div class="card-row cols-2">
+<div class="card-row">
 <div class="card">
-<div class="eyebrow">Source A</div>
+<div class="eyebrow">Weight-fix data</div>
 <h3>Teacher replay</h3>
 <p class="small">An open-weight teacher model (<b>DeepSeek V4.1 Flash</b>, never Tiny Aya's own weights)
 replays the failed task from the first wrong step onward, and its corrected trajectory becomes a
@@ -516,23 +512,8 @@ training example - "here's what a stronger model would have done differently fro
 <p class="small">Simple, cheap, and effective for failures where a clearly better action exists at the
 point things went wrong.</p>
 </div>
-<div class="card">
-<div class="eyebrow">Source B</div>
-<h3>Agent-R <span class="small">(arXiv 2501.11425)</span></h3>
-<p class="small">Instead of asking a different model what it would have done, this searches the
-<b>student's own</b> attempts at a task with Monte Carlo Tree Search, finds a successful branch and a
-failed one that share a path, has the model critique its own failed branch to find exactly where it
-went wrong, and splices in a short "wait, that's not right" revision thought plus the successful
-continuation.</p>
-<p class="small">The lesson is "notice your own mistake and recover," not "imitate someone else" - a
-second, complementary signal next to the teacher's.</p>
-</div>
 </div>
 
-<p class="small">Both sources write into the same training format: the bad steps are masked out of the
-loss (never trained on directly, only replaced), and only the corrective continuation counts as a
-target. <code>train_lora.py</code> asserts this mask survives intact through every step of data
-preparation - a silent masking bug would mean quietly training the model to repeat its own mistakes.</p>
 </section>
 
 <section id="models">
@@ -712,7 +693,6 @@ blocked on a platform requirement: HF now requires a PRO subscription to host an
 <tr><td>Detect + classify</td><td><span class="badge done">done</span></td><td>Real AgentTune classes, run on real failures.</td></tr>
 <tr><td>Tool-fix round 1</td><td><span class="badge done">done</span></td><td>35 patches applied and verified.</td></tr>
 <tr><td>Teacher-replay data</td><td><span class="badge done">done</span></td><td>Built for real failures needing a weight fix.</td></tr>
-<tr><td>Agent-R data</td><td><span class="badge part">verified offline</span></td><td>Full pipeline runs end to end on a zero-cost dry run; not yet run against real tasks.</td></tr>
 <tr><td>Frozen splits + leak guard</td><td><span class="badge done">done</span></td><td>Exact task ids frozen, enforced in code.</td></tr>
 <tr><td>LoRA training</td><td><span class="badge pending">pending</span></td><td>Needs real GPU time; not yet spent.</td></tr>
 <tr><td>A real gate decision</td><td><span class="badge pending">pending</span></td><td>Logic verified offline; needs a real trained candidate to score.</td></tr>
@@ -746,7 +726,6 @@ structure. <code>scripts/</code> stays a flat set of runnable entry points on pu
   <dt>AuditKIT</dt><dd>Lexsi Labs' evaluation library: scores a run's reliability across repeated attempts and compares it against an external tool-calling benchmark (BFCL). Produces the numbers the gate reads; has no gate of its own.</dd>
   <dt>LoRA</dt><dd>Low-Rank Adaptation: a way to fine-tune a model by training a small add-on (here, about 30 million parameters) instead of all 3.35 billion, far cheaper and faster, and easy to swap out if it turns out worse.</dd>
   <dt>tau2-bench</dt><dd>A benchmark for tool-using customer-support agents: real multi-turn conversations, a simulated customer, and a grader that checks the actual end state of the system, not just the words in the reply.</dd>
-  <dt>MCTS (Monte Carlo Tree Search)</dt><dd>A search method that tries many possible continuations of a situation and keeps track of which ones worked out, used here to find both a failed and a successful attempt at the same task that share a common starting point.</dd>
   <dt>pass<sup>1</sup> / pass<sup>k</sup></dt><dd>Pass<sup>1</sup> is the success rate on a single attempt; pass<sup>k</sup> is whether <i>every one</i> of k repeated attempts succeeds - a stricter measure of reliability, not just luck on one try.</dd>
   <dt>Wilson score interval</dt><dd>A way of stating a success rate with honesty about sample size: "20 of 20 passed" becomes "consistent with a true rate of 89% to 100%," which is a more accurate claim than a bare percentage from a small sample.</dd>
   <dt>BFCL</dt><dd>The Berkeley Function-Calling Leaderboard, an external, independent benchmark for tool-calling ability - used here purely as a regression check, so a fix for one problem can't be quietly making general tool use worse.</dd>

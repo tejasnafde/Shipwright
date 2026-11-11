@@ -242,7 +242,6 @@ def install_llm_patches(
     run_options: argparse.Namespace,
     hf_token: str | None,
     prompted_models: dict[str, int] | None,
-    fake_completion,
 ):
     """Patch litellm for tau2. Returns (usage_meter, model_rerouter)."""
     from shipwright.llm import patches, prompted_tools
@@ -266,7 +265,7 @@ def install_llm_patches(
     if run_options.dry_run:
         from shipwright.llm.dry_run import make_fake_completion
 
-        completion = fake_completion or make_fake_completion(run_options.agent_model)
+        completion = make_fake_completion(run_options.agent_model)
         patches.install(completion, model_map=model_rerouter, **patch_roles)
     else:
         patches.install(model_map=model_rerouter, **patch_roles)
@@ -333,12 +332,10 @@ def prepare(
     run_directory: Path,
     *,
     prompted_models: dict[str, int] | None = None,
-    fake_completion=None,
 ) -> RunSetup | None:
     """Everything before tau2 runs: tokens, litellm patches, tool patches, run_config.json.
 
-    Returns None without a token. ``fake_completion`` replaces the dry-run fake LLM
-    (scripts/agent_r_search.py).
+    Returns None without a token.
     """
     from shipwright.observability import repro
 
@@ -358,7 +355,7 @@ def prepare(
         return None
 
     usage_meter, model_rerouter = install_llm_patches(
-        run_options, hf_token, prompted_models, fake_completion
+        run_options, hf_token, prompted_models
     )
 
     import tau2.evaluator.evaluator_nl_assertions as nl_assertions
