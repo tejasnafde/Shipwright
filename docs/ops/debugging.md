@@ -97,29 +97,29 @@ One JSON object per line on stdout (human-readable on a TTY; `SHIPWRIGHT_LOG_FOR
 
 Every external call logs one line: target, `latency_ms`, `status`, `tokens_in`, `tokens_out`,
 `tokens_cached`, `retries`, and on a failure the error and stack. That covers the agent, user
-simulator, judge and teacher (the litellm wrapper in `shipwright.llm_patch`), the AgentTune
+simulator, judge and teacher (the litellm wrapper in `shipwright.llm.patches`), the AgentTune
 classifier, our judge, BFCL calls, Vertex token fetches, GCS uploads, HF Hub uploads and HF Job
 launches. Tool calls (tau2 `Environment.get_response`) log the tool, latency and error flag.
 
 Secrets are redacted from every field: `hf_...`, `ya29....`, `Bearer ...`, `sk-...`
-(`shipwright.log.redact`, tested in `tests/observability/test_observability.py`).
+(`shipwright.observability.log.redact`, tested in `tests/observability/test_observability.py`).
 
 ## In code
 
 ```python
-from shipwright import log
+from shipwright.observability import log
 logger = log.get_logger(__name__)
 logger.info("tool patches active", patches=active)    # keywords become JSON fields
 with log.bind(task_id=tid):                            # context for every line in the block
     ...
-log.attach_run_dir(out_dir)                            # log.jsonl, errors.json, repro.json go here
-log.note_repro(seed=args.seed)                         # extra facts for repro.json
+log.attach_run_dir(output_directory)                        # log.jsonl, errors.json, repro.json go here
+log.note_repro(seed=run_options.seed)                       # extra facts for repro.json
 
 if __name__ == "__main__":
     sys.exit(log.run_script(main, step="run"))
 ```
 
-`shipwright.instrument.external(kind, target)` times and logs any other external call.
+`shipwright.observability.instrument.external(kind, target)` times and logs any other external call.
 
 ## Test the failure path
 

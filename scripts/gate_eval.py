@@ -748,7 +748,7 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     if "--in-job" in sys.argv and "--bootstrapped" not in sys.argv:
-        sys.exit(main())  # first pass in an HF Job: the harness (and shipwright.log) is not installed yet
+        sys.exit(main())  # first pass in an HF Job: the harness (and shipwright.observability.log) is not installed yet
     from shipwright.observability import log
 
     sys.exit(log.run_script(main, step="gate"))

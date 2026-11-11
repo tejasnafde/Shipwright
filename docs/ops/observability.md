@@ -46,7 +46,7 @@ that endpoint over OTLP/HTTP. Without it, only the file is written. Other backen
 To send an older run, re-export its traces:
 
 ```sh
-.venv/bin/python -c "import json,sys; sys.path.insert(0,'src'); from shipwright.otel import export_run; \
+.venv/bin/python -c "import json,sys; sys.path.insert(0,'src'); from shipwright.observability.otel_export import export_run; \
 d='runs/<dir>'; export_run([json.loads(l) for l in open(d+'/traces.jsonl')], d+'/replay')"
 ```
 

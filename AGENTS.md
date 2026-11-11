@@ -117,13 +117,13 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 ## Logs and debugging
 
 - How to debug a run: `docs/ops/debugging.md` (`scripts/why.py`, the links, `scripts/rerun.py`).
-- Log with `shipwright.log` (`log.get_logger`, keywords as fields), never `logging.basicConfig` or a
+- Log with `shipwright.observability.log` (`log.get_logger`, keywords as fields), never `logging.basicConfig` or a
   new logger setup. Every script ends with `sys.exit(log.run_script(main, step="<step>"))`.
 - Every script writes `log.jsonl`, `errors.json` and `repro.json` into its run dir
   (`log.attach_run_dir`), and `status` (ok / partial / failed) into `summary.json`.
-- New external call (model, HTTP, GCS, HF Hub): wrap it in `shipwright.instrument.external` (or go
+- New external call (model, HTTP, GCS, HF Hub): wrap it in `shipwright.observability.instrument.external` (or go
   through `llm_patch`), so it gets a log line and a span.
-- Never print or log a token or key. `shipwright.log` redacts `hf_`, `ya29.`, `Bearer`, `sk-`; do
+- Never print or log a token or key. `shipwright.observability.log` redacts `hf_`, `ya29.`, `Bearer`, `sk-`; do
   not rely on that for other formats.
 
 ## Traces
