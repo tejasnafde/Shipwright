@@ -109,6 +109,11 @@ def make_critic_chat(model: str, api_base: str | None):
     client = httpx.Client(timeout=120)
 
     def chat(messages: list[dict]) -> str:
+        from shipwright.observability import retry
+
+        return retry.call_with_retry(once, messages, policy=retry.LLM, what=f"llm_critic {model}")
+
+    def once(messages: list[dict]) -> str:
         # 400 reply tokens: the critic reasons briefly, then the Judgment line (Tiny Aya's
         # context is 8192 and critic_messages keeps the prompt near 5k tokens).
         with instrument.external("llm_critic", model, role="critic") as call:

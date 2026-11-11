@@ -71,7 +71,7 @@ def make_chat(token: str | None, model: str):
                            json={"model": body_model, "messages": messages, "temperature": 0,
                                  "max_tokens": 2000, "reasoning_effort": "low"})
 
-    def chat(messages: list[dict]) -> str:
+    def once(messages: list[dict]) -> str:
         from shipwright.observability import instrument
 
         with instrument.external("llm_judge", model, role="judge") as call:
@@ -86,6 +86,11 @@ def make_chat(token: str | None, model: str):
             body = r.json()
             call.update(instrument.usage_fields(body))
             return body["choices"][0]["message"].get("content") or ""
+
+    def chat(messages: list[dict]) -> str:
+        from shipwright.observability import retry
+
+        return retry.call_with_retry(once, messages, policy=retry.LLM_USER, what=f"llm_judge {model}")
 
     return chat
 

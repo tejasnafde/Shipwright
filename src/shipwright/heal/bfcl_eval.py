@@ -102,6 +102,11 @@ def make_chat(api_base: str, model: str, timeout: float = 120):
     client = httpx.Client(timeout=timeout)
 
     def chat(messages: list[dict]) -> str:
+        from shipwright.observability import retry
+
+        return retry.call_with_retry(once, messages, policy=retry.LLM, what=f"llm_bfcl {model}")
+
+    def once(messages: list[dict]) -> str:
         from shipwright.observability import instrument
 
         with instrument.external("llm_bfcl", model, role="agent") as call:

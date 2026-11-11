@@ -124,36 +124,63 @@ def backoff(attempt: int, policy: Policy, rng: Callable[[], float] = random.rand
     return min(policy.max_wait, policy.base * (2 ** (attempt - 1)) * (0.5 + rng()))
 
 
+def _next_wait(e: Exception, attempt: int, waited: float, policy: Policy, what: str) -> float | None:
+    """Seconds to wait before the next try, or None to raise. Logs the retry and adds a span event."""
+    from shipwright.observability import log, otel_live
+
+    if attempt >= policy.attempts or not is_transient(e, policy):
+        return None
+    wait = backoff(attempt, policy)
+    hinted = retry_after(e)
+    if hinted is not None:
+        wait = min(policy.max_wait, max(wait, hinted))
+    if waited + wait > policy.max_total_wait:
+        return None
+    fields = {"what": what, "attempt": attempt, "wait_s": round(wait, 2), "error_class": type(e).__name__,
+              "status": status_of(e)}
+    log.get_logger("shipwright.retry").warning(f"retry {what}", **fields, error=str(e)[:300])
+    try:
+        from opentelemetry import trace as trace_api
+
+        trace_api.get_current_span().add_event("retry", otel_live._clean(fields))
+    except Exception:  # noqa: BLE001
+        pass
+    return wait
+
+
 def call_with_retry(fn: Callable[..., T], *args: Any, policy: Policy = DEFAULT, what: str = "",
                     sleep: Callable[[float], None] = time.sleep, **kwargs: Any) -> T:
     """``fn(*args, **kwargs)``, retried on transient errors under ``policy``."""
-    from shipwright.observability import log, otel_live
-
-    logger = log.get_logger("shipwright.retry")
-    waited = 0.0
-    attempt = 1
+    what = what or getattr(fn, "__name__", "call")
+    waited, attempt = 0.0, 1
     while True:
         try:
             return fn(*args, **kwargs)
         except Exception as e:  # noqa: BLE001
-            if attempt >= policy.attempts or not is_transient(e, policy):
+            wait = _next_wait(e, attempt, waited, policy, what)
+            if wait is None:
                 raise
-            wait = backoff(attempt, policy)
-            hinted = retry_after(e)
-            if hinted is not None:
-                wait = min(policy.max_wait, max(wait, hinted))
-            if waited + wait > policy.max_total_wait:
-                raise
-            fields = {"what": what or getattr(fn, "__name__", "call"), "attempt": attempt,
-                      "wait_s": round(wait, 2), "error_class": type(e).__name__, "status": status_of(e)}
-            logger.warning(f"retry {fields['what']}", **fields, error=str(e)[:300])
-            try:
-                from opentelemetry import trace as trace_api
-
-                trace_api.get_current_span().add_event("retry", otel_live._clean(fields))
-            except Exception:  # noqa: BLE001
-                pass
             sleep(wait)
+            waited += wait
+            attempt += 1
+
+
+async def acall_with_retry(fn: Callable[..., Any], *args: Any, policy: Policy = DEFAULT, what: str = "",
+                           sleep: Callable[[float], Any] | None = None, **kwargs: Any) -> Any:
+    """Async form: ``await fn(*args, **kwargs)``, retried like ``call_with_retry``."""
+    import asyncio
+
+    sleep = sleep or asyncio.sleep
+    what = what or getattr(fn, "__name__", "call")
+    waited, attempt = 0.0, 1
+    while True:
+        try:
+            return await fn(*args, **kwargs)
+        except Exception as e:  # noqa: BLE001
+            wait = _next_wait(e, attempt, waited, policy, what)
+            if wait is None:
+                raise
+            await sleep(wait)
             waited += wait
             attempt += 1
 

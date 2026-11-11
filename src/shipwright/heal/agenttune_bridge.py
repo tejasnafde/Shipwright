@@ -181,17 +181,21 @@ def make_classifier(model_name: str, api_base: str | None = None):
             """A non-vertex id runs AgentTune's own method. A ``vertex/`` id needs a bearer
             token per call (AgentTune's method passes no api_key), so this does the same
             request and parsing with ``shipwright.llm.vertex.route_kwargs`` and one retry on 401."""
-            from shipwright.observability import instrument
+            from shipwright.observability import instrument, retry
 
             if not vertex.is_vertex_model(self.model_name):
-                with instrument.external("llm_classifier", self.model_name, role="classifier"):
-                    return await super()._classify_single(failure)
+                async def theirs() -> ClassifiedFailure:
+                    with instrument.external("llm_classifier", self.model_name, role="classifier"):
+                        return await super(ShipwrightFailureClassifier, self)._classify_single(failure)
+
+                return await retry.acall_with_retry(theirs, policy=retry.LLM, what=f"llm_classifier {self.model_name}")
             import litellm
 
             kwargs = {"model": self.model_name, "messages": self._build_prompt(failure),
                       "response_format": {"type": "json_object"}}
             tokens = vertex.provider()
-            try:
+
+            async def once() -> dict:
                 with instrument.external("llm_classifier", self.model_name, role="classifier") as call:
                     call["retries"] = 0
                     try:
@@ -203,7 +207,11 @@ def make_classifier(model_name: str, api_base: str | None = None):
                         call["retries"] = 1
                         response = await litellm.acompletion(**vertex.route_kwargs(kwargs, tokens))
                     call.update(instrument.usage_fields(response))
-                parsed = json.loads(response.choices[0].message.content)
+                return json.loads(response.choices[0].message.content)  # a non-JSON reply is retried
+
+            try:
+                parsed = await retry.acall_with_retry(once, policy=retry.LLM_USER,
+                                                      what=f"llm_classifier {self.model_name}")
                 root = parsed.get("root_cause", "")
                 return ClassifiedFailure(
                     failure=failure,
