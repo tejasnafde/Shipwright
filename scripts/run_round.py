@@ -48,24 +48,28 @@ class StageBudget:
     cap_usd: float       # the most it may cost: --max-cost-usd for API stages, price x timeout for GPU jobs
 
 
+# The team has $10 in total (2026-11-12), so every cap is small and the caps add up to well under it.
 # Estimates come from the round 1 runs (runs/r1-baseline-train: $1.49 for 74 runs, runs/r1-teacher-t1:
-# $0.53 for 54 runs, so 3 trials of about 54 tasks is about $1.60) and from scripts/train_job.py and
-# scripts/gate_job.py plans (L4 $0.80/h x 2h, A100 $2.50/h x 2h plus the user simulator).
+# $0.53 for 54 runs, so 3 trials of about 54 tasks is about $1.60). GPU caps are price x timeout:
+# train L4 $0.80/h x 1h, gate A10G large $1.50/h x 1h plus about $0.60 of user simulator calls.
+GPU_TIMEOUT = "1h"  # the gate's Vertex token lasts about 1 hour (AGENTS.md traps), so the gate must fit in it
+TRAIN_FLAVOR = "l4x1"
+GATE_FLAVOR = "a10g-large"
 BUDGETS = {
-    "baseline": StageBudget(estimate_usd=1.5, cap_usd=2.5),
+    "baseline": StageBudget(estimate_usd=1.5, cap_usd=2.0),
     "classify": StageBudget(estimate_usd=0.05, cap_usd=0.30),
-    "teacher": StageBudget(estimate_usd=1.6, cap_usd=2.5),
+    "teacher": StageBudget(estimate_usd=1.6, cap_usd=2.0),
     "data": StageBudget(estimate_usd=0.0, cap_usd=0.0),
-    "train": StageBudget(estimate_usd=0.5, cap_usd=1.6),
-    "gate": StageBudget(estimate_usd=3.6, cap_usd=5.6),
+    "train": StageBudget(estimate_usd=0.4, cap_usd=0.8),
+    "gate": StageBudget(estimate_usd=1.8, cap_usd=2.1),
 }
 DESCRIPTIONS = {
     "baseline": "Tiny Aya (no adapter, no tool patches) on the 74 train tasks, 1 trial",
     "classify": "label and route every failure (AgentTune detector and classifier, our rules)",
     "teacher": "the teacher replays the weight-fix failures, 3 trials each; passes are kept",
     "data": "build the SFT dataset from the teacher passes and push it to the HF dataset repo",
-    "train": "LoRA on Tiny Aya Global with AgentTune (HF Job, L4)",
-    "gate": "base vs the new adapter on the 20 held-out tasks, k=3, 8 checks (HF Job, A100)",
+    "train": "LoRA on Tiny Aya Global with AgentTune (HF Job, L4, 1h limit)",
+    "gate": "base vs the new adapter on the 20 held-out tasks, k=3, 8 checks (HF Job, A10G, 1h limit)",
 }
 
 
@@ -76,7 +80,7 @@ def parse_options() -> argparse.Namespace:
     parser.add_argument("--user-model", required=True, help="user simulator and judge, e.g. vertex/openai/gpt-oss-120b-maas")
     parser.add_argument("--teacher-model", required=True, help="e.g. vertex/deepseek-ai/deepseek-v4.1-flash-maas")
     parser.add_argument("--owner", default="ishank", help="whose Cloud Run job runs the cloud stages")
-    parser.add_argument("--round-budget-usd", type=float, default=12.0, help="no stage starts if its cap passes this total")
+    parser.add_argument("--round-budget-usd", type=float, default=8.0, help="no stage starts if its cap passes this total")
     parser.add_argument("--max-concurrency", type=int, default=4)
     parser.add_argument("--dry-run", action="store_true", help="cloud stages with the fake LLM: tests the plumbing, free")
     parser.add_argument("--launch", action="store_true", help="train and gate: submit the HF Job (spends credits)")
@@ -288,12 +292,14 @@ def run_gpu_stage(stage: str, options: argparse.Namespace) -> dict:
     revision = f"round-{options.round}"
     if stage == "train":
         command = [sys.executable, str(ROOT / "scripts" / "train_job.py"),
-                   "--dataset-revision", revision, "--revision", revision]
+                   "--dataset-revision", revision, "--revision", revision,
+                   "--flavor", TRAIN_FLAVOR, "--timeout", GPU_TIMEOUT]
     else:
         command = [sys.executable, str(ROOT / "scripts" / "gate_job.py"), "--round", str(options.round),
                    "--current", "configs/systems/base.yaml",
                    "--candidate", f"configs/systems/r{options.round}-weight.yaml",
-                   "--user-model", options.user_model]
+                   "--user-model", options.user_model,
+                   "--flavor", GATE_FLAVOR, "--timeout", GPU_TIMEOUT]
     if options.launch:
         command.append("--launch")
     exit_code = subprocess.run(command).returncode

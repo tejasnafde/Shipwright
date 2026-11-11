@@ -5,12 +5,12 @@ to `runs/round-N.json` (run dir, exit code, estimate, actual cost). Read the man
 
 | Stage | Where | What | Est. | Cap |
 |---|---|---|---|---|
-| `baseline` | Cloud Run job | Tiny Aya, no adapter, no tool patches, 74 train tasks, 1 trial | $1.50 | $2.50 |
+| `baseline` | Cloud Run job | Tiny Aya, no adapter, no tool patches, 74 train tasks, 1 trial | $1.50 | $2.00 |
 | `classify` | Cloud Run job | label and route every failure | $0.05 | $0.30 |
-| `teacher` | Cloud Run job | teacher replays the weight-fix failures, 3 trials; passes kept | $1.60 | $2.50 |
+| `teacher` | Cloud Run job | teacher replays the weight-fix failures, 3 trials; passes kept | $1.60 | $2.00 |
 | `data` | laptop | `build_sft.py` from the teacher passes, pushed to the HF dataset repo | 0 | 0 |
-| `train` | HF Job, L4 | LoRA with AgentTune (`--launch` to submit) | $0.50 | $1.60 |
-| `gate` | HF Job, A100 | base vs the adapter, 20 held-out tasks, k=3 (`--launch` to submit) | $3.60 | $5.60 |
+| `train` | HF Job, L4, 1h | LoRA with AgentTune (`--launch` to submit) | $0.40 | $0.80 |
+| `gate` | HF Job, A10G large, 1h | base vs the adapter, 20 held-out tasks, k=3 (`--launch` to submit) | $1.80 | $2.10 |
 
 ```sh
 ARGS="--round 2 --user-model vertex/openai/gpt-oss-120b-maas --teacher-model vertex/deepseek-ai/deepseek-v4.1-flash-maas"
@@ -24,7 +24,7 @@ ARGS="--round 2 --user-model vertex/openai/gpt-oss-120b-maas --teacher-model ver
   the cap, every further model call raises and the remaining tasks end as infra errors
   (`cost_cap_hit: true` in `summary.json`). Calls in flight finish, so the final cost can pass the cap by cents.
 - GPU stages are bounded by `price x timeout`, which `train_job.py` and `gate_job.py` print before `--launch`.
-- A stage does not start if its cap plus the spend so far passes `--round-budget-usd` (default $12).
+- A stage does not start if its cap plus the spend so far passes `--round-budget-usd` (default $8; the whole team has $10, so check what others are spending first).
 - Tiny Aya's price on the HF router is an assumption (`price_assumed` in `summary.json`). After `baseline`,
   read the real spend on the HF billing page and correct `BUDGETS` in the script if it differs.
 
