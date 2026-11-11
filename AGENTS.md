@@ -118,6 +118,14 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   AgentTune/AuditKIT, no secrets) - see `infra/space/README.md`. Decided after reviewing a strong
   submission for a different problem statement: a live, interactive HF Space is clearly rewarded in
   this judging round (`docs/notes.md`, "Demo format decision").
+- 2026-11-11: `scripts/demo_data.py` writes four clearly-labeled staged run dirs (a round-1
+  failure, its teacher fix, a staged round-2 pass, a staged gate rejection) for the "Follow a
+  Task" tab and a genuine gate-rejection walkthrough, since no real round-2 adapter has been
+  trained yet. Every staged dir carries a `demo.json` marker; `render_demo_banner()` shows an
+  orange "STAGED EXAMPLE" banner wherever one is loaded, so staged and real data are never
+  visually confused. The sidebar's "Load demo scenario" button jumps straight to these four dirs
+  (`DEMO_SCENARIO` in `app.py`) instead of making a live demo align four dropdowns by hand; the
+  manual pickers still work for any real run dir.
 
 ## Infrastructure
 
@@ -273,14 +281,14 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   anything Tiny-Aya-specific (`logits_to_keep` as a plain int is a long-standing, architecture-
   independent `transformers` API), only the *memory savings* are unverified.
 - 2026-11-11: `scripts/teacher_runs.py`'s `kept.jsonl` is a list of full trace dicts (reward == 1
-  runs, same shape as `traces.jsonl` rows - `agent_turns`, `reward`, `task_id`, no contrastive
-  pairing), not `{student/rejected, teacher/chosen}` pairs. No current producer script writes that
-  pair shape for a single task - not `teacher_runs.py`, not `build_sft.py`'s `sft.jsonl`
-  (`{"messages": [...], "source", "task_id"}`), not Agent-R's `revisions.jsonl`. Control-room's
-  "Fix & Train" and "Follow a Task" tabs read `kept.jsonl` expecting that pair shape and silently
-  fall back to "(not captured)" on every real run dir today. Not fixed here (out of scope for the
-  demo-UI pass this came up in) - whoever adds a real before/after capture for one task should
-  write that pairing into `kept.jsonl` (or a new file) in that shape, not invent a third one.
+  runs, same shape as `traces.jsonl` rows - `messages`, `reward`, `task_id`), not a
+  `{student/rejected, teacher/chosen}` pair. Control-room used to read it expecting that pair
+  shape and silently showed "(not captured)" on every real run dir - fixed the same day by
+  reading `kept.jsonl` as what it actually is (a full trace) and pairing it in the UI with the
+  student's own round-1 trace for the same task id (already loaded from the baseline dir), via
+  `_trace_for_task`/`_render_task_trace` in `control_room/app.py`. No producer script needed to
+  change. Don't reintroduce a `{student, teacher}` pair field anywhere on the strength of an old
+  UI assumption; match the real trace shape instead.
 
 ## Keep this file correct
 

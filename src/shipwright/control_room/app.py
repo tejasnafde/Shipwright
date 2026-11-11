@@ -19,6 +19,7 @@ Run: streamlit run src/shipwright/control_room/app.py
 
 from __future__ import annotations
 
+import html
 import json
 from collections import Counter
 from pathlib import Path
@@ -26,6 +27,14 @@ from pathlib import Path
 import streamlit as st
 
 RUNS_DIR = Path(__file__).resolve().parents[3] / "runs"
+
+# The four dirs scripts/demo_data.py writes: a round-1 failure, its teacher fix, a staged
+# round-2 pass and a staged gate rejection. "Load demo scenario" below jumps straight to them
+# instead of making a live demo align three dropdowns by hand.
+DEMO_SCENARIO = {
+    "baseline": "baseline-demo-round1", "sft": "sft-demo-fix",
+    "gate": "gate-demo-regression", "after": "baseline-demo-round2", "task": "42",
+}
 
 CSS = """
 <style>
@@ -58,6 +67,19 @@ CSS = """
 .cr-follow-card.before{background:rgba(220,38,38,0.06);border-color:#dc2626;}
 .cr-follow-card.fix{background:rgba(217,119,6,0.06);border-color:#d97706;}
 .cr-follow-card.after{background:rgba(22,163,74,0.06);border-color:#16a34a;}
+.cr-msg{border-radius:8px;padding:7px 11px;margin:5px 0;font-size:0.86rem;line-height:1.4;
+  word-wrap:break-word;}
+.cr-msg-role{font-family:"JetBrains Mono",monospace;font-size:0.66rem;font-weight:700;
+  text-transform:uppercase;letter-spacing:0.04em;opacity:0.75;display:block;margin-bottom:2px;}
+.cr-msg.user{background:rgba(154,160,166,0.14);border:1px solid rgba(154,160,166,0.35);}
+.cr-msg.agent{background:transparent;border:1px dashed rgba(154,160,166,0.4);
+  font-style:italic;color:#8a8f98;}
+.cr-msg.tool-call{background:rgba(37,99,235,0.08);border:1px solid #2563eb;}
+.cr-msg.tool-call .cr-msg-role{color:#2563eb;}
+.cr-msg.observation{background:rgba(22,163,74,0.08);border:1px solid #16a34a;}
+.cr-msg.observation .cr-msg-role{color:#16a34a;}
+.cr-msg.observation.error{background:rgba(220,38,38,0.08);border:1px solid #dc2626;}
+.cr-msg.observation.error .cr-msg-role{color:#dc2626;}
 </style>
 """
 
@@ -106,8 +128,12 @@ def _pick_dir(label: str, prefix: str, key: str, container=None) -> Path | None:
     box = container if container is not None else st.sidebar
     candidates = _candidate_dirs(prefix)
     options = ["(none)", *candidates, "(enter a path)"]
-    default_index = 1 if candidates else 0
-    choice = box.selectbox(label, options, index=default_index, key=f"{key}_choice")
+    state_key = f"{key}_choice"
+    # Only set a default `index` on first render. Once session_state holds a value for this
+    # key - including one "Load demo scenario" set programmatically - passing `index` too
+    # makes Streamlit warn about a conflicting default; session_state already wins either way.
+    kwargs = {} if state_key in st.session_state else {"index": 1 if candidates else 0}
+    choice = box.selectbox(label, options, key=state_key, **kwargs)
     if choice == "(none)":
         return None
     if choice == "(enter a path)":
@@ -287,6 +313,96 @@ def render_header(data: RoundData) -> None:
     render_pipeline(data)
 
 
+# ---------------------------------------------------------------- shared trace rendering
+# Used by Run & Trace, Fix & Train (student vs teacher) and Follow a Task (before/fix/after) -
+# one chat-style renderer so a trace looks the same wherever it's shown.
+
+def _esc(value: object) -> str:
+    return html.escape(str(value))
+
+
+def _fmt_args(args: dict | None) -> str:
+    return ", ".join(f"{k}={v!r}" for k, v in (args or {}).items())
+
+
+def _truncate(text: str, limit: int = 600) -> str:
+    return text if len(text) <= limit else text[:limit] + f"... ({len(text)} chars total)"
+
+
+def _render_chat(messages: list[dict]) -> None:
+    """One bubble per tau2 message, color-coded by role - customer (grey), agent free
+    text (muted italic), tool call (blue, name + args only, not the full JSON), tool
+    result (green, red if it errored)."""
+    for m in messages:
+        role = m.get("role")
+        if role == "user":
+            st.markdown(
+                f'<div class="cr-msg user"><span class="cr-msg-role">Customer</span>'
+                f'{_esc(m.get("content") or "")}</div>',
+                unsafe_allow_html=True,
+            )
+        elif role == "tool":
+            cls = "observation error" if m.get("error") else "observation"
+            label = "Observation (error)" if m.get("error") else "Observation"
+            st.markdown(
+                f'<div class="cr-msg {cls}"><span class="cr-msg-role">{label}</span>'
+                f'{_esc(_truncate(str(m.get("content") or "")))}</div>',
+                unsafe_allow_html=True,
+            )
+        elif role == "assistant":
+            tool_calls = m.get("tool_calls")
+            if tool_calls:
+                for tc in tool_calls:
+                    st.markdown(
+                        f'<div class="cr-msg tool-call"><span class="cr-msg-role">Tool call</span>'
+                        f'<code>{_esc(tc.get("name"))}({_esc(_fmt_args(tc.get("arguments")))})</code></div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.markdown(
+                    f'<div class="cr-msg agent"><span class="cr-msg-role">Agent</span>'
+                    f'{_esc(_truncate(str(m.get("content") or "(no text)")))}</div>',
+                    unsafe_allow_html=True,
+                )
+
+
+def _trace_for_task(traces: list[dict], task_id: str) -> dict | None:
+    return next((t for t in traces if str(t.get("task_id")) == task_id), None)
+
+
+def _render_task_trace(trace: dict) -> None:
+    passed = (trace.get("reward") or 0) >= 1
+    badge = "good" if passed else "bad"
+    st.markdown(f'<span class="cr-badge {badge}">{"PASSED" if passed else "FAILED"}</span> '
+                f'<span class="small">trial {trace.get("trial")}, reward {trace.get("reward")}</span>',
+                unsafe_allow_html=True)
+    messages = trace.get("messages")
+    if messages:
+        _render_chat(messages)
+        return
+    # Older or hand-built traces without a `messages` list (e.g. some --dry-run fixtures):
+    # fall back to the coarser agent_turns view instead of showing nothing.
+    for turn in trace.get("agent_turns") or []:
+        st.markdown(f"**turn {turn.get('message_index')}**")
+        st.write(turn.get("raw_output") or "(no raw output captured)")
+        for tc in turn.get("parsed_tool_calls") or []:
+            st.code(json.dumps(tc, indent=2), language="json")
+
+
+def _first_tool_call(trace: dict | None) -> dict | None:
+    """The first tool call a trace makes - from `messages` if present, else `agent_turns`."""
+    if not trace:
+        return None
+    for m in trace.get("messages") or []:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            return m["tool_calls"][0]
+    for turn in trace.get("agent_turns") or []:
+        calls = turn.get("parsed_tool_calls") or []
+        if calls:
+            return calls[0]
+    return None
+
+
 # ---------------------------------------------------------------- tabs
 
 def tab_run_trace(data: RoundData) -> None:
@@ -296,16 +412,9 @@ def tab_run_trace(data: RoundData) -> None:
     st.caption(f"{data.num_tasks} tasks, {data.num_trials} trials, from `{data.baseline_dir.name}/traces.jsonl`.")
     for t in data.traces:
         tid = str(t.get("task_id"))
-        passed = (t.get("reward") or 0) >= 1
-        badge = "good" if passed else "bad"
         label = f"task {tid} · trial {t.get('trial')} · reward {t.get('reward')}"
         with st.expander(label):
-            st.markdown(f'<span class="cr-badge {badge}">{"PASSED" if passed else "FAILED"}</span>', unsafe_allow_html=True)
-            for turn in t.get("agent_turns") or []:
-                st.markdown(f"**turn {turn.get('message_index')}**")
-                st.write(turn.get("raw_output") or "(no raw output captured)")
-                for tc in turn.get("parsed_tool_calls") or []:
-                    st.code(json.dumps(tc, indent=2), language="json")
+            _render_task_trace(t)
 
 
 def tab_classify_route(data: RoundData) -> None:
@@ -332,6 +441,15 @@ def tab_classify_route(data: RoundData) -> None:
             st.caption("No labels yet.")
 
     st.markdown("**Classify**")
+    source_counts = Counter(f.get("source") for f in data.failures if f.get("source"))
+    n_rules, n_judge = source_counts.get("rules", 0), source_counts.get("judge", 0)
+    if n_rules or n_judge:
+        st.caption(
+            f"**{n_rules}** caught by a deterministic rule (regex-level pattern match, no model "
+            f"call) · **{n_judge}** needed the LLM judge, for whatever a rule couldn't explain. "
+            "Same pragmatism as the tool-patch branch: cheap and deterministic first, the LLM only "
+            "as the fallback."
+        )
     st.dataframe(
         [{"task_id": f.get("task_id"), "labels": ", ".join(f.get("labels") or []),
           "agenttune_root_cause": f.get("agenttune_root_cause"), "source": f.get("source"),
@@ -385,12 +503,25 @@ def tab_fix_train(data: RoundData) -> None:
         st.caption("No teacher/SFT output dir selected in the sidebar.")
     else:
         if data.sft_kept:
-            for ex in data.sft_kept[:20]:
-                col1, col2 = st.columns(2)
-                col1.markdown(f"**student (task {ex.get('task_id')})**")
-                col1.write(ex.get("rejected") or ex.get("student") or "(not captured)")
-                col2.markdown("**teacher**")
-                col2.write(ex.get("chosen") or ex.get("teacher") or "(not captured)")
+            st.caption(
+                f"{len(data.sft_kept)} teacher correction(s) kept for training. Each is the "
+                "teacher's own full run on a task the student failed - expand one to see the "
+                "student's failed attempt (from the baseline dir) next to the teacher's passing one."
+            )
+            for i, ex in enumerate(data.sft_kept[:20]):
+                tid = str(ex.get("task_id"))
+                student_trace = _trace_for_task(data.traces, tid)
+                with st.expander(f"task {tid}", expanded=(i == 0)):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("**student (failed)**")
+                        if student_trace:
+                            _render_task_trace(student_trace)
+                        else:
+                            st.caption("No matching trace for this task id in the selected baseline dir.")
+                    with col2:
+                        st.markdown("**teacher (kept)**")
+                        _render_task_trace(ex)
         else:
             st.caption("No teacher corrections kept in this dir.")
         if data.teacher_summary:
@@ -420,6 +551,19 @@ def tab_fix_train(data: RoundData) -> None:
         st.json(data.training_meta)
 
 
+def _format_check_metric(check: dict) -> str | None:
+    """'Current: 85.0% | Candidate: 82.0%  [-3.0%]' from a check's own current/candidate/delta
+    (every numeric check in src/shipwright/heal/gate.py carries these - see check_not_lower,
+    check_target, check_non_target, check_bfcl, agenttune_gate_check). Structural checks
+    (comparable, valid_runs) have no single number to compare and return None here."""
+    cur, cand, delta = check.get("current"), check.get("candidate"), check.get("delta")
+    if cur is None or cand is None:
+        return None
+    if check.get("name") == "bfcl":
+        return f"Current: {cur:.2f} pts | Candidate: {cand:.2f} pts  [{(delta or 0):+.2f}]"
+    return f"Current: {cur:.1%} | Candidate: {cand:.1%}  [{(delta or 0):+.1%}]"
+
+
 def tab_gate_outcome(data: RoundData) -> None:
     render_demo_banner(data.gate_dir)
     if data.gate_decision is None:
@@ -436,14 +580,22 @@ def tab_gate_outcome(data: RoundData) -> None:
         st.error(f"**REJECTED - old system kept.** {reason}")
 
     st.markdown("**Checks**")
+    st.caption("Current = the system live today. Candidate = the one asking to replace it.")
     for check in data.gate_checks:
         passed = check.get("passed")
         skipped = check.get("skipped")
         icon = "SKIP" if skipped else ("PASS" if passed else "FAIL")
         state = "pending" if skipped else ("good" if passed else "bad")
-        cols = st.columns([1, 5])
+        cols = st.columns([1, 4, 3])
         cols[0].markdown(f'<span class="cr-badge {state}">{icon}</span>', unsafe_allow_html=True)
         cols[1].markdown(f"**{check.get('name')}** - {check.get('detail')}")
+        metric = _format_check_metric(check)
+        if metric:
+            color = "#9aa0a6" if skipped else ("#16a34a" if passed else "#dc2626")
+            cols[2].markdown(
+                f'<span style="font-variant-numeric:tabular-nums;color:{color};font-weight:600;">{metric}</span>',
+                unsafe_allow_html=True,
+            )
 
     verdicts = decision.get("verdicts")
     if verdicts:
@@ -452,23 +604,6 @@ def tab_gate_outcome(data: RoundData) -> None:
 
     with st.expander("Full gate decision (raw)"):
         st.json(decision)
-
-
-def _trace_for_task(traces: list[dict], task_id: str) -> dict | None:
-    return next((t for t in traces if str(t.get("task_id")) == task_id), None)
-
-
-def _render_task_trace(trace: dict) -> None:
-    passed = (trace.get("reward") or 0) >= 1
-    badge = "good" if passed else "bad"
-    st.markdown(f'<span class="cr-badge {badge}">{"PASSED" if passed else "FAILED"}</span> '
-                f'<span class="small">trial {trace.get("trial")}, reward {trace.get("reward")}</span>',
-                unsafe_allow_html=True)
-    for turn in trace.get("agent_turns") or []:
-        st.markdown(f"**turn {turn.get('message_index')}**")
-        st.write(turn.get("raw_output") or "(no raw output captured)")
-        for tc in turn.get("parsed_tool_calls") or []:
-            st.code(json.dumps(tc, indent=2), language="json")
 
 
 def tab_follow_task(data: RoundData, after_dir: Path | None, task_id: str) -> None:
@@ -508,11 +643,24 @@ def tab_follow_task(data: RoundData, after_dir: Path | None, task_id: str) -> No
         st.markdown('<div class="cr-follow-card fix">', unsafe_allow_html=True)
         st.markdown("**The fix**")
         if fix:
-            st.caption(f"from `{data.sft_dir.name if data.sft_dir else '?'}/kept.jsonl`")
-            st.markdown("*student (rejected)*")
-            st.write(fix.get("rejected") or fix.get("student") or "(not captured)")
-            st.markdown("*teacher / Agent-R (chosen)*")
-            st.write(fix.get("chosen") or fix.get("teacher") or "(not captured)")
+            st.caption(f"from `{data.sft_dir.name if data.sft_dir else '?'}/kept.jsonl` - the teacher's "
+                       "own full run on this task, kept because it passed.")
+            bad_call, good_call = _first_tool_call(before_trace), _first_tool_call(fix)
+            if bad_call and good_call:
+                st.markdown(
+                    '<div class="cr-msg tool-call" style="border-color:#dc2626;background:rgba(220,38,38,0.08);">'
+                    '<span class="cr-msg-role" style="color:#dc2626;">Student called</span>'
+                    f'<code>{_esc(bad_call.get("name"))}({_esc(_fmt_args(bad_call.get("arguments")))})</code></div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    '<div class="cr-msg tool-call">'
+                    '<span class="cr-msg-role">Teacher called</span>'
+                    f'<code>{_esc(good_call.get("name"))}({_esc(_fmt_args(good_call.get("arguments")))})</code></div>',
+                    unsafe_allow_html=True,
+                )
+            with st.expander("Full teacher run"):
+                _render_task_trace(fix)
         else:
             st.caption("No teacher/Agent-R correction for this task id in the selected SFT dir - "
                        "pick one in the sidebar, or this task's fix came from a tool patch instead "
@@ -565,6 +713,19 @@ def main() -> None:
     st.title("Shipwright: the loop, round by round")
     st.markdown(CSS, unsafe_allow_html=True)
 
+    demo_ready = all((RUNS_DIR / DEMO_SCENARIO[k]).exists() for k in ("baseline", "sft", "gate", "after"))
+    if demo_ready:
+        if st.sidebar.button("Load demo scenario", width="stretch", type="primary"):
+            st.session_state["baseline_choice"] = DEMO_SCENARIO["baseline"]
+            st.session_state["sft_choice"] = DEMO_SCENARIO["sft"]
+            st.session_state["gate_choice"] = DEMO_SCENARIO["gate"]
+            st.session_state["after_choice"] = DEMO_SCENARIO["after"]
+            st.session_state["task_id_choice"] = DEMO_SCENARIO["task"]
+            st.rerun()
+    else:
+        st.sidebar.caption("Run `scripts/demo_data.py` to enable the one-click demo scenario.")
+    st.sidebar.divider()
+
     st.sidebar.header("Round")
     baseline_dir = _pick_dir("Baseline run", "baseline-", "baseline")
     advanced = st.sidebar.expander("+ teacher, gate, round #")
@@ -584,7 +745,7 @@ def main() -> None:
     st.sidebar.divider()
     st.sidebar.header("Follow a task")
     task_ids = sorted({str(t.get("task_id")) for t in data.traces if t.get("task_id") is not None})
-    task_id = st.sidebar.selectbox("Task id", [""] + task_ids) if task_ids else ""
+    task_id = st.sidebar.selectbox("Task id", [""] + task_ids, key="task_id_choice") if task_ids else ""
     after_dir = _pick_dir("Compare to (after)", "baseline-", "after")
 
     render_header(data)

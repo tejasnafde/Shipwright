@@ -45,6 +45,41 @@ def _demo_json(note: str) -> dict:
     return {"staged": True, "note": note}
 
 
+def _user(content: str) -> dict:
+    return {"role": "user", "content": content, "tool_calls": None}
+
+
+def _tool_call_msg(call_id: str, name: str, arguments: dict) -> dict:
+    return {"role": "assistant", "content": None,
+            "tool_calls": [{"id": call_id, "name": name, "arguments": arguments, "requestor": "assistant"}]}
+
+
+def _tool_result(call_id: str, content: str, error: bool) -> dict:
+    return {"id": call_id, "role": "tool", "content": content, "error": error}
+
+
+def _assistant_text(content: str) -> dict:
+    return {"role": "assistant", "content": content, "tool_calls": None}
+
+
+def _refund_conversation(order_id: str, found: bool) -> list[dict]:
+    """The shared shape of this scenario's conversation: greeting, the customer naming
+    their order, one lookup, then the agent's final answer - correct when ``found`` is
+    True (the real id resolves), wrong when it's False (an invented id does not)."""
+    messages = [
+        _assistant_text("Hi! How can I help you today?"),
+        _user(f"Hi, I'd like a refund for order {REAL_ID} please."),
+        _tool_call_msg("call_1", "get_order_details", {"order_id": order_id}),
+    ]
+    if found:
+        messages.append(_tool_result("call_1", f"order {order_id}: 1 item, delivered", error=False))
+        messages.append(_assistant_text("Found it - your return has been processed and the refund is on its way."))
+    else:
+        messages.append(_tool_result("call_1", f"Error: no order found with id {order_id}", error=True))
+        messages.append(_assistant_text("Your return has been processed and a refund has been issued."))
+    return messages
+
+
 def _other_task_trial(passed: bool = True) -> dict:
     """A second, unremarkable task in the same run dir, so the round doesn't look cherry-picked
     down to a single trial."""
@@ -58,15 +93,12 @@ def _other_task_trial(passed: bool = True) -> dict:
         "termination_reason": "user_stop",
         "error": None,
         "error_type": None,
-        "agent_turns": [
-            {
-                "message_index": 0,
-                "turn_idx": 0,
-                "raw_output": "Sure, let me check that order for you.",
-                "parsed_tool_calls": [{"name": "get_order_details", "arguments": {"order_id": "#W0000007"}}],
-                "tool_results": [{"id": "0", "output": "order #W0000007: delivered"}],
-                "errors": [],
-            },
+        "messages": [
+            _assistant_text("Hi! How can I help you today?"),
+            _user("Can you check the status of order #W0000007?"),
+            _tool_call_msg("call_1", "get_order_details", {"order_id": "#W0000007"}),
+            _tool_result("call_1", "order #W0000007: delivered", error=False),
+            _assistant_text("Your order #W0000007 was delivered. Anything else?"),
         ],
     }
 
@@ -85,26 +117,7 @@ def round1_baseline() -> Path:
         "termination_reason": "user_stop",
         "error": None,
         "error_type": None,
-        "agent_turns": [
-            {
-                "message_index": 0,
-                "turn_idx": 0,
-                "raw_output": (
-                    "I'll process the return for your order. Let me pull it up."
-                ),
-                "parsed_tool_calls": [{"name": "get_order_details", "arguments": {"order_id": HALLUCINATED_ID}}],
-                "tool_results": [{"id": "0", "output": f"Error: no order found with id {HALLUCINATED_ID}"}],
-                "errors": [],
-            },
-            {
-                "message_index": 1,
-                "turn_idx": 1,
-                "raw_output": "Your return has been processed and a refund has been issued.",
-                "parsed_tool_calls": [],
-                "tool_results": [],
-                "errors": [],
-            },
-        ],
+        "messages": _refund_conversation(HALLUCINATED_ID, found=False),
     }
     write_jsonl(out / "traces.jsonl", [failing_trial, _other_task_trial()])
 
@@ -114,17 +127,17 @@ def round1_baseline() -> Path:
         "simulation_id": f"demo-{TASK_ID}-0",
         "reward": 0.0,
         "labels": ["invented_id"],
-        "rule_hits": [{"label": "invented_id", "turn": 0,
+        "rule_hits": [{"label": "invented_id", "turn": 2,
                         "detail": f"order_id {HALLUCINATED_ID} does not match any id in context"}],
-        "first_wrong_turn": 0,
+        "first_wrong_turn": 2,
         "fault_layer": "model",
         "route": "weight_fix",
         "source": "rules",
         "explanation": (
-            f"invented_id at turn 0: the customer's real order id never appears anywhere in the "
-            f"conversation or the tool results, but the model called get_order_details with "
-            f"{HALLUCINATED_ID} - an id it made up - then told the customer the refund was done "
-            f"after the lookup failed, instead of asking for the order number."
+            f"invented_id at turn 2: the customer's real order id ({REAL_ID}) is right there in "
+            f"their message, but the model called get_order_details with {HALLUCINATED_ID} - an id "
+            f"it made up - then told the customer the refund was done after the lookup failed, "
+            f"instead of rereading the message or asking for the order number."
         ),
         "outcome_failed": True,
         "detected_by": ["outcome", "agenttune_detector"],
@@ -142,34 +155,35 @@ def round1_baseline() -> Path:
 
     (out / "demo.json").write_text(json.dumps(_demo_json(
         f"Round 1 baseline: task {TASK_ID} fails because the model invents an order id "
-        f"({HALLUCINATED_ID}) instead of using the one in context. Hand-written to illustrate "
-        "the 'aha moment' story end to end (see runs/sft-demo-fix, runs/baseline-demo-round2) - "
-        "not a real tau2 run."
+        f"({HALLUCINATED_ID}) instead of using the one the customer gave it ({REAL_ID}). "
+        "Hand-written to illustrate the 'aha moment' story end to end (see runs/sft-demo-fix, "
+        "runs/baseline-demo-round2) - not a real tau2 run."
     ), indent=2))
     return out
 
 
 def fix_sft() -> Path:
+    """The teacher's own run on task 42, kept because it passed - same shape as a row in
+    scripts/teacher_runs.py's kept.jsonl (a full trace dict, reward 1.0), not a hand-rolled
+    {student, teacher} pair: control-room pairs this with the student's round-1 trace itself
+    (same task id, from the baseline dir) rather than needing a separate field for it."""
     out = RUNS_DIR / "sft-demo-fix"
     out.mkdir(parents=True, exist_ok=True)
 
-    kept_entry = {
+    kept_trace = {
+        "simulation_id": f"demo-{TASK_ID}-teacher",
         "task_id": TASK_ID,
+        "trial": 0,
+        "seed": 300,
+        "reward": 1.0,
+        "passed": True,
+        "termination_reason": "user_stop",
+        "error": None,
+        "error_type": None,
         "source": "teacher",
-        "student": (
-            f'```json\n{{"name": "get_order_details", "arguments": {{"order_id": "{HALLUCINATED_ID}"}}}}\n```'
-        ),
-        "rejected": (
-            f'```json\n{{"name": "get_order_details", "arguments": {{"order_id": "{HALLUCINATED_ID}"}}}}\n```'
-        ),
-        "teacher": (
-            f'```json\n{{"name": "get_order_details", "arguments": {{"order_id": "{REAL_ID}"}}}}\n```'
-        ),
-        "chosen": (
-            f'```json\n{{"name": "get_order_details", "arguments": {{"order_id": "{REAL_ID}"}}}}\n```'
-        ),
+        "messages": _refund_conversation(REAL_ID, found=True),
     }
-    write_jsonl(out / "kept.jsonl", [kept_entry])
+    write_jsonl(out / "kept.jsonl", [kept_trace])
 
     (out / "teacher_summary.json").write_text(json.dumps({
         "kept": 1, "per_task": {TASK_ID: 1}, "tasks_without_success": [],
@@ -177,10 +191,9 @@ def fix_sft() -> Path:
 
     (out / "demo.json").write_text(json.dumps(_demo_json(
         f"Teacher replay for task {TASK_ID}, hand-written to show the contrast: the real "
-        "order id was sitting in the conversation the whole time, the student ignored it and "
-        "invented one, the teacher replay uses it directly. A real teacher_runs.py kept.jsonl "
-        "holds full passing trace dicts, not a student/teacher pair like this - see AGENTS.md's "
-        "known traps (2026-11-11) for why this demo's shape differs from the real file."
+        "order id was sitting in the customer's own message, the student ignored it and invented "
+        "one, the teacher replay uses it directly. Shaped exactly like a real teacher_runs.py "
+        "kept.jsonl row (a full passing trace, not a synthetic pair)."
     ), indent=2))
     return out
 
@@ -199,32 +212,15 @@ def round2_baseline() -> Path:
         "termination_reason": "user_stop",
         "error": None,
         "error_type": None,
-        "agent_turns": [
-            {
-                "message_index": 0,
-                "turn_idx": 0,
-                "raw_output": "I'll process the return for your order now.",
-                "parsed_tool_calls": [{"name": "get_order_details", "arguments": {"order_id": REAL_ID}}],
-                "tool_results": [{"id": "0", "output": f"order {REAL_ID}: 1 item, delivered"}],
-                "errors": [],
-            },
-            {
-                "message_index": 1,
-                "turn_idx": 1,
-                "raw_output": "Found it - your return has been processed and the refund is on its way.",
-                "parsed_tool_calls": [],
-                "tool_results": [],
-                "errors": [],
-            },
-        ],
+        "messages": _refund_conversation(REAL_ID, found=True),
     }
     write_jsonl(out / "traces.jsonl", [passing_trial, _other_task_trial()])
 
     (out / "demo.json").write_text(json.dumps(_demo_json(
         f"Staged 'after' round: task {TASK_ID} passing once the LoRA adapter has learned to use "
-        "the order id already in context instead of inventing one. No round-2 adapter has "
-        "actually been trained and gated yet - this illustrates what success on this task should "
-        "look like once one is, for the demo's before/after story."
+        "the order id already in the customer's message instead of inventing one. No round-2 "
+        "adapter has actually been trained and gated yet - this illustrates what success on this "
+        "task should look like once one is, for the demo's before/after story."
     ), indent=2))
     return out
 
