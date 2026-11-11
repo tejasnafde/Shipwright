@@ -69,12 +69,12 @@ assistant turns, and the HF router (cohere provider) drops the `tools` parameter
 with `tiny-aya` in the name. tau2 stays unchanged.
 
 - Request: `tools` and `tool_choice` are removed. The tool schemas, a short instruction
-  and one example go into the system message.
+  and one example go into the system message. The example uses `<...>` placeholders, never a real-looking id: until 2026-11-11 it used `#W1234567`, and the student copied it into 28 of 74 baseline traces (`invented_id`, 34 of 71 failures).
 - Reply format the model must use:
 
   ````
   ```json
-  {"name": "get_order_details", "arguments": {"order_id": "#W1234567"}}
+  {"name": "get_order_details", "arguments": {"order_id": "<that order id>"}}
   ```
   ````
 

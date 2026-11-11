@@ -286,6 +286,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - 2026-11-11: In tests, `agenttune.agentic` cannot be imported without torch. `tests/heal/test_agent_r.py` loads
   `agenttune/agentic/events.py` by file path; register the module in `sys.modules` before `exec_module`, or its
   dataclasses fail (`'NoneType' object has no attribute '__dict__'`).
+- 2026-11-11: The prompted-tools few-shot example used `#W1234567`, and the student copied it as a real order id (28 of 74 round 1 baseline traces, `invented_id` 34 of 71 failures). It now uses `<...>` placeholders (`prompted_tools.py`). Never put a real-looking id in a prompt example; any baseline or teacher run made before this change used the old prompt and is not comparable with new runs.
 - 2026-11-08: The GitHub repo is private, so an HF Job cannot clone it. `scripts/gate_job.py --launch` uploads `git archive HEAD` to the runs dataset; commit before you launch.
 
 - 2026-11-11: Vertex gpt-oss-120b (user simulator) returns 429 at 4 to 6 concurrent tau2 runs; with no retry, 15 of 74 baseline runs became infra errors. `vertex.call_with_refresh` now waits and retries a 429 up to 5 times. Some 400s from the same model remain (cause not found yet); 2026-11-12: user and judge calls retry a 400 twice (`BAD_REQUEST_WAITS`), and the NL judge is asked again (twice) when its reply is not JSON (tau2 `json.loads` crashed the run, 3 infra errors in round 1).

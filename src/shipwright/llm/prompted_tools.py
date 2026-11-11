@@ -39,11 +39,14 @@ To call a tool, reply with exactly one block and nothing else:
 Call one tool at a time. You will get the result in the next message.
 If you do not need a tool, reply to the user in plain text.
 
-Example:
-User: Where is my order #W1234567?
+Only use values the customer or an earlier tool result gave you. Never make up an id.
+If you do not have a value yet, ask the customer or look it up first.
+
+Example (angle brackets stand for a real value from the conversation, not text to copy):
+User: Where is my order <order id the customer wrote>?
 Assistant:
 ```json
-{{"name": "get_order_details", "arguments": {{"order_id": "#W1234567"}}}}
+{{"name": "get_order_details", "arguments": {{"order_id": "<that order id>"}}}}
 ```"""
 
 _FENCE = re.compile(r"```(?:json|JSON)?\s*(.*?)```", re.DOTALL)
