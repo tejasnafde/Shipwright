@@ -1,6 +1,6 @@
 # Build the harness image and point the branch's Cloud Run Job at it (docs/setup/cloud-runs.md).
 #
-# Branch -> owner: tejas, mitushi, main -> same name; ig/main -> ishank. Triggers pass nothing;
+# Branch -> owner: tejas, mitushi, main -> same name; ig/main, updated-ishank -> ishank. Triggers pass nothing;
 # a manual build passes _OWNER and _SHA:
 #   gcloud --configuration=personal --project=lexsi-hackathon builds submit --region=asia-south1 \
 #     --config=infra/cloudbuild.yaml --substitutions=_OWNER=tejas,_SHA=$(git rev-parse --short HEAD) .
@@ -23,7 +23,7 @@ steps:
         owner="${_OWNER}"
         if [ -z "$$owner" ]; then
           case "${BRANCH_NAME}" in
-            ig/main) owner=ishank ;;
+            ig/main|updated-ishank) owner=ishank ;;
             tejas|mitushi|main) owner="${BRANCH_NAME}" ;;
             *) echo "no Cloud Run Job for branch '${BRANCH_NAME}'"; exit 1 ;;
           esac
