@@ -73,8 +73,8 @@ def reply_tokens_for(model: str) -> int:
 
 
 def prompt_sha(system: str, tools: list[dict]) -> str:
-    blob = json.dumps({"system": system, "tools": tools}, sort_keys=True)
-    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+    serialized_prompt = json.dumps({"system": system, "tools": tools}, sort_keys=True)
+    return hashlib.sha256(serialized_prompt.encode()).hexdigest()[:16]
 
 
 def recorded_prompts() -> dict[str, dict]:
@@ -89,17 +89,20 @@ _EXAMPLE = re.compile(r"such as (\'[^\']*\'|\"[^\"]*\")")
 
 
 def _type_name(schema: dict) -> str:
-    t = schema.get("type", "any")
-    if t == "array":
+    json_type = schema.get("type", "any")
+    if json_type == "array":
         return f"list[{_type_name(schema.get('items') or {})}]"
-    return _TYPES.get(t, str(t))
+    return _TYPES.get(json_type, str(json_type))
 
 
 def _first_sentence(text: str, limit: int = 140) -> str:
     text = " ".join((text or "").split())
-    m = re.search(r"(.+?\.)(\s|$)", text)
-    text = m.group(1) if m else text
-    return text if len(text) <= limit else text[: limit - 3] + "..."
+    sentence_match = re.search(r"(.+?\.)(\s|$)", text)
+    if sentence_match:
+        text = sentence_match.group(1)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 
 # Tool patches (rows with status "applied" from patches/ledger.jsonl), set by baseline.py.
@@ -108,13 +111,17 @@ _tool_patches: list[dict] = []
 
 def set_tool_patches(rows: list[dict]) -> None:
     global _tool_patches
-    _tool_patches = [r for r in rows if r.get("status") == "applied"]
+    _tool_patches = [row for row in rows if row.get("status") == "applied"]
 
 
 def _patched_fields(tool_name: str) -> set[str]:
     """Fields to show in full. Placeholder-only patches (source "rules") already reach
     the model through the compact "e.g." form, so they stay compact."""
-    return {r["field"] for r in _tool_patches if r["tool"] == tool_name and r.get("source") != "rules"}
+    return {
+        row["field"]
+        for row in _tool_patches
+        if row["tool"] == tool_name and row.get("source") != "rules"
+    }
 
 
 def compact_tool_line(tool: dict) -> str:
@@ -122,34 +129,37 @@ def compact_tool_line(tool: dict) -> str:
 
     A field changed by a tool patch is shown in full, so the patch reaches the model.
     """
-    fn = tool.get("function", tool)
-    patched = _patched_fields(fn.get("name", ""))
-    params = fn.get("parameters") or {}
-    required = set(params.get("required") or [])
-    args = []
-    for name, schema in (params.get("properties") or {}).items():
-        arg = f"{name}{'' if name in required else '?'}: {_type_name(schema)}"
-        desc = schema.get("description") or ""
-        ex = _EXAMPLE.search(desc)
-        choice = _CHOICE.search(desc)
-        if f"parameters.{name}.description" in patched:
-            arg += f" ({' '.join(desc.split())})"
-        elif choice:
-            arg += f" one of {choice.group(1)}|{choice.group(2)}"
-        elif ex:
-            arg += f" e.g. {ex.group(1)}"
-        args.append(arg)
-    description = fn.get("description", "")
-    if "description" in patched:
+    function = tool.get("function", tool)
+    patched_fields = _patched_fields(function.get("name", ""))
+    parameters = function.get("parameters") or {}
+    required_names = set(parameters.get("required") or [])
+
+    argument_texts = []
+    for name, schema in (parameters.get("properties") or {}).items():
+        optional_mark = "" if name in required_names else "?"
+        argument_text = f"{name}{optional_mark}: {_type_name(schema)}"
+        parameter_description = schema.get("description") or ""
+        example_match = _EXAMPLE.search(parameter_description)
+        choice_match = _CHOICE.search(parameter_description)
+        if f"parameters.{name}.description" in patched_fields:
+            argument_text += f" ({' '.join(parameter_description.split())})"
+        elif choice_match:
+            argument_text += f" one of {choice_match.group(1)}|{choice_match.group(2)}"
+        elif example_match:
+            argument_text += f" e.g. {example_match.group(1)}"
+        argument_texts.append(argument_text)
+
+    description = function.get("description", "")
+    if "description" in patched_fields:
         description = " ".join(description.split())
     else:
         description = _first_sentence(description)
-    return f"{fn.get('name')}({', '.join(args)}) - {description}"
+    return f"{function.get('name')}({', '.join(argument_texts)}) - {description}"
 
 
 def render_tools_prompt(tools: list[dict]) -> str:
-    lines = "\n".join(compact_tool_line(t) for t in tools)
-    return INSTRUCTION.format(tools=lines)
+    tool_lines = "\n".join(compact_tool_line(tool) for tool in tools)
+    return INSTRUCTION.format(tools=tool_lines)
 
 
 def minify_content(content: str) -> str:
@@ -172,74 +182,83 @@ def format_tool_call(name: str, arguments: Any) -> str:
 def convert_messages(messages: list[dict], tools: list[dict]) -> list[dict]:
     """Rewrite an OpenAI-style history into system/user/assistant turns only."""
     tool_prompt = render_tools_prompt(tools)
-    names_by_id: dict[str, str] = {}
-    out: list[dict] = []
-    added = False
-    for m in messages:
-        role = m.get("role")
-        content = m.get("content") or ""
+    tool_name_by_call_id: dict[str, str] = {}
+    converted_messages: list[dict] = []
+    tool_prompt_added = False
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content") or ""
         if role == "system":
-            if not added:
+            if not tool_prompt_added:
                 content = f"{content}\n\n{tool_prompt}" if content else tool_prompt
-                added = True
-            out.append({"role": "system", "content": content})
+                tool_prompt_added = True
+            converted_messages.append({"role": "system", "content": content})
         elif role == "assistant":
-            parts = [content] if content else []
-            for tc in m.get("tool_calls") or []:
-                fn = tc.get("function") or {}
-                names_by_id[tc.get("id", "")] = fn.get("name", "")
-                parts.append(format_tool_call(fn.get("name", ""), fn.get("arguments", {})))
-            out.append({"role": "assistant", "content": "\n".join(parts)})
+            content_parts = [content] if content else []
+            for tool_call in message.get("tool_calls") or []:
+                function = tool_call.get("function") or {}
+                tool_name_by_call_id[tool_call.get("id", "")] = function.get("name", "")
+                content_parts.append(format_tool_call(function.get("name", ""), function.get("arguments", {})))
+            converted_messages.append({"role": "assistant", "content": "\n".join(content_parts)})
         elif role == "tool":
-            name = names_by_id.get(m.get("tool_call_id", ""), "tool")
-            out.append({"role": "user", "content": f"Tool result for {name}: {minify_content(content)}"})
+            tool_name = tool_name_by_call_id.get(message.get("tool_call_id", ""), "tool")
+            converted_messages.append(
+                {"role": "user", "content": f"Tool result for {tool_name}: {minify_content(content)}"}
+            )
         else:
-            out.append({"role": role, "content": content})
-    if not added:
-        out.insert(0, {"role": "system", "content": tool_prompt})
+            converted_messages.append({"role": role, "content": content})
+    if not tool_prompt_added:
+        converted_messages.insert(0, {"role": "system", "content": tool_prompt})
+
     # The template expects alternating turns; merge consecutive user turns.
-    merged: list[dict] = []
-    for m in out:
-        if merged and m["role"] == "user" and merged[-1]["role"] == "user":
-            merged[-1] = {"role": "user", "content": merged[-1]["content"] + "\n\n" + m["content"]}
+    merged_messages: list[dict] = []
+    for message in converted_messages:
+        previous_message = merged_messages[-1] if merged_messages else None
+        if previous_message and message["role"] == "user" and previous_message["role"] == "user":
+            merged_content = previous_message["content"] + "\n\n" + message["content"]
+            merged_messages[-1] = {"role": "user", "content": merged_content}
         else:
-            merged.append(m)
-    return merged
+            merged_messages.append(message)
+    return merged_messages
 
 
 def _first_json_object(text: str) -> str | None:
     """The first balanced {...} span in text (string-aware)."""
-    start = text.find("{")
-    while start != -1:
-        depth, in_str, esc, quote = 0, False, False, ""
-        for i in range(start, len(text)):
-            c = text[i]
-            if in_str:
-                if esc:
-                    esc = False
-                elif c == "\\":
-                    esc = True
-                elif c == quote:
-                    in_str = False
-            elif c in "\"'":
-                in_str, quote = True, c
-            elif c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0:
-                    return text[start : i + 1]
-        start = text.find("{", start + 1)
+    start_index = text.find("{")
+    while start_index != -1:
+        brace_depth = 0
+        inside_string = False
+        previous_was_backslash = False
+        quote_character = ""
+        for index in range(start_index, len(text)):
+            character = text[index]
+            if inside_string:
+                if previous_was_backslash:
+                    previous_was_backslash = False
+                elif character == "\\":
+                    previous_was_backslash = True
+                elif character == quote_character:
+                    inside_string = False
+            elif character in "\"'":
+                inside_string = True
+                quote_character = character
+            elif character == "{":
+                brace_depth += 1
+            elif character == "}":
+                brace_depth -= 1
+                if brace_depth == 0:
+                    return text[start_index : index + 1]
+        start_index = text.find("{", start_index + 1)
     return None
 
 
-def _load(obj_text: str) -> Any:
+def _load(object_text: str) -> Any:
     try:
-        return json.loads(obj_text)
+        return json.loads(object_text)
     except ValueError:
         pass
     try:  # trivial single-quote / Python-literal case
-        return ast.literal_eval(obj_text)
+        return ast.literal_eval(object_text)
     except (ValueError, SyntaxError):
         return None
 
@@ -254,22 +273,22 @@ def parse_tool_call(text: str | None) -> tuple[str, dict] | None:
     """(name, arguments) from the first JSON block in text, or None."""
     if not text:
         return None
-    candidates = [m.group(1) for m in _FENCE.finditer(text)] + [text]
-    for cand in candidates:
-        obj_text = _first_json_object(cand)
-        if not obj_text:
+    candidate_texts = [match.group(1) for match in _FENCE.finditer(text)] + [text]
+    for candidate_text in candidate_texts:
+        object_text = _first_json_object(candidate_text)
+        if not object_text:
             continue
-        obj = _load(obj_text)
-        if not isinstance(obj, dict) or not isinstance(obj.get("name"), str):
+        parsed_object = _load(object_text)
+        if not isinstance(parsed_object, dict) or not isinstance(parsed_object.get("name"), str):
             continue
-        args = obj.get("arguments", obj.get("parameters", {}))
-        if isinstance(args, str):
-            args = _load(args)
-        if args is None:
-            args = {}
-        if not isinstance(args, dict):
+        arguments = parsed_object.get("arguments", parsed_object.get("parameters", {}))
+        if isinstance(arguments, str):
+            arguments = _load(arguments)
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
             return None
-        return obj["name"], args
+        return parsed_object["name"], arguments
     return None
 
 
@@ -278,25 +297,27 @@ def convert_response(response: Any, context: dict | None = None) -> None:
     from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
     for choice in getattr(response, "choices", None) or []:
-        msg = choice.message
-        raw = msg.content
-        parsed = parse_tool_call(raw)
-        if parsed:
-            name, args = parsed
-            msg.tool_calls = [
+        message = choice.message
+        raw_text = message.content
+        parsed_call = parse_tool_call(raw_text)
+        if parsed_call:
+            tool_name, arguments = parsed_call
+            message.tool_calls = [
                 ChatCompletionMessageToolCall(
                     id=f"call_{uuid.uuid4().hex[:12]}",
                     type="function",
-                    function=Function(name=name, arguments=json.dumps(args)),
+                    function=Function(name=tool_name, arguments=json.dumps(arguments)),
                 )
             ]
-            msg.content = None
-            status = "tool_call"
+            message.content = None
+            parse_status = "tool_call"
+        elif looks_like_tool_attempt(raw_text):
+            parse_status = "parse_failed"
         else:
-            status = "parse_failed" if looks_like_tool_attempt(raw) else "text"
-        fields = dict(getattr(msg, "provider_specific_fields", None) or {})
-        fields[TRACE_FIELD] = {"raw_text": raw, "parse": status, **(context or {})}
-        msg.provider_specific_fields = fields
+            parse_status = "text"
+        provider_fields = dict(getattr(message, "provider_specific_fields", None) or {})
+        provider_fields[TRACE_FIELD] = {"raw_text": raw_text, "parse": parse_status, **(context or {})}
+        message.provider_specific_fields = provider_fields
 
 
 def prepare_request(kwargs: dict) -> tuple[dict, dict]:
@@ -307,20 +328,25 @@ def prepare_request(kwargs: dict) -> tuple[dict, dict]:
     kwargs = dict(kwargs)
     tools = kwargs.pop("tools", None) or []
     kwargs.pop("tool_choice", None)
-    active = []
+    active_patch_ids = []
     if _tool_patches:
         from shipwright.heal.tool_fix import apply_patches
 
-        tools, active = apply_patches(tools, _tool_patches)
-    original = kwargs["messages"]
-    system = next((m.get("content") or "" for m in original if m.get("role") == "system"), "")
-    sha = prompt_sha(system, tools)
+        tools, active_patch_ids = apply_patches(tools, _tool_patches)
+
+    original_messages = kwargs["messages"]
+    system_prompt = next(
+        (message.get("content") or "" for message in original_messages if message.get("role") == "system"),
+        "",
+    )
+    sha = prompt_sha(system_prompt, tools)
     with _prompts_lock:
-        _prompts.setdefault(sha, {"system": system, "tools": tools})
-    messages, info = fit_messages(convert_messages(original, tools))
+        _prompts.setdefault(sha, {"system": system_prompt, "tools": tools})
+
+    fitted_messages, info = fit_messages(convert_messages(original_messages, tools))
     info["prompt_sha"] = sha
     if _tool_patches:
-        info["tool_patches"] = active
-    kwargs["messages"] = messages
+        info["tool_patches"] = active_patch_ids
+    kwargs["messages"] = fitted_messages
     kwargs["max_tokens"] = reply_tokens_for(str(kwargs.get("model", "")))
     return kwargs, info

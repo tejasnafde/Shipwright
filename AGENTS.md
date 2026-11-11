@@ -256,6 +256,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   Pull `main` into your branch often to stay current.
 - Per-person Cloud Build triggers may run on pushes to these branches later. Do not rename them.
 - No em dashes in code, docs or commits.
+- Code style (2026-11-11, Ishank): readable to a programmer who does not know Python. Descriptive names (`output_directory`, `run_options`, not `out_dir`, `args`), plain `if/else` over clever expressions, named objects (dataclasses) over tuples and string-keyed dicts, shallow nesting, orchestration functions that read like pseudocode. No new abstractions that only wrap one call. New code follows this; `scripts/`, `src/shipwright/heal/` and `src/shipwright/llm/` were converted; `observability/` and `control_room/` are not (left as they were).
 - Prefer the simplest thing that works. Kafka, Langfuse-as-a-dependency and UIs are out of scope.
 
 ## Known traps (add new ones here, with the date)

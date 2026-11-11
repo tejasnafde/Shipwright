@@ -34,7 +34,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from shipwright.heal import gate
 from shipwright.heal.traces import write_jsonl
 
-RUNS_DIR = ROOT / "runs"
+RUNS_DIRECTORY = ROOT / "runs"
 TASK_ID = "42"
 OTHER_TASK_ID = "7"
 HALLUCINATED_ID = "#W4471182"
@@ -49,7 +49,7 @@ def _user(content: str) -> dict:
     return {"role": "user", "content": content, "tool_calls": None}
 
 
-def _tool_call_msg(call_id: str, name: str, arguments: dict) -> dict:
+def _tool_call_message(call_id: str, name: str, arguments: dict) -> dict:
     return {"role": "assistant", "content": None,
             "tool_calls": [{"id": call_id, "name": name, "arguments": arguments, "requestor": "assistant"}]}
 
@@ -69,7 +69,7 @@ def _refund_conversation(order_id: str, found: bool) -> list[dict]:
     messages = [
         _assistant_text("Hi! How can I help you today?"),
         _user(f"Hi, I'd like a refund for order {REAL_ID} please."),
-        _tool_call_msg("call_1", "get_order_details", {"order_id": order_id}),
+        _tool_call_message("call_1", "get_order_details", {"order_id": order_id}),
     ]
     if found:
         messages.append(_tool_result("call_1", f"order {order_id}: 1 item, delivered", error=False))
@@ -96,7 +96,7 @@ def _other_task_trial(passed: bool = True) -> dict:
         "messages": [
             _assistant_text("Hi! How can I help you today?"),
             _user("Can you check the status of order #W0000007?"),
-            _tool_call_msg("call_1", "get_order_details", {"order_id": "#W0000007"}),
+            _tool_call_message("call_1", "get_order_details", {"order_id": "#W0000007"}),
             _tool_result("call_1", "order #W0000007: delivered", error=False),
             _assistant_text("Your order #W0000007 was delivered. Anything else?"),
         ],
@@ -104,8 +104,8 @@ def _other_task_trial(passed: bool = True) -> dict:
 
 
 def round1_baseline() -> Path:
-    out = RUNS_DIR / "baseline-demo-round1"
-    out.mkdir(parents=True, exist_ok=True)
+    output_directory = RUNS_DIRECTORY / "baseline-demo-round1"
+    output_directory.mkdir(parents=True, exist_ok=True)
 
     failing_trial = {
         "simulation_id": f"demo-{TASK_ID}-0",
@@ -119,7 +119,7 @@ def round1_baseline() -> Path:
         "error_type": None,
         "messages": _refund_conversation(HALLUCINATED_ID, found=False),
     }
-    write_jsonl(out / "traces.jsonl", [failing_trial, _other_task_trial()])
+    write_jsonl(output_directory / "traces.jsonl", [failing_trial, _other_task_trial()])
 
     failure = {
         "task_id": TASK_ID,
@@ -143,23 +143,23 @@ def round1_baseline() -> Path:
         "detected_by": ["outcome", "agenttune_detector"],
         "agenttune_root_cause": "hallucinated_output",
     }
-    write_jsonl(out / "failures.jsonl", [failure])
+    write_jsonl(output_directory / "failures.jsonl", [failure])
 
-    (out / "round_status.json").write_text(json.dumps({
+    (output_directory / "round_status.json").write_text(json.dumps({
         "should_train": True,
         "reason": "dominant_failure_type_ready",
         "num_weight_fix_failures": 1,
         "num_with_correction": 1,
-        "run_dir": str(out),
+        "run_dir": str(output_directory),
     }, indent=2))
 
-    (out / "demo.json").write_text(json.dumps(_demo_json(
+    (output_directory / "demo.json").write_text(json.dumps(_demo_json(
         f"Round 1 baseline: task {TASK_ID} fails because the model invents an order id "
         f"({HALLUCINATED_ID}) instead of using the one the customer gave it ({REAL_ID}). "
         "Hand-written to illustrate the 'aha moment' story end to end (see runs/sft-demo-fix, "
         "runs/baseline-demo-round2) - not a real tau2 run."
     ), indent=2))
-    return out
+    return output_directory
 
 
 def fix_sft() -> Path:
@@ -167,8 +167,8 @@ def fix_sft() -> Path:
     scripts/teacher_runs.py's kept.jsonl (a full trace dict, reward 1.0), not a hand-rolled
     {student, teacher} pair: control-room pairs this with the student's round-1 trace itself
     (same task id, from the baseline dir) rather than needing a separate field for it."""
-    out = RUNS_DIR / "sft-demo-fix"
-    out.mkdir(parents=True, exist_ok=True)
+    output_directory = RUNS_DIRECTORY / "sft-demo-fix"
+    output_directory.mkdir(parents=True, exist_ok=True)
 
     kept_trace = {
         "simulation_id": f"demo-{TASK_ID}-teacher",
@@ -183,24 +183,24 @@ def fix_sft() -> Path:
         "source": "teacher",
         "messages": _refund_conversation(REAL_ID, found=True),
     }
-    write_jsonl(out / "kept.jsonl", [kept_trace])
+    write_jsonl(output_directory / "kept.jsonl", [kept_trace])
 
-    (out / "teacher_summary.json").write_text(json.dumps({
+    (output_directory / "teacher_summary.json").write_text(json.dumps({
         "kept": 1, "per_task": {TASK_ID: 1}, "tasks_without_success": [],
     }, indent=2))
 
-    (out / "demo.json").write_text(json.dumps(_demo_json(
+    (output_directory / "demo.json").write_text(json.dumps(_demo_json(
         f"Teacher replay for task {TASK_ID}, hand-written to show the contrast: the real "
         "order id was sitting in the customer's own message, the student ignored it and invented "
         "one, the teacher replay uses it directly. Shaped exactly like a real teacher_runs.py "
         "kept.jsonl row (a full passing trace, not a synthetic pair)."
     ), indent=2))
-    return out
+    return output_directory
 
 
 def round2_baseline() -> Path:
-    out = RUNS_DIR / "baseline-demo-round2"
-    out.mkdir(parents=True, exist_ok=True)
+    output_directory = RUNS_DIRECTORY / "baseline-demo-round2"
+    output_directory.mkdir(parents=True, exist_ok=True)
 
     passing_trial = {
         "simulation_id": f"demo-{TASK_ID}-0-r2",
@@ -214,15 +214,15 @@ def round2_baseline() -> Path:
         "error_type": None,
         "messages": _refund_conversation(REAL_ID, found=True),
     }
-    write_jsonl(out / "traces.jsonl", [passing_trial, _other_task_trial()])
+    write_jsonl(output_directory / "traces.jsonl", [passing_trial, _other_task_trial()])
 
-    (out / "demo.json").write_text(json.dumps(_demo_json(
+    (output_directory / "demo.json").write_text(json.dumps(_demo_json(
         f"Staged 'after' round: task {TASK_ID} passing once the LoRA adapter has learned to use "
         "the order id already in the customer's message instead of inventing one. No round-2 "
         "adapter has actually been trained and gated yet - this illustrates what success on this "
         "task should look like once one is, for the demo's before/after story."
     ), indent=2))
-    return out
+    return output_directory
 
 
 def gate_regression() -> Path:
@@ -230,11 +230,11 @@ def gate_regression() -> Path:
     (so 'too few valid runs' can't be the reason), candidate pass^1 genuinely lower than
     current by more than the configured drop tolerance. Shows the gate rejecting a real
     regression, not the easier/less convincing insufficient-sample-size case."""
-    out = RUNS_DIR / "gate-demo-regression"
-    out.mkdir(parents=True, exist_ok=True)
+    output_directory = RUNS_DIRECTORY / "gate-demo-regression"
+    output_directory.mkdir(parents=True, exist_ok=True)
 
     task_ids = [str(i) for i in range(20)]
-    cfg = {
+    gate_config = {
         "status": "frozen",
         "heldout": {"domain": "retail", "task_split": "test", "num_tasks": 20},
         "k": 3,
@@ -247,19 +247,20 @@ def gate_regression() -> Path:
         "bfcl": {"enabled": True},
     }
 
-    def per_task(pass_1: float, valid: int) -> dict:
-        decided = [min(3, max(0, valid - 3 * i)) for i in range(len(task_ids))]
-        left = round(pass_1 * valid)
+    def per_task(pass_1: float, valid_runs: int) -> dict:
+        """Spread valid_runs (up to k=3 per task, in task order) and pass_1 * valid_runs successes over the tasks."""
+        decided_per_task = [min(3, max(0, valid_runs - 3 * task_number)) for task_number in range(len(task_ids))]
+        successes_left = round(pass_1 * valid_runs)
         rows = {}
-        for tid, n in zip(task_ids, decided):
-            s = min(n, left)
-            left -= s
-            rows[tid] = {"n_success": s, "n_decided": n, "pass_k": None}
+        for task_id, decided_count in zip(task_ids, decided_per_task):
+            success_count = min(decided_count, successes_left)
+            successes_left -= success_count
+            rows[task_id] = {"n_success": success_count, "n_decided": decided_count, "pass_k": None}
         return rows
 
-    def failed_run_labels(n_target: int, n_other: int) -> list[dict]:
-        rows = [{"simulation_id": f"t{i}", "labels": ["invented_id"]} for i in range(n_target)]
-        rows += [{"simulation_id": f"o{i}", "labels": ["loop"]} for i in range(n_other)]
+    def failed_run_labels(target_count: int, other_count: int) -> list[dict]:
+        rows = [{"simulation_id": f"t{number}", "labels": ["invented_id"]} for number in range(target_count)]
+        rows += [{"simulation_id": f"o{number}", "labels": ["loop"]} for number in range(other_count)]
         return rows
 
     current = {
@@ -275,32 +276,32 @@ def gate_regression() -> Path:
         "bfcl": {"accuracy_points": 59.5},
     }
 
-    decision = gate.decide(current, candidate, cfg, ["invented_id"])
+    decision = gate.decide(current, candidate, gate_config, ["invented_id"])
     decision["round"] = 2
     decision["systems"] = {"current": "round1-sft", "candidate": "round2-sft-overfit-demo"}
-    (out / "metrics_current.json").write_text(json.dumps(current, indent=1, default=str))
-    (out / "metrics_candidate.json").write_text(json.dumps(candidate, indent=1, default=str))
-    (out / "gate_decision.json").write_text(json.dumps(decision, indent=1, default=str))
-    row = gate.metrics_row(2, decision, decision["systems"])
-    write_jsonl(out / "metrics.jsonl", [row])
+    (output_directory / "metrics_current.json").write_text(json.dumps(current, indent=1, default=str))
+    (output_directory / "metrics_candidate.json").write_text(json.dumps(candidate, indent=1, default=str))
+    (output_directory / "gate_decision.json").write_text(json.dumps(decision, indent=1, default=str))
+    metrics_json_row = gate.metrics_row(2, decision, decision["systems"])
+    write_jsonl(output_directory / "metrics.jsonl", [metrics_json_row])
 
-    (out / "demo.json").write_text(json.dumps(_demo_json(
+    (output_directory / "demo.json").write_text(json.dumps(_demo_json(
         "Staged gate run: hand-built current/candidate metrics fed into the real gate.decide() "
         "(src/shipwright/heal/gate.py) - the decision itself is computed, not written by hand. "
         f"Both sides have {current['num_valid_runs']} valid runs, well above the "
-        f"{cfg['thresholds']['min_valid_runs']} floor, so 'too few valid runs' is not why this "
+        f"{gate_config['thresholds']['min_valid_runs']} floor, so 'too few valid runs' is not why this "
         f"rejects: pass^1 drops from {current['pass_1']:.0%} to {candidate['pass_1']:.0%} - a real "
         "regression, which is the case worth showing, not the easier insufficient-sample-size one. "
         "No such overfit round has actually happened."
     ), indent=2))
     assert decision["decision"] == "reject", "demo gate scenario must actually reject - check thresholds"
-    return out
+    return output_directory
 
 
 def main() -> int:
     paths = [round1_baseline(), fix_sft(), round2_baseline(), gate_regression()]
-    for p in paths:
-        print(f"wrote {p}")
+    for written_path in paths:
+        print(f"wrote {written_path}")
     return 0
 
 

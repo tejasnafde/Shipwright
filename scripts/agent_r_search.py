@@ -47,42 +47,71 @@ logger = log.get_logger("agent_r_search")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--task-ids", nargs="*", default=None)
-    p.add_argument("--from-run", type=Path, default=None, help="run dir with failures.jsonl (weight_fix ids)")
-    p.add_argument("--all-train", action="store_true")
-    p.add_argument("--agent-model", default=baseline.DEFAULT_AGENT, help="the actor (default Tiny Aya Global)")
-    p.add_argument("--agent-api-base", default=None,
-                   help="OpenAI-compatible endpoint for the actor, e.g. vLLM serving the last round's LoRA")
-    p.add_argument("--user-model", required=True,
-                   help="user simulator and judge (no default; team choice vertex/openai/gpt-oss-120b-maas)")
-    p.add_argument("--simulations", type=int, default=24, help="rollouts per task (paper: 200-300)")
-    p.add_argument("--children", type=int, default=agent_r.CHILDREN, help="rollouts per expansion")
-    p.add_argument("--c-uct", type=float, default=agent_r.C_UCT)
-    p.add_argument("--max-depth", type=int, default=agent_r.MAX_DEPTH, help="agent steps; deeper nodes are not expanded")
-    p.add_argument("--temperature", type=float, default=agent_r.ROLLOUT_TEMPERATURE)
-    p.add_argument("--max-steps", type=int, default=100, help="tau2 max steps per rollout")
-    p.add_argument("--task-concurrency", type=int, default=1, help="tasks searched at once")
-    p.add_argument("--tool-patches", type=Path, default=None, help="ledger; its applied patches are active")
-    p.add_argument("--seed", type=int, default=300)
-    p.add_argument("--output-dir", type=Path, default=None)
-    p.add_argument("--dry-run", action="store_true", help="noisy-oracle fake actor, no network")
-    p.add_argument("--dry-run-oracle-p", type=float, default=0.75,
-                   help="dry run: chance that the fake actor takes the task's next gold action")
-    return p.parse_args(argv)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # Which tasks to search.
+    parser.add_argument("--task-ids", nargs="*", default=None)
+    parser.add_argument("--from-run", type=Path, default=None, help="run dir with failures.jsonl (weight_fix ids)")
+    parser.add_argument("--all-train", action="store_true")
+
+    # Which models play the actor and the user.
+    parser.add_argument("--agent-model", default=baseline.DEFAULT_AGENT, help="the actor (default Tiny Aya Global)")
+    parser.add_argument(
+        "--agent-api-base",
+        default=None,
+        help="OpenAI-compatible endpoint for the actor, e.g. vLLM serving the last round's LoRA",
+    )
+    parser.add_argument(
+        "--user-model",
+        required=True,
+        help="user simulator and judge (no default; team choice vertex/openai/gpt-oss-120b-maas)",
+    )
+
+    # The search itself.
+    parser.add_argument("--simulations", type=int, default=24, help="rollouts per task (paper: 200-300)")
+    parser.add_argument("--children", type=int, default=agent_r.CHILDREN, help="rollouts per expansion")
+    parser.add_argument("--c-uct", type=float, default=agent_r.C_UCT)
+    parser.add_argument(
+        "--max-depth",
+        type=int,
+        default=agent_r.MAX_DEPTH,
+        help="agent steps; deeper nodes are not expanded",
+    )
+    parser.add_argument("--temperature", type=float, default=agent_r.ROLLOUT_TEMPERATURE)
+    parser.add_argument("--max-steps", type=int, default=100, help="tau2 max steps per rollout")
+    parser.add_argument("--task-concurrency", type=int, default=1, help="tasks searched at once")
+    parser.add_argument("--tool-patches", type=Path, default=None, help="ledger; its applied patches are active")
+    parser.add_argument("--seed", type=int, default=300)
+    parser.add_argument("--output-dir", type=Path, default=None)
+
+    # Dry run.
+    parser.add_argument("--dry-run", action="store_true", help="noisy-oracle fake actor, no network")
+    parser.add_argument(
+        "--dry-run-oracle-p",
+        type=float,
+        default=0.75,
+        help="dry run: chance that the fake actor takes the task's next gold action",
+    )
+    return parser.parse_args(argv)
 
 
-def resolve_task_ids(args: argparse.Namespace) -> list[str] | None:
-    if args.all_train:
+def resolve_task_ids(search_options: argparse.Namespace) -> list[str] | None:
+    if search_options.all_train:
         return None
-    ids = [str(i) for i in (args.task_ids or [])]
-    if args.from_run:
+
+    task_ids = [str(task_id) for task_id in (search_options.task_ids or [])]
+    if search_options.from_run:
         from teacher_runs import weight_fix_task_ids
 
-        ids += [i for i in weight_fix_task_ids(args.from_run) if i not in ids]
-    if not ids:
+        for task_id in weight_fix_task_ids(search_options.from_run):
+            if task_id not in task_ids:
+                task_ids.append(task_id)
+    if not task_ids:
         raise SystemExit("No task ids: pass --task-ids, --from-run or --all-train.")
-    return ids
+    return task_ids
 
 
 # ---- dry run: a noisy oracle actor, so offline trees have passing and failing leaves ----
@@ -90,176 +119,274 @@ def resolve_task_ids(args: argparse.Namespace) -> list[str] | None:
 _current = threading.local()
 
 
-def make_oracle_completion(agent_model: str, p_gold: float, seed: int):
+def make_oracle_completion(agent_model: str, gold_action_probability: float, seed: int):
     """Fake LLM for --dry-run. The actor takes the task's next gold action with chance
-    p_gold, else a plausible wrong one; it says it is done after the gold actions. The
-    user asks for help, then stops once the agent says it is done."""
+    gold_action_probability, else a plausible wrong one; it says it is done after the gold
+    actions. The user asks for help, then stops once the agent says it is done."""
     from shipwright.llm.dry_run import _response
     from shipwright.llm.prompted_tools import format_tool_call
 
-    rng = random.Random(seed)
-    lock = threading.Lock()
-    wrong = [
+    random_generator = random.Random(seed)
+    generator_lock = threading.Lock()
+    wrong_actions = [
         ("transfer_to_human_agents", {"summary": "dry run"}),
         ("get_user_details", {"user_id": "sara_doe_496"}),
         ("cancel_pending_order", {"order_id": "#W0000000", "reason": "no longer needed"}),
     ]
 
-    def fake(model: str, messages: list[dict], **kwargs) -> object:
-        if messages and "metExpectation" in str(messages[0].get("content") or ""):
+    def fake_completion(model: str, messages: list[dict], **completion_options) -> object:
+        first_message_text = ""
+        if messages:
+            first_message_text = str(messages[0].get("content") or "")
+        if "metExpectation" in first_message_text:
             verdict = {"results": [{"expectedOutcome": "x", "reasoning": "dry run", "metExpectation": True}]}
             return _response(model, "```json\n" + json.dumps(verdict) + "\n```", None)
+
         if model == agent_model:
-            gold = getattr(_current, "gold", [])
-            done = sum(1 for m in messages if m.get("role") == "assistant" and "```json" in (m.get("content") or ""))
-            if done >= len(gold):
+            gold_actions = getattr(_current, "gold", [])
+            actions_done = 0
+            for message in messages:
+                if message.get("role") == "assistant" and "```json" in (message.get("content") or ""):
+                    actions_done += 1
+            if actions_done >= len(gold_actions):
                 return _response(model, "All done. Your request is complete.", None)
-            with lock:
-                take_gold = rng.random() < p_gold
-                bad = rng.choice(wrong)
-            name, arguments = gold[done] if take_gold else bad
-            return _response(model, format_tool_call(name, arguments), None)
-        last = next((m.get("content") or "" for m in reversed(messages) if m.get("role") == "user"), "")
-        if "All done" in last:
+
+            with generator_lock:
+                takes_gold_action = random_generator.random() < gold_action_probability
+                wrong_action = random_generator.choice(wrong_actions)
+            if takes_gold_action:
+                tool_name, tool_arguments = gold_actions[actions_done]
+            else:
+                tool_name, tool_arguments = wrong_action
+            return _response(model, format_tool_call(tool_name, tool_arguments), None)
+
+        # The user simulator: the last user-role message is what the agent said.
+        last_user_text = ""
+        for message in reversed(messages):
+            if message.get("role") == "user":
+                last_user_text = message.get("content") or ""
+                break
+        if "All done" in last_user_text:
             return _response(model, "Thanks. ###STOP###", None)
         return _response(model, "Hi, I need help with my order.", None)
 
-    return fake
+    return fake_completion
 
 
 # ---- rollouts from a prefix ----
 
 
-def make_rollout(config, task, seeds, sims_out: list, lock: threading.Lock, oracle: bool):
-    """rollout(prefix, n) for agent_r.run_search: n tau2 runs of ``task`` from a prefix."""
+def gold_assistant_actions(task) -> list[tuple[str, dict]]:
+    """The (tool name, arguments) the task expects from the assistant, in order."""
+    if not task.evaluation_criteria:
+        return []
+    expected_actions = task.evaluation_criteria.actions or []
+    return [(action.name, action.arguments) for action in expected_actions if action.requestor == "assistant"]
+
+
+def make_rollout(config, task, seeds, simulations_out: list, simulations_lock: threading.Lock, use_oracle: bool):
+    """rollout(prefix, count) for agent_r.run_search: ``count`` tau2 runs of ``task`` from a prefix."""
     from tau2.data_model.message import AssistantMessage, ToolMessage, UserMessage
     from tau2.data_model.tasks import InitialState
     from tau2.runner.batch import run_single_task
 
-    by_role = {"assistant": AssistantMessage, "user": UserMessage, "tool": ToolMessage}
-    gold = [(a.name, a.arguments) for a in ((task.evaluation_criteria.actions or [])
-                                            if task.evaluation_criteria else []) if a.requestor == "assistant"]
+    message_class_by_role = {"assistant": AssistantMessage, "user": UserMessage, "tool": ToolMessage}
+    gold_actions = gold_assistant_actions(task)
 
-    def one(prefix: list[dict]) -> dict | None:
-        t = task.model_copy(deep=True)
+    def run_one_rollout(prefix: list[dict]) -> dict | None:
+        task_copy = task.model_copy(deep=True)
         if prefix:
-            init = task.initial_state
-            t.initial_state = InitialState(
-                initialization_data=init.initialization_data if init else None,
-                initialization_actions=init.initialization_actions if init else None,
-                message_history=[by_role[m["role"]].model_validate(m) for m in prefix],
+            initial_state = task.initial_state
+            task_copy.initial_state = InitialState(
+                initialization_data=initial_state.initialization_data if initial_state else None,
+                initialization_actions=initial_state.initialization_actions if initial_state else None,
+                message_history=[message_class_by_role[m["role"]].model_validate(m) for m in prefix],
             )
-        with lock:
+        with simulations_lock:
             seed = next(seeds)
-        if oracle:
-            _current.gold = gold
+        if use_oracle:
+            _current.gold = gold_actions
         try:
-            sim = run_single_task(config, t, seed=seed)
-        except Exception as e:  # noqa: BLE001 - one failed rollout must not stop the search
-            logger.warning(f"rollout failed: {e}", task_id=task.id, prefix_messages=len(prefix))
+            simulation = run_single_task(config, task_copy, seed=seed)
+        except Exception as rollout_error:  # noqa: BLE001 - one failed rollout must not stop the search
+            logger.warning(f"rollout failed: {rollout_error}", task_id=task.id, prefix_messages=len(prefix))
             return None
-        d = sim.model_dump(mode="json")
-        reward = (d.get("reward_info") or {}).get("reward")
-        with lock:
-            sims_out.append(d)
-        if reward is None or d.get("termination_reason") == "infrastructure_error":
-            return None
-        return {"messages": d["messages"], "reward": float(reward), "simulation_id": d["id"], "ended": True}
 
-    def rollout(prefix: list[dict], n: int) -> list[dict]:
-        with ThreadPoolExecutor(max_workers=n) as ex:
-            return [r for r in ex.map(one, [prefix] * n) if r]
+        simulation_dict = simulation.model_dump(mode="json")
+        reward = (simulation_dict.get("reward_info") or {}).get("reward")
+        with simulations_lock:
+            simulations_out.append(simulation_dict)
+        if reward is None or simulation_dict.get("termination_reason") == "infrastructure_error":
+            return None
+        return {
+            "messages": simulation_dict["messages"],
+            "reward": float(reward),
+            "simulation_id": simulation_dict["id"],
+            "ended": True,
+        }
+
+    def rollout(prefix: list[dict], count: int) -> list[dict]:
+        with ThreadPoolExecutor(max_workers=count) as executor:
+            rollout_results = executor.map(run_one_rollout, [prefix] * count)
+            return [result for result in rollout_results if result]
 
     return rollout
 
 
-def search_task(task, args, config, seeds, lock, sims_out: list, mcts_meta: dict, out_dir: Path) -> dict:
-    tree = agent_r.Tree(task.id, c_uct=args.c_uct, children=args.children, max_depth=args.max_depth)
-    rollout = make_rollout(config, task, seeds, sims_out, lock, args.dry_run)
+def search_task(
+    task,
+    search_options,
+    config,
+    seeds,
+    simulations_lock,
+    simulations_out: list,
+    mcts_metadata: dict,
+    run_directory: Path,
+) -> dict:
+    tree = agent_r.Tree(
+        task.id,
+        c_uct=search_options.c_uct,
+        children=search_options.children,
+        max_depth=search_options.max_depth,
+    )
+    rollout = make_rollout(config, task, seeds, simulations_out, simulations_lock, search_options.dry_run)
 
-    def record(r: dict, path: list[int]) -> None:
-        with lock:
-            mcts_meta[r["simulation_id"]] = {"mcts": {"task_id": str(task.id), "path": path}}
+    def record_rollout(rollout_result: dict, path: list[int]) -> None:
+        with simulations_lock:
+            mcts_metadata[rollout_result["simulation_id"]] = {"mcts": {"task_id": str(task.id), "path": path}}
 
-    counts = agent_r.run_search(tree, rollout, args.simulations, on_rollout=record)
-    (out_dir / "trees").mkdir(exist_ok=True)
-    (out_dir / "trees" / f"{task.id}.json").write_text(json.dumps(tree.to_json(), indent=1))
-    rewards = [lf["reward"] for lf in tree.leaves]
-    pairs = agent_r.select_pairs(tree.leaves, alpha=1.0)
-    row = {**counts, "passed_leaves": sum(r >= 1.0 for r in rewards),
-           "mean_reward": round(sum(rewards) / len(rewards), 3) if rewards else None,
-           "possible_pairs_alpha_1": len(pairs), "root_q": round(tree.root.q, 3)}
-    logger.info("task searched", task_id=task.id, **row)
-    return row
+    counts = agent_r.run_search(tree, rollout, search_options.simulations, on_rollout=record_rollout)
+
+    (run_directory / "trees").mkdir(exist_ok=True)
+    (run_directory / "trees" / f"{task.id}.json").write_text(json.dumps(tree.to_json(), indent=1))
+
+    leaf_rewards = [leaf["reward"] for leaf in tree.leaves]
+    possible_pairs = agent_r.select_pairs(tree.leaves, alpha=1.0)
+    if leaf_rewards:
+        mean_reward = round(sum(leaf_rewards) / len(leaf_rewards), 3)
+    else:
+        mean_reward = None
+    task_row = {
+        **counts,
+        "passed_leaves": sum(reward >= 1.0 for reward in leaf_rewards),
+        "mean_reward": mean_reward,
+        "possible_pairs_alpha_1": len(possible_pairs),
+        "root_q": round(tree.root.q, 3),
+    }
+    logger.info("task searched", task_id=task.id, **task_row)
+    return task_row
+
+
+def build_baseline_argv(search_options: argparse.Namespace, task_ids: list[str] | None) -> list[str]:
+    """The baseline.py command line the search reuses for its tau2 setup (always the train split)."""
+    baseline_argv = [
+        "--task-split", "train",
+        "--agent-model", search_options.agent_model,
+        "--user-model", search_options.user_model,
+        "--agent-temperature", str(search_options.temperature),
+        "--max-steps", str(search_options.max_steps),
+        "--max-concurrency", str(search_options.children),
+        "--seed", str(search_options.seed),
+        "--num-tasks", "0",
+    ]
+    if task_ids:
+        baseline_argv += ["--task-ids", *task_ids]
+    if search_options.output_dir:
+        baseline_argv += ["--output-dir", str(search_options.output_dir)]
+    if search_options.agent_api_base:
+        baseline_argv += ["--agent-api-base", search_options.agent_api_base]
+    if search_options.tool_patches:
+        baseline_argv += ["--tool-patches", str(search_options.tool_patches)]
+    if search_options.dry_run:
+        baseline_argv.append("--dry-run")
+    return baseline_argv
+
+
+def load_train_tasks(domain: str, task_ids: list[str] | None) -> list:
+    from tau2.registry import registry
+
+    train_tasks = registry.get_tasks_loader(domain)(task_split_name="train")
+    if not task_ids:
+        return train_tasks
+
+    task_by_id = {str(task.id): task for task in train_tasks}
+    missing_ids = [task_id for task_id in task_ids if task_id not in task_by_id]
+    if missing_ids:
+        raise SystemExit(f"Not in the train split: {missing_ids}")
+    return [task_by_id[task_id] for task_id in task_ids]
+
+
+def record_search_options(run_directory: Path, search_options: argparse.Namespace) -> None:
+    """Add the search's own options to run_config.json."""
+    run_config_path = run_directory / "run_config.json"
+    run_config = json.loads(run_config_path.read_text())
+    run_config["agent_r_search"] = {
+        option_name: (str(option_value) if isinstance(option_value, Path) else option_value)
+        for option_name, option_value in vars(search_options).items()
+    }
+    run_config_path.write_text(json.dumps(run_config, indent=2))
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    task_ids = resolve_task_ids(args)
-    run_argv = ["--task-split", "train", "--agent-model", args.agent_model, "--user-model", args.user_model,
-                "--agent-temperature", str(args.temperature), "--max-steps", str(args.max_steps),
-                "--max-concurrency", str(args.children), "--seed", str(args.seed), "--num-tasks", "0"]
-    if task_ids:
-        run_argv += ["--task-ids", *task_ids]
-    if args.output_dir:
-        run_argv += ["--output-dir", str(args.output_dir)]
-    if args.agent_api_base:
-        run_argv += ["--agent-api-base", args.agent_api_base]
-    if args.tool_patches:
-        run_argv += ["--tool-patches", str(args.tool_patches)]
-    if args.dry_run:
-        run_argv.append("--dry-run")
-    run_args = baseline.parse_args(run_argv)
+    search_options = parse_args(argv)
+    task_ids = resolve_task_ids(search_options)
+    baseline_options = baseline.parse_args(build_baseline_argv(search_options, task_ids))
 
-    out_dir = baseline.make_run_dir(run_args, "agent-r-search")
-    fake = make_oracle_completion(args.agent_model, args.dry_run_oracle_p, args.seed) if args.dry_run else None
-    setup = baseline.prepare(run_args, out_dir, fake_completion=fake)
-    if setup is None:
+    run_directory = baseline.make_run_dir(baseline_options, "agent-r-search")
+    if search_options.dry_run:
+        fake_completion = make_oracle_completion(
+            search_options.agent_model, search_options.dry_run_oracle_p, search_options.seed
+        )
+    else:
+        fake_completion = None
+    run_setup = baseline.prepare(baseline_options, run_directory, fake_completion=fake_completion)
+    if run_setup is None:
         return 2
-    cfg = json.loads((out_dir / "run_config.json").read_text())
-    cfg["agent_r_search"] = {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()}
-    (out_dir / "run_config.json").write_text(json.dumps(cfg, indent=2))
+    record_search_options(run_directory, search_options)
 
-    from tau2.registry import registry
+    tau2_config = baseline.text_run_config(baseline_options, run_directory)
+    tasks = load_train_tasks(baseline_options.domain, task_ids)
 
-    config = baseline.text_run_config(run_args, out_dir)
-    tasks = registry.get_tasks_loader(run_args.domain)(task_split_name="train")
-    if task_ids:
-        by_id = {str(t.id): t for t in tasks}
-        missing = [i for i in task_ids if i not in by_id]
-        if missing:
-            raise SystemExit(f"Not in the train split: {missing}")
-        tasks = [by_id[i] for i in task_ids]
+    seeds = itertools.count(search_options.seed * 1000)
+    simulations_lock = threading.Lock()
+    simulations: list[dict] = []
+    mcts_metadata: dict = {}
 
-    seeds = itertools.count(args.seed * 1000)
-    lock = threading.Lock()
-    sims: list[dict] = []
-    meta: dict = {}
-    with ThreadPoolExecutor(max_workers=max(1, args.task_concurrency)) as ex:
-        rows = list(ex.map(lambda t: search_task(t, args, config, seeds, lock, sims, meta, out_dir), tasks))
-    per_task = {str(t.id): r for t, r in zip(tasks, rows, strict=True)}
+    def search_one_task(task) -> dict:
+        return search_task(
+            task, search_options, tau2_config, seeds, simulations_lock,
+            simulations, mcts_metadata, run_directory,
+        )
+
+    with ThreadPoolExecutor(max_workers=max(1, search_options.task_concurrency)) as executor:
+        task_rows = list(executor.map(search_one_task, tasks))
+    row_by_task_id = {str(task.id): row for task, row in zip(tasks, task_rows, strict=True)}
 
     log.fail_point("summary")
-    _, traces, summary = baseline.finish_run(run_args, out_dir, sims, setup, extra=meta)
-    search = {
-        "actor": args.agent_model,
-        "agent_api_base": args.agent_api_base,
-        "simulations_per_task": args.simulations,
-        "children": args.children,
-        "c_uct": args.c_uct,
-        "max_depth": args.max_depth,
-        "temperature": args.temperature,
+    result = baseline.finish_run(
+        baseline_options, run_directory, simulations, run_setup, extra_trace_fields=mcts_metadata
+    )
+
+    search_summary = {
+        "actor": search_options.agent_model,
+        "agent_api_base": search_options.agent_api_base,
+        "simulations_per_task": search_options.simulations,
+        "children": search_options.children,
+        "c_uct": search_options.c_uct,
+        "max_depth": search_options.max_depth,
+        "temperature": search_options.temperature,
         "tasks": len(tasks),
-        "rollouts": len(traces),
-        "passed_rollouts": summary.get("num_passed"),
-        "tasks_with_pairs": sum(1 for r in rows if r["possible_pairs_alpha_1"]),
-        "possible_pairs_alpha_1": sum(r["possible_pairs_alpha_1"] for r in rows),
-        "cost_estimate_usd": summary.get("cost_estimate_usd"),
-        "per_task": per_task,
+        "rollouts": len(result.traces),
+        "passed_rollouts": result.summary.get("num_passed"),
+        "tasks_with_pairs": sum(1 for row in task_rows if row["possible_pairs_alpha_1"]),
+        "possible_pairs_alpha_1": sum(row["possible_pairs_alpha_1"] for row in task_rows),
+        "cost_estimate_usd": result.summary.get("cost_estimate_usd"),
+        "per_task": row_by_task_id,
     }
-    (out_dir / "search_summary.json").write_text(json.dumps(search, indent=2))
-    print(json.dumps({k: v for k, v in search.items() if k != "per_task"}, indent=2))
-    print(f"\nWrote {out_dir}")
+    (run_directory / "search_summary.json").write_text(json.dumps(search_summary, indent=2))
+    printable_summary = {key: value for key, value in search_summary.items() if key != "per_task"}
+    print(json.dumps(printable_summary, indent=2))
+    print(f"\nWrote {run_directory}")
     return 0
 
 

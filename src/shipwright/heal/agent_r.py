@@ -73,38 +73,48 @@ def split_steps(messages: list[dict]) -> list[list[dict]]:
     if any, form step 0. So the concatenation of the first k steps is always a prefix
     where the agent acts next (or the end of the run).
     """
-    cuts = [i for i, m in enumerate(messages) if m.get("role") == "assistant"]
-    if not cuts or cuts[0] != 0:
-        cuts = [0, *cuts]
-    cuts = sorted(set(cuts))
-    return [messages[a:b] for a, b in zip(cuts, [*cuts[1:], len(messages)]) if messages[a:b]]
+    cut_indices = [index for index, message in enumerate(messages) if message.get("role") == "assistant"]
+    if not cut_indices or cut_indices[0] != 0:
+        cut_indices = [0, *cut_indices]
+    cut_indices = sorted(set(cut_indices))
+
+    steps = []
+    step_ends = [*cut_indices[1:], len(messages)]
+    for step_start, step_end in zip(cut_indices, step_ends):
+        step = messages[step_start:step_end]
+        if step:
+            steps.append(step)
+    return steps
 
 
-def _call_key(tc: dict) -> list:
-    fn = tc.get("function") or {}
-    name = tc.get("name", fn.get("name"))
-    args = tc.get("arguments", fn.get("arguments"))
-    if isinstance(args, str):
+def _call_key(tool_call: dict) -> list:
+    function = tool_call.get("function") or {}
+    name = tool_call.get("name", function.get("name"))
+    arguments = tool_call.get("arguments", function.get("arguments"))
+    if isinstance(arguments, str):
         try:
-            args = json.loads(args)
+            arguments = json.loads(arguments)
         except ValueError:
             pass
-    return [name, args]
+    return [name, arguments]
 
 
-def message_key(m: dict) -> list:
+def message_key(message: dict) -> list:
     """What identifies a message across rollouts (no ids, timestamps or usage)."""
-    calls = [_call_key(tc) for tc in (m.get("tool_calls") or [])]
-    return [m.get("role"), (m.get("content") or "").strip(), calls]
+    call_keys = [_call_key(tool_call) for tool_call in (message.get("tool_calls") or [])]
+    return [message.get("role"), (message.get("content") or "").strip(), call_keys]
 
 
 def step_key(step: list[dict]) -> str:
-    blob = json.dumps([message_key(m) for m in step], sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+    serialized_step = json.dumps(
+        [message_key(message) for message in step], sort_keys=True, ensure_ascii=False, default=str
+    )
+    return hashlib.sha256(serialized_step.encode()).hexdigest()[:16]
 
 
-def is_user_stop(m: dict) -> bool:
-    return m.get("role") == "user" and any(t in (m.get("content") or "") for t in USER_STOP_TOKENS)
+def is_user_stop(message: dict) -> bool:
+    content = message.get("content") or ""
+    return message.get("role") == "user" and any(token in content for token in USER_STOP_TOKENS)
 
 
 # ---------------------------------------------------------------------------
@@ -128,14 +138,22 @@ class Node:
 
     @property
     def q(self) -> float:
-        return self.value / self.visits if self.visits else 0.0
+        if self.visits:
+            return self.value / self.visits
+        return 0.0
 
 
 class Tree:
     """The MCTS tree of one task (Agent-R section 3.1)."""
 
-    def __init__(self, task_id: str, *, c_uct: float = C_UCT, children: int = CHILDREN,
-                 max_depth: int = MAX_DEPTH):
+    def __init__(
+        self,
+        task_id: str,
+        *,
+        c_uct: float = C_UCT,
+        children: int = CHILDREN,
+        max_depth: int = MAX_DEPTH,
+    ):
         self.task_id = str(task_id)
         self.c_uct = c_uct
         self.n_children = children
@@ -148,16 +166,20 @@ class Tree:
         return self.nodes[0]
 
     def path_to(self, node_id: int) -> list[int]:
-        out = []
-        n: int | None = node_id
-        while n is not None and n != 0:
-            out.append(n)
-            n = self.nodes[n].parent
-        return out[::-1]
+        """Node ids from the root's first child down to node_id (the root itself is left out)."""
+        path = []
+        current_id: int | None = node_id
+        while current_id is not None and current_id != 0:
+            path.append(current_id)
+            current_id = self.nodes[current_id].parent
+        return path[::-1]
 
     def prefix(self, node_id: int) -> list[dict]:
         """The conversation that leads to a node (empty for the root)."""
-        return [m for nid in self.path_to(node_id) for m in self.nodes[nid].step]
+        prefix_messages = []
+        for path_node_id in self.path_to(node_id):
+            prefix_messages += self.nodes[path_node_id].step
+        return prefix_messages
 
     def expandable(self, node: Node) -> bool:
         return not node.terminal and node.depth < self.max_depth and node.expansions < self.n_children
@@ -165,7 +187,8 @@ class Tree:
     def uct(self, parent: Node, child: Node) -> float:
         if child.visits == 0:
             return math.inf
-        return child.q + self.c_uct * math.sqrt(math.log(max(parent.visits, 1)) / child.visits)
+        exploration = self.c_uct * math.sqrt(math.log(max(parent.visits, 1)) / child.visits)
+        return child.q + exploration
 
     def select(self) -> Node:
         """Descend by UCT to the first node that can still be expanded.
@@ -177,22 +200,31 @@ class Tree:
         while not self.expandable(node):
             if node.terminal or not node.children:
                 return node
-            kids = [self.nodes[c] for c in node.children.values()]
-            node = max(kids, key=lambda c: (self.uct(node, c), -c.id))
+            child_nodes = [self.nodes[child_id] for child_id in node.children.values()]
+            node = max(child_nodes, key=lambda child: (self.uct(node, child), -child.id))
         return node
 
-    def insert(self, from_node: int, messages: list[dict], reward: float, simulation_id: str | None = None,
-               ended: bool = True) -> list[int]:
+    def insert(
+        self,
+        from_node: int,
+        messages: list[dict],
+        reward: float,
+        simulation_id: str | None = None,
+        ended: bool = True,
+    ) -> list[int]:
         """Add one rollout (its full message list) below ``from_node`` and back up its reward.
 
         ``messages`` is the whole conversation, prefix included; the prefix must match
         the path to ``from_node``. Returns the node path of the rollout from the root.
         """
-        prefix_len = len(self.prefix(from_node))
-        if [message_key(m) for m in messages[:prefix_len]] != [message_key(m) for m in self.prefix(from_node)]:
+        expected_prefix = self.prefix(from_node)
+        prefix_length = len(expected_prefix)
+        rollout_prefix_keys = [message_key(message) for message in messages[:prefix_length]]
+        if rollout_prefix_keys != [message_key(message) for message in expected_prefix]:
             raise ValueError("rollout does not start with the node's prefix")
+
         node = self.nodes[from_node]
-        for step in split_steps(messages[prefix_len:]):
+        for step in split_steps(messages[prefix_length:]):
             key = step_key(step)
             if key in node.children:
                 node = self.nodes[node.children[key]]
@@ -201,20 +233,24 @@ class Tree:
             self.nodes.append(child)
             node.children[key] = child.id
             node = child
+
         if ended:
             node.terminal = True
-            node.reward = reward if node.reward is None else max(node.reward, reward)
+            if node.reward is None:
+                node.reward = reward
+            else:
+                node.reward = max(node.reward, reward)
         path = self.path_to(node.id)
         self.backup(node.id, reward)
         self.leaves.append({"path": path, "reward": reward, "simulation_id": simulation_id})
         return path
 
     def backup(self, node_id: int, reward: float) -> None:
-        n: int | None = node_id
-        while n is not None:
-            self.nodes[n].visits += 1
-            self.nodes[n].value += reward
-            n = self.nodes[n].parent
+        current_id: int | None = node_id
+        while current_id is not None:
+            self.nodes[current_id].visits += 1
+            self.nodes[current_id].value += reward
+            current_id = self.nodes[current_id].parent
 
     def to_json(self) -> dict:
         return {
@@ -223,48 +259,76 @@ class Tree:
             "children": self.n_children,
             "max_depth": self.max_depth,
             "nodes": [
-                {"id": n.id, "parent": n.parent, "depth": n.depth, "key": n.key, "visits": n.visits,
-                 "q": round(n.q, 4), "expansions": n.expansions, "terminal": n.terminal, "reward": n.reward,
-                 "children": list(n.children.values()), "action": step_summary(n.step)}
-                for n in self.nodes
+                {
+                    "id": node.id,
+                    "parent": node.parent,
+                    "depth": node.depth,
+                    "key": node.key,
+                    "visits": node.visits,
+                    "q": round(node.q, 4),
+                    "expansions": node.expansions,
+                    "terminal": node.terminal,
+                    "reward": node.reward,
+                    "children": list(node.children.values()),
+                    "action": step_summary(node.step),
+                }
+                for node in self.nodes
             ],
             "leaves": self.leaves,
         }
 
 
-def run_search(tree: Tree, rollout: Callable[[list[dict], int], list[dict]], simulations: int,
-               on_rollout: Callable[[dict, list[int]], None] | None = None) -> dict:
+def run_search(
+    tree: Tree,
+    rollout: Callable[[list[dict], int], list[dict]],
+    simulations: int,
+    on_rollout: Callable[[dict, list[int]], None] | None = None,
+) -> dict:
     """MCTS loop: select, expand with ``children`` rollouts, back up. Returns counters.
 
     ``rollout(prefix_messages, n)`` runs n rollouts from a prefix and returns one dict per
     finished rollout: {"messages", "reward", "simulation_id", "ended"}; failed rollouts
     (infra errors) are left out. ``simulations`` caps the number of rollouts.
     """
-    done = revisits = failed = 0
-    idle = 0
-    while done < simulations:
+    rollouts_started = 0
+    revisit_count = 0
+    failed_rollouts = 0
+    idle_iterations = 0
+    while rollouts_started < simulations:
         node = tree.select()
         if not tree.expandable(node):
             # Terminal or max depth: back up what is known, no new rollout.
-            tree.backup(node.id, node.reward if node.reward is not None else node.q)
-            revisits += 1
-            idle += 1
-            if idle > 4 * tree.n_children or node is tree.root:
+            known_value = node.reward if node.reward is not None else node.q
+            tree.backup(node.id, known_value)
+            revisit_count += 1
+            idle_iterations += 1
+            if idle_iterations > 4 * tree.n_children or node is tree.root:
                 break  # the reachable tree is exhausted
             continue
-        idle = 0
-        n = min(tree.n_children - node.expansions, simulations - done)
-        node.expansions += n
-        results = rollout(tree.prefix(node.id), n)
-        done += n
-        failed += n - len(results)
-        for r in results:
-            path = tree.insert(node.id, r["messages"], float(r["reward"]), r.get("simulation_id"),
-                               r.get("ended", True))
+
+        idle_iterations = 0
+        rollout_count = min(tree.n_children - node.expansions, simulations - rollouts_started)
+        node.expansions += rollout_count
+        rollout_results = rollout(tree.prefix(node.id), rollout_count)
+        rollouts_started += rollout_count
+        failed_rollouts += rollout_count - len(rollout_results)
+        for rollout_result in rollout_results:
+            path = tree.insert(
+                node.id,
+                rollout_result["messages"],
+                float(rollout_result["reward"]),
+                rollout_result.get("simulation_id"),
+                rollout_result.get("ended", True),
+            )
             if on_rollout:
-                on_rollout(r, path)
-    return {"rollouts": done, "failed_rollouts": failed, "revisits": revisits, "nodes": len(tree.nodes),
-            "leaves": len(tree.leaves)}
+                on_rollout(rollout_result, path)
+    return {
+        "rollouts": rollouts_started,
+        "failed_rollouts": failed_rollouts,
+        "revisits": revisit_count,
+        "nodes": len(tree.nodes),
+        "leaves": len(tree.leaves),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -272,17 +336,23 @@ def run_search(tree: Tree, rollout: Callable[[list[dict], int], list[dict]], sim
 # ---------------------------------------------------------------------------
 
 
-def common_prefix(a: list[int], b: list[int]) -> int:
-    n = 0
-    for x, y in zip(a, b):
-        if x != y:
+def common_prefix(path_a: list[int], path_b: list[int]) -> int:
+    """Length of the shared start of two node paths."""
+    shared_length = 0
+    for node_a, node_b in zip(path_a, path_b):
+        if node_a != node_b:
             break
-        n += 1
-    return n
+        shared_length += 1
+    return shared_length
 
 
-def select_pairs(leaves: list[dict], alpha: float, beta: float = BETA,
-                 max_pairs: int | None = None, seed: int = 123) -> list[dict]:
+def select_pairs(
+    leaves: list[dict],
+    alpha: float,
+    beta: float = BETA,
+    max_pairs: int | None = None,
+    seed: int = 123,
+) -> list[dict]:
     """Bad/good leaf pairs of one task.
 
     ``leaves``: {"path": [node ids], "reward", ...}. A good leaf has reward >= alpha; a bad
@@ -290,21 +360,30 @@ def select_pairs(leaves: list[dict], alpha: float, beta: float = BETA,
     longest shared path (the adjacent correct path), ties to the shorter good path. One
     pair per distinct bad path; ``max_pairs`` caps them (random sample, fixed seed).
     """
-    goods = [lf for lf in leaves if lf["reward"] >= alpha]
-    pairs, seen = [], set()
-    for bad in leaves:
-        key = tuple(bad["path"])
-        if key in seen:
+    good_leaves = [leaf for leaf in leaves if leaf["reward"] >= alpha]
+    pairs = []
+    seen_bad_paths = set()
+    for bad_leaf in leaves:
+        bad_path_key = tuple(bad_leaf["path"])
+        if bad_path_key in seen_bad_paths:
             continue
-        cands = [g for g in goods if g["reward"] - bad["reward"] >= beta and g["path"] != bad["path"]]
-        if not cands:
+        candidate_good_leaves = [
+            good_leaf for good_leaf in good_leaves
+            if good_leaf["reward"] - bad_leaf["reward"] >= beta and good_leaf["path"] != bad_leaf["path"]
+        ]
+        if not candidate_good_leaves:
             continue
-        good = max(cands, key=lambda g: (common_prefix(g["path"], bad["path"]), -len(g["path"])))
-        t = common_prefix(good["path"], bad["path"])
-        if t >= len(bad["path"]) or t >= len(good["path"]):
+
+        good_leaf = max(
+            candidate_good_leaves,
+            key=lambda candidate: (common_prefix(candidate["path"], bad_leaf["path"]), -len(candidate["path"])),
+        )
+        divergence_step = common_prefix(good_leaf["path"], bad_leaf["path"])
+        if divergence_step >= len(bad_leaf["path"]) or divergence_step >= len(good_leaf["path"]):
             continue  # one path is a prefix of the other: nothing to splice
-        seen.add(key)
-        pairs.append({"bad": bad, "good": good, "t": t})
+        seen_bad_paths.add(bad_path_key)
+        pairs.append({"bad": bad_leaf, "good": good_leaf, "t": divergence_step})
+
     if max_pairs is not None and len(pairs) > max_pairs:
         pairs = random.Random(seed).sample(pairs, max_pairs)
     return pairs
@@ -312,12 +391,15 @@ def select_pairs(leaves: list[dict], alpha: float, beta: float = BETA,
 
 def select_good(leaves: list[dict], alpha: float, max_good: int | None = None) -> list[dict]:
     """Distinct successful leaves (Eq. 6 also trains on good trajectories)."""
-    out, seen = [], set()
-    for lf in sorted(leaves, key=lambda x: len(x["path"])):
-        if lf["reward"] >= alpha and tuple(lf["path"]) not in seen:
-            seen.add(tuple(lf["path"]))
-            out.append(lf)
-    return out[:max_good] if max_good is not None else out
+    good_leaves = []
+    seen_paths = set()
+    for leaf in sorted(leaves, key=lambda leaf: len(leaf["path"])):
+        if leaf["reward"] >= alpha and tuple(leaf["path"]) not in seen_paths:
+            seen_paths.add(tuple(leaf["path"]))
+            good_leaves.append(leaf)
+    if max_good is not None:
+        return good_leaves[:max_good]
+    return good_leaves
 
 
 # ---------------------------------------------------------------------------
@@ -340,50 +422,65 @@ _JUDGMENT = re.compile(r"judge?ment\s*[:：]\s*[*_`\"'<\[]*\s*(good|bad|uncertai
 
 def parse_judgment(text: str | None) -> str:
     """'good', 'bad' or 'uncertain' (the last Judgment line; unparseable counts as uncertain)."""
-    hits = _JUDGMENT.findall(text or "")
-    return hits[-1].lower() if hits else "uncertain"
+    judgments = _JUDGMENT.findall(text or "")
+    if judgments:
+        return judgments[-1].lower()
+    return "uncertain"
 
 
 def _clip(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[: limit - 20] + f" ...[{len(text) - limit + 20} chars cut]"
+    if len(text) <= limit:
+        return text
+    cut_count = len(text) - limit + 20
+    return text[: limit - 20] + f" ...[{cut_count} chars cut]"
 
 
-def render_message(m: dict, limit: int = 600) -> str:
-    role = m.get("role")
-    content = (m.get("content") or "").strip()
+def render_message(message: dict, limit: int = 600) -> str:
+    role = message.get("role")
+    content = (message.get("content") or "").strip()
     if role == "assistant":
-        calls = m.get("tool_calls") or []
-        parts = [f"Agent: {_clip(content, limit)}"] if content else []
-        for tc in calls:
-            name, args = _call_key(tc)
-            parts.append(f"Agent action: {name}({json.dumps(args, ensure_ascii=False)})")
-        return "\n".join(parts) or "Agent: (empty reply)"
+        lines = [f"Agent: {_clip(content, limit)}"] if content else []
+        for tool_call in message.get("tool_calls") or []:
+            tool_name, arguments = _call_key(tool_call)
+            lines.append(f"Agent action: {tool_name}({json.dumps(arguments, ensure_ascii=False)})")
+        return "\n".join(lines) or "Agent: (empty reply)"
     if role == "tool":
         return f"Tool result: {_clip(content, limit)}"
     return f"Customer: {_clip(content, limit)}"
 
 
 def render_steps(steps: list[list[dict]], limit: int = 600) -> str:
-    return "\n".join(render_message(m, limit) for s in steps for m in s)
+    return "\n".join(render_message(message, limit) for step in steps for message in step)
 
 
-def critic_messages(policy: str, history: list[list[dict]], step: list[dict],
-                    policy_chars: int = 9000, history_chars: int = 9000) -> list[dict]:
+def critic_messages(
+    policy: str,
+    history: list[list[dict]],
+    step: list[dict],
+    policy_chars: int = 9000,
+    history_chars: int = 9000,
+) -> list[dict]:
     """The verifier prompt for one step (sized for Tiny Aya's 8k context)."""
-    hist = render_steps(history)
-    if len(hist) > history_chars:
-        hist = "[earlier turns omitted]\n" + hist[-history_chars:]
-    action = render_message(step[0]) if step else ""
-    after = "\n".join(render_message(m) for m in step[1:]) or "(nothing yet)"
-    user = (f"Policy:\n{_clip(policy, policy_chars)}\n\nConversation so far:\n{hist or '(start)'}\n\n"
-            f"Current action:\n{action}\n\nWhat happened after it:\n{after}\n\n"
-            "Is the current action good, bad or uncertain? Give reasons first, then the line "
-            "'Judgment: <Good or Bad or Uncertain>'.")
-    return [{"role": "system", "content": CRITIC_SYSTEM}, {"role": "user", "content": user}]
+    history_text = render_steps(history)
+    if len(history_text) > history_chars:
+        history_text = "[earlier turns omitted]\n" + history_text[-history_chars:]
+    action_text = render_message(step[0]) if step else ""
+    after_text = "\n".join(render_message(message) for message in step[1:]) or "(nothing yet)"
+    user_message = (
+        f"Policy:\n{_clip(policy, policy_chars)}\n\nConversation so far:\n{history_text or '(start)'}\n\n"
+        f"Current action:\n{action_text}\n\nWhat happened after it:\n{after_text}\n\n"
+        "Is the current action good, bad or uncertain? Give reasons first, then the line "
+        "'Judgment: <Good or Bad or Uncertain>'."
+    )
+    return [{"role": "system", "content": CRITIC_SYSTEM}, {"role": "user", "content": user_message}]
 
 
-def find_transition(bad_steps: list[list[dict]], t: int, mode: str,
-                    judge: Callable[[list[list[dict]], list[dict]], str] | None = None) -> dict:
+def find_transition(
+    bad_steps: list[list[dict]],
+    t: int,
+    mode: str,
+    judge: Callable[[list[list[dict]], list[dict]], str] | None = None,
+) -> dict:
     """The transition step t' in the bad run (index into ``bad_steps``, t <= t').
 
     mode "model": the actor judges steps t, t+1, ... and t' is the first one judged Bad
@@ -393,23 +490,24 @@ def find_transition(bad_steps: list[list[dict]], t: int, mode: str,
     mode "divergence": t' = t, the first step after the shared prefix (no model calls;
       our cheap ablation, not in the paper).
     """
-    last = len(bad_steps) - 1
+    last_step_index = len(bad_steps) - 1
     if mode == "direct":
-        return {"t_prime": last, "found": True, "judgments": []}
+        return {"t_prime": last_step_index, "found": True, "judgments": []}
     if mode == "divergence":
         return {"t_prime": t, "found": True, "judgments": []}
     if mode != "model":
         raise ValueError(f"unknown transition mode {mode!r}")
     if judge is None:
         raise ValueError("mode 'model' needs a judge")
+
     judgments = []
-    for j in range(t, len(bad_steps)):
-        raw = judge(bad_steps[:j], bad_steps[j])
-        verdict = parse_judgment(raw)
-        judgments.append({"step": j, "verdict": verdict, "raw": raw})
+    for step_index in range(t, len(bad_steps)):
+        raw_reply = judge(bad_steps[:step_index], bad_steps[step_index])
+        verdict = parse_judgment(raw_reply)
+        judgments.append({"step": step_index, "verdict": verdict, "raw": raw_reply})
         if verdict == "bad":
-            return {"t_prime": j, "found": True, "judgments": judgments}
-    return {"t_prime": last, "found": False, "judgments": judgments}
+            return {"t_prime": step_index, "found": True, "judgments": judgments}
+    return {"t_prime": last_step_index, "found": False, "judgments": judgments}
 
 
 # ---------------------------------------------------------------------------
@@ -419,11 +517,17 @@ def find_transition(bad_steps: list[list[dict]], t: int, mode: str,
 
 def _strip_stop(step: list[dict]) -> list[dict]:
     """A bad step without a final user stop message: in the revision run the customer stays."""
-    return [m for m in step if not is_user_stop(m)]
+    return [message for message in step if not is_user_stop(message)]
 
 
-def build_revision(bad_steps: list[list[dict]], good_steps: list[list[dict]], t: int, t_prime: int,
-                   thought: str, fmt: str = "inline") -> dict:
+def build_revision(
+    bad_steps: list[list[dict]],
+    good_steps: list[list[dict]],
+    t: int,
+    t_prime: int,
+    thought: str,
+    fmt: str = "inline",
+) -> dict:
     """Splice shared prefix + bad steps t..t' + revision thought + good steps t..end.
 
     Returns {"messages": tau2 message dicts, "n_context_assistant": the number of leading
@@ -438,23 +542,32 @@ def build_revision(bad_steps: list[list[dict]], good_steps: list[list[dict]], t:
     """
     if not (0 <= t <= t_prime < len(bad_steps)) or t >= len(good_steps):
         raise ValueError(f"bad split t={t} t'={t_prime} for {len(bad_steps)} bad / {len(good_steps)} good steps")
-    context: list[dict] = [m for s in bad_steps[:t] for m in s]
-    for j in range(t, t_prime + 1):
-        context += _strip_stop(bad_steps[j])
-    suffix = [dict(m) for s in good_steps[t:] for m in s]
+
+    context_messages: list[dict] = [message for step in bad_steps[:t] for message in step]
+    for step_index in range(t, t_prime + 1):
+        context_messages += _strip_stop(bad_steps[step_index])
+    suffix_messages = [dict(message) for step in good_steps[t:] for message in step]
+
     if fmt == "inline":
-        first = suffix[0]
-        if first.get("role") != "assistant":
+        first_suffix_message = suffix_messages[0]
+        if first_suffix_message.get("role") != "assistant":
             raise ValueError("good suffix must start with an assistant message")
-        content = (first.get("content") or "").strip()
-        first["content"] = f"{thought}\n{content}" if content else thought
-        signal: list[dict] = []
+        content = (first_suffix_message.get("content") or "").strip()
+        if content:
+            first_suffix_message["content"] = f"{thought}\n{content}"
+        else:
+            first_suffix_message["content"] = thought
+        signal_messages: list[dict] = []
     elif fmt == "turn":
-        signal = [{"role": "assistant", "content": thought}, {"role": "user", "content": "OK."}]
+        signal_messages = [{"role": "assistant", "content": thought}, {"role": "user", "content": "OK."}]
     else:
         raise ValueError(f"unknown revision format {fmt!r}")
-    n_ctx = sum(1 for m in context if m.get("role") == "assistant")
-    return {"messages": context + signal + suffix, "n_context_assistant": n_ctx}
+
+    context_assistant_count = sum(1 for message in context_messages if message.get("role") == "assistant")
+    return {
+        "messages": context_messages + signal_messages + suffix_messages,
+        "n_context_assistant": context_assistant_count,
+    }
 
 
 def step_summary(step: list[dict]) -> str:

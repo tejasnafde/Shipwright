@@ -47,22 +47,33 @@ PROMPTED_SCRIPT: list[str] = [
 ]
 
 
+def _count_assistant_messages(messages: list[dict]) -> int:
+    return sum(1 for message in messages if message.get("role") == "assistant")
+
+
 def make_fake_completion(agent_model: str):
     def fake_completion(model: str, messages: list[dict], **kwargs: Any) -> ModelResponse:
-        if messages and "metExpectation" in str(messages[0].get("content") or ""):
+        first_message_text = str(messages[0].get("content") or "") if messages else ""
+        if "metExpectation" in first_message_text:
             verdict = {"results": [{"expectedOutcome": "x", "reasoning": "dry run", "metExpectation": False}]}
             return _response(model, "```json\n" + json.dumps(verdict) + "\n```", None)
+
         if model == agent_model and not kwargs.get("tools"):
             # tau2's fixed greeting is the first assistant turn; do not count it.
-            step = max(sum(1 for m in messages if m.get("role") == "assistant") - 1, 0)
-            text = PROMPTED_SCRIPT[min(step, len(PROMPTED_SCRIPT) - 1)]
-            return _response(model, text, None)
+            step_number = max(_count_assistant_messages(messages) - 1, 0)
+            reply_text = PROMPTED_SCRIPT[min(step_number, len(PROMPTED_SCRIPT) - 1)]
+            return _response(model, reply_text, None)
+
         if model == agent_model:
-            step = sum(1 for m in messages if m.get("role") == "assistant")
-            item = AGENT_SCRIPT[min(step, len(AGENT_SCRIPT) - 1)]
-            return _response(model, item.get("text"), item.get("tool"))
-        turns = sum(1 for m in messages if m.get("role") == "assistant")
-        text = "###STOP###" if turns >= 4 else "Hi, my email is dry@run.test. I want a refund."
-        return _response(model, text, None)
+            step_number = _count_assistant_messages(messages)
+            script_item = AGENT_SCRIPT[min(step_number, len(AGENT_SCRIPT) - 1)]
+            return _response(model, script_item.get("text"), script_item.get("tool"))
+
+        # The user simulator: stop after a few agent turns.
+        if _count_assistant_messages(messages) >= 4:
+            reply_text = "###STOP###"
+        else:
+            reply_text = "Hi, my email is dry@run.test. I want a refund."
+        return _response(model, reply_text, None)
 
     return fake_completion

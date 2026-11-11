@@ -46,44 +46,48 @@ THRESHOLD_KEYS = (
 
 # ---------------------------------------------------------------- config
 
-def validate_config(cfg: dict) -> dict:
+def validate_config(gate_config: dict) -> dict:
     """Check the gate config. Raises ValueError with the first problem."""
-    if not isinstance(cfg, dict):
+    if not isinstance(gate_config, dict):
         raise ValueError("gate config must be a mapping")
-    if cfg.get("status") not in ("proposed", "frozen"):
+    if gate_config.get("status") not in ("proposed", "frozen"):
         raise ValueError("gate config status must be 'proposed' or 'frozen'")
-    held = cfg.get("heldout") or {}
+
+    held_out = gate_config.get("heldout") or {}
     for key in ("domain", "task_split", "num_tasks"):
-        if key not in held:
+        if key not in held_out:
             raise ValueError(f"heldout.{key} missing")
-    if held["task_split"] == "train":
+    if held_out["task_split"] == "train":
         raise ValueError("the gate must not score on the train split")
-    k = cfg.get("k")
+
+    k = gate_config.get("k")
     if not isinstance(k, int) or k < 1:
         raise ValueError("k must be a positive int")
-    th = cfg.get("thresholds") or {}
-    missing = [key for key in THRESHOLD_KEYS if key not in th]
-    if missing:
-        raise ValueError(f"thresholds missing: {missing}")
+
+    thresholds = gate_config.get("thresholds") or {}
+    missing_keys = [key for key in THRESHOLD_KEYS if key not in thresholds]
+    if missing_keys:
+        raise ValueError(f"thresholds missing: {missing_keys}")
     for key in THRESHOLD_KEYS:
-        val = th[key]
-        if val is None and key == "non_target_max_increase":
+        value = thresholds[key]
+        if value is None and key == "non_target_max_increase":
             continue
-        if not isinstance(val, (int, float)) or val < 0:
+        if not isinstance(value, (int, float)) or value < 0:
             raise ValueError(f"thresholds.{key} must be a number >= 0")
-    if th["min_valid_runs"] < 1:
+    if thresholds["min_valid_runs"] < 1:
         raise ValueError("thresholds.min_valid_runs must be at least 1 (never approve on no data)")
-    if not 0 < th["min_valid_run_fraction"] <= 1:
+    if not 0 < thresholds["min_valid_run_fraction"] <= 1:
         raise ValueError("thresholds.min_valid_run_fraction must be in (0, 1]")
-    tol = agenttune_task_tol(cfg)
-    if not isinstance(tol, (int, float)) or tol < 0:
+
+    task_tolerance = agenttune_task_tol(gate_config)
+    if not isinstance(task_tolerance, (int, float)) or task_tolerance < 0:
         raise ValueError("agenttune_gate.task_regression_tol must be a number >= 0")
-    return cfg
+    return gate_config
 
 
-def agenttune_task_tol(cfg: dict) -> float:
+def agenttune_task_tol(gate_config: dict) -> float:
     """Task regression tolerance for AgentTune's DeploymentGate (default 0: no drop)."""
-    return (cfg.get("agenttune_gate") or {}).get("task_regression_tol", 0.0)
+    return (gate_config.get("agenttune_gate") or {}).get("task_regression_tol", 0.0)
 
 
 def load_config(path: Path) -> dict:
@@ -92,30 +96,39 @@ def load_config(path: Path) -> dict:
     return validate_config(yaml.safe_load(Path(path).read_text()))
 
 
-def config_sha(cfg: dict) -> str:
-    return hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()[:16]
+def config_sha(gate_config: dict) -> str:
+    return hashlib.sha256(json.dumps(gate_config, sort_keys=True).encode()).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------- label rates
 
-def _labelled_runs(metrics: dict, targets: set[str], exclude: bool) -> int:
-    n = 0
-    for row in metrics.get("failed_run_labels") or []:
-        have = set(row.get("labels") or []) - {"environment"}
-        n += int(bool(have - targets if exclude else have & targets))
-    return n
+def _labelled_runs(metrics: dict, targets: set[str], exclude_targets: bool) -> int:
+    """Failed runs with a target label (or, with exclude_targets, with a label outside the targets)."""
+    run_count = 0
+    for failed_run in metrics.get("failed_run_labels") or []:
+        labels = set(failed_run.get("labels") or []) - {"environment"}
+        if exclude_targets:
+            has_matching_label = bool(labels - targets)
+        else:
+            has_matching_label = bool(labels & targets)
+        run_count += int(has_matching_label)
+    return run_count
 
 
 def target_rate(metrics: dict, targets: list[str]) -> float | None:
     """Share of valid runs that fail with any target label."""
-    n = metrics.get("num_valid_runs") or 0
-    return _labelled_runs(metrics, set(targets), exclude=False) / n if n else None
+    valid_run_count = metrics.get("num_valid_runs") or 0
+    if not valid_run_count:
+        return None
+    return _labelled_runs(metrics, set(targets), exclude_targets=False) / valid_run_count
 
 
 def non_target_rate(metrics: dict, targets: list[str]) -> float | None:
     """Share of valid runs that fail with any label outside the targets (environment excluded)."""
-    n = metrics.get("num_valid_runs") or 0
-    return _labelled_runs(metrics, set(targets), exclude=True) / n if n else None
+    valid_run_count = metrics.get("num_valid_runs") or 0
+    if not valid_run_count:
+        return None
+    return _labelled_runs(metrics, set(targets), exclude_targets=True) / valid_run_count
 
 
 # ---------------------------------------------------------------- checks
@@ -124,166 +137,241 @@ def _check(name: str, passed: bool, detail: str, **values: Any) -> dict:
     return {"name": name, "passed": bool(passed), "detail": detail, **values}
 
 
-def _num(x: Any) -> bool:
-    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def required_valid_runs(cfg: dict) -> int:
+def required_valid_runs(gate_config: dict) -> int:
     """Valid runs each system needs: the larger of the absolute floor and the fraction."""
-    th = cfg["thresholds"]
-    asked = cfg["heldout"]["num_tasks"] * cfg["k"]
-    return max(int(th["min_valid_runs"]), math.ceil(th["min_valid_run_fraction"] * asked))
+    thresholds = gate_config["thresholds"]
+    planned_runs = gate_config["heldout"]["num_tasks"] * gate_config["k"]
+    fraction_floor = math.ceil(thresholds["min_valid_run_fraction"] * planned_runs)
+    return max(int(thresholds["min_valid_runs"]), fraction_floor)
 
 
-def check_comparable(cur: dict, cand: dict, cfg: dict) -> dict:
-    split = cfg["heldout"]["task_split"]
+def check_comparable(current: dict, candidate: dict, gate_config: dict) -> dict:
+    expected_split = gate_config["heldout"]["task_split"]
     problems = []
-    for who, m in (("current", cur), ("candidate", cand)):
-        if m.get("task_split") != split:
-            problems.append(f"{who} ran split {m.get('task_split')!r}, gate needs {split!r}")
-        if m.get("k") != cfg["k"]:
-            problems.append(f"{who} k={m.get('k')}, gate k={cfg['k']}")
-    if sorted(cur.get("task_ids") or []) != sorted(cand.get("task_ids") or []):
+    for role, metrics in (("current", current), ("candidate", candidate)):
+        if metrics.get("task_split") != expected_split:
+            problems.append(f"{role} ran split {metrics.get('task_split')!r}, gate needs {expected_split!r}")
+        if metrics.get("k") != gate_config["k"]:
+            problems.append(f"{role} k={metrics.get('k')}, gate k={gate_config['k']}")
+    if sorted(current.get("task_ids") or []) != sorted(candidate.get("task_ids") or []):
         problems.append("current and candidate ran different task ids")
-    return _check("comparable", not problems, "; ".join(problems) or f"same {split} tasks, k={cfg['k']}")
+
+    if problems:
+        detail = "; ".join(problems)
+    else:
+        detail = f"same {expected_split} tasks, k={gate_config['k']}"
+    return _check("comparable", not problems, detail)
 
 
-def check_valid_runs(cur: dict, cand: dict, cfg: dict) -> dict:
-    need_runs = required_valid_runs(cfg)
-    need_tasks = int(cfg["thresholds"]["min_complete_tasks"])
+def check_valid_runs(current: dict, candidate: dict, gate_config: dict) -> dict:
+    required_runs = required_valid_runs(gate_config)
+    required_tasks = int(gate_config["thresholds"]["min_complete_tasks"])
     problems = []
-    for who, m in (("current", cur), ("candidate", cand)):
-        runs, tasks = m.get("num_valid_runs"), m.get("num_tasks_complete")
-        if not _num(runs) or runs < need_runs:
-            problems.append(f"{who} has {runs} valid runs, needs {need_runs}")
-        if not _num(tasks) or tasks < need_tasks:
-            problems.append(f"{who} has {tasks} tasks with {cfg['k']} valid trials, needs {need_tasks}")
-    return _check("valid_runs", not problems,
-                  "too few valid runs: " + "; ".join(problems) if problems
-                  else f"both have >= {need_runs} valid runs and >= {need_tasks} complete tasks",
-                  required_runs=need_runs, required_complete_tasks=need_tasks)
+    for role, metrics in (("current", current), ("candidate", candidate)):
+        valid_runs = metrics.get("num_valid_runs")
+        complete_tasks = metrics.get("num_tasks_complete")
+        if not _is_number(valid_runs) or valid_runs < required_runs:
+            problems.append(f"{role} has {valid_runs} valid runs, needs {required_runs}")
+        if not _is_number(complete_tasks) or complete_tasks < required_tasks:
+            problems.append(
+                f"{role} has {complete_tasks} tasks with {gate_config['k']} valid trials, needs {required_tasks}"
+            )
+
+    if problems:
+        detail = "too few valid runs: " + "; ".join(problems)
+    else:
+        detail = f"both have >= {required_runs} valid runs and >= {required_tasks} complete tasks"
+    return _check(
+        "valid_runs", not problems, detail,
+        required_runs=required_runs, required_complete_tasks=required_tasks,
+    )
 
 
-def check_not_lower(name: str, cur: Any, cand: Any, max_drop: float) -> dict:
-    if not (_num(cur) and _num(cand)):
-        return _check(name, False, f"{name} missing (current={cur}, candidate={cand})", current=cur, candidate=cand)
-    ok = cand >= cur - max_drop - EPS
-    word = "keeps" if ok else "lowers"
-    return _check(name, ok, f"candidate {word} {name}: {cand:.4f} vs {cur:.4f} (max drop {max_drop})",
-                  current=cur, candidate=cand, delta=cand - cur)
+def check_not_lower(name: str, current_value: Any, candidate_value: Any, max_drop: float) -> dict:
+    if not (_is_number(current_value) and _is_number(candidate_value)):
+        return _check(
+            name, False, f"{name} missing (current={current_value}, candidate={candidate_value})",
+            current=current_value, candidate=candidate_value,
+        )
+    passed = candidate_value >= current_value - max_drop - EPS
+    verb = "keeps" if passed else "lowers"
+    return _check(
+        name, passed,
+        f"candidate {verb} {name}: {candidate_value:.4f} vs {current_value:.4f} (max drop {max_drop})",
+        current=current_value, candidate=candidate_value, delta=candidate_value - current_value,
+    )
 
 
-def check_target(cur: dict, cand: dict, targets: list[str], min_drop: float) -> dict:
+def check_target(current: dict, candidate: dict, targets: list[str], min_drop: float) -> dict:
     if not targets:
         return _check("target", False, "no target failure label: the candidate must name what it fixes")
-    rc, rn = target_rate(cur, targets), target_rate(cand, targets)
-    if not (_num(rc) and _num(rn)):
-        return _check("target", False, f"target rate missing (current={rc}, candidate={rn})", targets=targets)
-    drop = rc - rn
-    ok = drop > EPS and drop >= min_drop - EPS
-    detail = (f"target {'+'.join(targets)} rate {rn:.4f} vs {rc:.4f}: drop {drop:.4f}"
-              f" (needs > 0 and >= {min_drop})")
-    return _check("target", ok, detail, targets=targets, current=rc, candidate=rn, delta=-drop)
+    current_rate = target_rate(current, targets)
+    candidate_rate = target_rate(candidate, targets)
+    if not (_is_number(current_rate) and _is_number(candidate_rate)):
+        return _check(
+            "target", False,
+            f"target rate missing (current={current_rate}, candidate={candidate_rate})",
+            targets=targets,
+        )
+    drop = current_rate - candidate_rate
+    passed = drop > EPS and drop >= min_drop - EPS
+    detail = (
+        f"target {'+'.join(targets)} rate {candidate_rate:.4f} vs {current_rate:.4f}: drop {drop:.4f}"
+        f" (needs > 0 and >= {min_drop})"
+    )
+    return _check(
+        "target", passed, detail,
+        targets=targets, current=current_rate, candidate=candidate_rate, delta=-drop,
+    )
 
 
-def check_non_target(cur: dict, cand: dict, targets: list[str], max_increase: float | None) -> dict:
+def check_non_target(current: dict, candidate: dict, targets: list[str], max_increase: float | None) -> dict:
     if max_increase is None:
         return _check("non_target", True, "non-target check off", skipped=True)
-    rc, rn = non_target_rate(cur, targets), non_target_rate(cand, targets)
-    if not (_num(rc) and _num(rn)):
-        return _check("non_target", False, f"non-target rate missing (current={rc}, candidate={rn})")
-    ok = rn - rc <= max_increase + EPS
-    return _check("non_target", ok, f"other labels rate {rn:.4f} vs {rc:.4f} (max increase {max_increase})",
-                  current=rc, candidate=rn, delta=rn - rc)
+    current_rate = non_target_rate(current, targets)
+    candidate_rate = non_target_rate(candidate, targets)
+    if not (_is_number(current_rate) and _is_number(candidate_rate)):
+        return _check(
+            "non_target", False,
+            f"non-target rate missing (current={current_rate}, candidate={candidate_rate})",
+        )
+    passed = candidate_rate - current_rate <= max_increase + EPS
+    return _check(
+        "non_target", passed,
+        f"other labels rate {candidate_rate:.4f} vs {current_rate:.4f} (max increase {max_increase})",
+        current=current_rate, candidate=candidate_rate, delta=candidate_rate - current_rate,
+    )
 
 
-def check_bfcl(cur: dict, cand: dict, cfg: dict) -> dict:
-    bfcl = cfg.get("bfcl") or {}
-    if not bfcl.get("enabled"):
+def check_bfcl(current: dict, candidate: dict, gate_config: dict) -> dict:
+    bfcl_config = gate_config.get("bfcl") or {}
+    if not bfcl_config.get("enabled"):
         return _check("bfcl", True, "BFCL off in the gate config", skipped=True)
-    margin = float(cfg["thresholds"]["bfcl_max_drop_points"])
-    c, n = (cur.get("bfcl") or {}).get("accuracy_points"), (cand.get("bfcl") or {}).get("accuracy_points")
-    if not (_num(c) and _num(n)):
-        return _check("bfcl", False, f"BFCL enabled but missing (current={c}, candidate={n})")
-    ok = n >= c - margin - EPS
-    return _check("bfcl", ok, f"BFCL {n:.2f} vs {c:.2f} points (max drop {margin})",
-                  current=c, candidate=n, delta=n - c)
+    max_drop_points = float(gate_config["thresholds"]["bfcl_max_drop_points"])
+    current_points = (current.get("bfcl") or {}).get("accuracy_points")
+    candidate_points = (candidate.get("bfcl") or {}).get("accuracy_points")
+    if not (_is_number(current_points) and _is_number(candidate_points)):
+        return _check(
+            "bfcl", False,
+            f"BFCL enabled but missing (current={current_points}, candidate={candidate_points})",
+        )
+    passed = candidate_points >= current_points - max_drop_points - EPS
+    return _check(
+        "bfcl", passed,
+        f"BFCL {candidate_points:.2f} vs {current_points:.2f} points (max drop {max_drop_points})",
+        current=current_points, candidate=candidate_points, delta=candidate_points - current_points,
+    )
 
 
-def check_agenttune(cur: dict, cand: dict, cfg: dict) -> dict:
+def check_agenttune(current: dict, candidate: dict, gate_config: dict) -> dict:
     from shipwright.heal.agenttune_bridge import agenttune_gate_check
 
-    return agenttune_gate_check(cur, cand, min_test_samples=required_valid_runs(cfg),
-                                task_regression_tol=float(agenttune_task_tol(cfg)))
+    return agenttune_gate_check(
+        current, candidate,
+        min_test_samples=required_valid_runs(gate_config),
+        task_regression_tol=float(agenttune_task_tol(gate_config)),
+    )
 
 
 # ---------------------------------------------------------------- decision
 
-def public_metrics(m: dict) -> dict:
+def public_metrics(metrics: dict) -> dict:
     """Metrics without the bulky per-run label list (kept in metrics_*.json files)."""
-    return {k: v for k, v in m.items() if k not in ("failed_run_labels", "per_task")}
+    return {key: value for key, value in metrics.items() if key not in ("failed_run_labels", "per_task")}
 
 
-def decide(current: dict, candidate: dict, cfg: dict, targets: list[str] | None = None,
-           now: str | None = None) -> dict:
+def decide(
+    current: dict,
+    candidate: dict,
+    gate_config: dict,
+    targets: list[str] | None = None,
+    now: str | None = None,
+) -> dict:
     """The gate decision for ``candidate`` against ``current``."""
-    validate_config(cfg)
-    th = cfg["thresholds"]
+    validate_config(gate_config)
+    thresholds = gate_config["thresholds"]
     targets = list(targets or [])
     checks = [
-        check_comparable(current, candidate, cfg),
-        check_valid_runs(current, candidate, cfg),
-        check_not_lower("pass_1", current.get("pass_1"), candidate.get("pass_1"), th["pass_1_max_drop"]),
-        check_not_lower("pass_k", current.get("pass_k"), candidate.get("pass_k"), th["pass_k_max_drop"]),
-        check_target(current, candidate, targets, th["target_label_min_drop"]),
-        check_non_target(current, candidate, targets, th["non_target_max_increase"]),
-        check_bfcl(current, candidate, cfg),
-        check_agenttune(current, candidate, cfg),
+        check_comparable(current, candidate, gate_config),
+        check_valid_runs(current, candidate, gate_config),
+        check_not_lower("pass_1", current.get("pass_1"), candidate.get("pass_1"), thresholds["pass_1_max_drop"]),
+        check_not_lower("pass_k", current.get("pass_k"), candidate.get("pass_k"), thresholds["pass_k_max_drop"]),
+        check_target(current, candidate, targets, thresholds["target_label_min_drop"]),
+        check_non_target(current, candidate, targets, thresholds["non_target_max_increase"]),
+        check_bfcl(current, candidate, gate_config),
+        check_agenttune(current, candidate, gate_config),
     ]
-    failed = [c for c in checks if not c["passed"]]
+    failed_checks = [check for check in checks if not check["passed"]]
+
     warnings = []
-    if cfg.get("status") != "frozen":
+    if gate_config.get("status") != "frozen":
         warnings.append("gate config status is 'proposed': the team has not frozen it yet")
-    at = checks[-1]
-    ours_failed = [c for c in checks[:-1] if not c["passed"]]
+
+    agenttune_check = checks[-1]
+    failed_threshold_checks = [check for check in checks[:-1] if not check["passed"]]
+    if failed_checks:
+        decision = "reject"
+        reasons = [check["detail"] for check in failed_checks]
+    else:
+        decision = "promote"
+        reasons = [check["detail"] for check in checks if not check.get("skipped")]
     return {
-        "decision": "reject" if failed else "promote",
+        "decision": decision,
         "verdicts": {
-            "agenttune": {"approved": at["agenttune_approved"], "reason": at["agenttune_reason"],
-                          "check_passed": at["passed"], "num_cases": at["num_cases"],
-                          "min_test_samples": at["min_test_samples"]},
-            "auditkit_thresholds": {"passed": not ours_failed,
-                                    "failed_checks": [c["name"] for c in ours_failed]},
+            "agenttune": {
+                "approved": agenttune_check["agenttune_approved"],
+                "reason": agenttune_check["agenttune_reason"],
+                "check_passed": agenttune_check["passed"],
+                "num_cases": agenttune_check["num_cases"],
+                "min_test_samples": agenttune_check["min_test_samples"],
+            },
+            "auditkit_thresholds": {
+                "passed": not failed_threshold_checks,
+                "failed_checks": [check["name"] for check in failed_threshold_checks],
+            },
         },
-        "reasons": [c["detail"] for c in failed] or [c["detail"] for c in checks if not c.get("skipped")],
+        "reasons": reasons,
         "checks": checks,
         "warnings": warnings,
         "targets": targets,
         "metrics_current": public_metrics(current),
         "metrics_candidate": public_metrics(candidate),
-        "thresholds": copy.deepcopy(th),
-        "k": cfg["k"],
-        "heldout": copy.deepcopy(cfg["heldout"]),
-        "config_status": cfg.get("status"),
-        "config_sha": config_sha(cfg),
+        "thresholds": copy.deepcopy(thresholds),
+        "k": gate_config["k"],
+        "heldout": copy.deepcopy(gate_config["heldout"]),
+        "config_status": gate_config.get("status"),
+        "config_sha": config_sha(gate_config),
         "decided_at": now or datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
 
-def metrics_row(round_: int, decision: dict, systems: dict) -> dict:
+METRICS_ROW_KEYS = (
+    "system", "num_runs", "num_valid_runs", "num_tasks_complete", "pass_1", "pass_1_ci", "pass_k",
+    "failure_rate", "label_rates", "tool_call_error_rate", "avg_steps", "auditkit", "bfcl",
+    "active_tool_patches", "agent_model",
+)
+
+
+def metrics_row(round_number: int, decision: dict, systems: dict) -> dict:
     """One metrics.jsonl row: round, systems compared, headline metrics, decision."""
-    keys = ("system", "num_runs", "num_valid_runs", "num_tasks_complete", "pass_1", "pass_1_ci", "pass_k",
-            "failure_rate", "label_rates", "tool_call_error_rate", "avg_steps", "auditkit", "bfcl",
-            "active_tool_patches", "agent_model")
-    pick = lambda m: {k: m.get(k) for k in keys}  # noqa: E731
+
+    def headline_metrics(metrics: dict) -> dict:
+        return {key: metrics.get(key) for key in METRICS_ROW_KEYS}
+
     return {
         "kind": "gate",
-        "round": round_,
+        "round": round_number,
         "at": decision["decided_at"],
         "systems": systems,
         "targets": decision["targets"],
-        "metrics": {"current": pick(decision["metrics_current"]),
-                    "candidate": pick(decision["metrics_candidate"])},
+        "metrics": {
+            "current": headline_metrics(decision["metrics_current"]),
+            "candidate": headline_metrics(decision["metrics_candidate"]),
+        },
         "decision": decision["decision"],
         "reasons": decision["reasons"],
         "verdicts": decision.get("verdicts"),
