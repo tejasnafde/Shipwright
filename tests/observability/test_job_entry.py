@@ -93,3 +93,44 @@ def test_crash_still_uploads_report_and_job_index(tmp_path, monkeypatch):
     assert index["exit_code"] == 137 and index["run_dirs"] == ["gs://lexsi-hackathon-runs/tejas/half/"]
     assert index["log"] == "gs://lexsi-hackathon-runs/tejas/jobs/shipwright-tejas-xyz.log"
     assert b"run id shipwright-tejas-xyz tp True" in uploaded["tejas/jobs/shipwright-tejas-xyz.log"]
+
+
+def test_split_fetch():
+    assert job_entry.split_fetch(["--fetch", "tejas/b1", "--fetch", "gs://x/y/", "classify.py", "runs/b1"]) == (
+        ["tejas/b1", "x/y"], ["classify.py", "runs/b1"])
+    assert job_entry.split_fetch(["baseline.py", "--fetch", "a"]) == ([], ["baseline.py", "--fetch", "a"])
+
+
+def test_fetch_downloads_run_dir_before_the_script(tmp_path, monkeypatch):
+    """--fetch owner/dir puts the GCS run dir under runs/<dir>/; an unchanged fetched dir is not re-uploaded."""
+    import httpx
+
+    objects = {"tejas/b1/summary.json": b"{}", "tejas/b1/tau2/results.json": b"[1]"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/o"):
+            prefix = request.url.params["prefix"]
+            return httpx.Response(200, json={"items": [{"name": n} for n in objects if n.startswith(prefix)]})
+        from urllib.parse import unquote
+        name = unquote(request.url.raw_path.decode().split("/o/", 1)[1].split("?", 1)[0])
+        return httpx.Response(200, content=objects[name])
+
+    real_client = httpx.Client
+    monkeypatch.setattr(job_entry.httpx, "Client", lambda **kw: real_client(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(job_entry.TOKENS, "get", lambda: "tok")
+    monkeypatch.setattr(job_entry, "ROOT", tmp_path)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "reads.py").write_text(
+        "import pathlib, sys\n"
+        "print('got', pathlib.Path('runs/b1/tau2/results.json').read_text())\n")
+    uploaded = {}
+    monkeypatch.setattr(job_entry, "upload", lambda client, bucket, name, data: uploaded.__setitem__(name, data))
+    monkeypatch.setenv("OWNER", "tejas")
+    monkeypatch.setenv("CLOUD_RUN_EXECUTION", "shipwright-tejas-f")
+    monkeypatch.setenv("SHIPWRIGHT_CLOUD_TRACE", "0")
+    monkeypatch.delenv("SHIPWRIGHT_RUN_ID", raising=False)
+    assert job_entry.main(["--fetch", "tejas/b1", "reads.py"]) == 0
+    assert b"got [1]" in uploaded["tejas/jobs/shipwright-tejas-f.log"]
+    assert not any(k.startswith("tejas/b1/") for k in uploaded)
+    assert job_entry.main(["--fetch", "tejas/missing", "reads.py"]) == 2

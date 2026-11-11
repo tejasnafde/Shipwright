@@ -1,11 +1,15 @@
 """Entry point of the harness image (Cloud Run Jobs shipwright-<owner>, docs/setup/cloud-runs.md).
 
-  job_entry.py <script.py> [args...]
+  job_entry.py [--fetch <owner>/<run-dir>]... <script.py> [args...]
 
 Runs ``python scripts/<script.py> args...`` in /app, then uploads every run dir it wrote under
 ``runs/`` to ``gs://$SHIPWRIGHT_RUNS_BUCKET/$OWNER/<run-dir-name>/`` and the full console log to
 ``gs://$SHIPWRIGHT_RUNS_BUCKET/$OWNER/jobs/<execution>.log``. It uploads after a failure too,
 then exits with the script's exit code.
+
+``--fetch tejas/baseline-x`` first downloads ``gs://$SHIPWRIGHT_RUNS_BUCKET/tejas/baseline-x/`` to
+``runs/baseline-x/``, so a step can read the run dir of an earlier execution (classify a baseline,
+teacher runs from its failures). A fetched dir is uploaded again only if the script changes it.
 
 Debugging (docs/ops/debugging.md): the run id is the Cloud Run execution name; the script gets it as
 ``SHIPWRIGHT_RUN_ID`` and joins this process's trace through ``TRACEPARENT``. This entry logs job
@@ -46,6 +50,8 @@ logger = log.get_logger("job_entry")
 
 DEFAULT_BUCKET = "lexsi-hackathon-runs"
 UPLOAD_URL = "https://storage.googleapis.com/upload/storage/v1/b/{bucket}/o?uploadType=media&name={name}"
+LIST_URL = "https://storage.googleapis.com/storage/v1/b/{bucket}/o"
+OBJECT_URL = "https://storage.googleapis.com/storage/v1/b/{bucket}/o/{name}?alt=media"
 
 
 def run_dirs(runs: Path) -> dict[str, float]:
@@ -74,6 +80,50 @@ def upload(client: httpx.Client, bucket: str, name: str, data: bytes) -> None:
         r.raise_for_status()
 
 
+def split_fetch(argv: list[str]) -> tuple[list[str], list[str]]:
+    """(['owner/run-dir', ...], the rest of argv) from leading ``--fetch X`` pairs."""
+    fetch = []
+    while len(argv) >= 2 and argv[0] == "--fetch":
+        fetch.append(argv[1].strip("/").removeprefix("gs://"))
+        argv = argv[2:]
+    return fetch, argv
+
+
+def fetch_dir(client: httpx.Client, bucket: str, prefix: str, runs: Path) -> int:
+    """Download ``gs://bucket/<prefix>/`` (``owner/run-dir``) into ``runs/<run-dir>/``. Returns the file count."""
+    if prefix.startswith(bucket + "/"):
+        prefix = prefix[len(bucket) + 1:]
+    name = prefix.rsplit("/", 1)[-1]
+    if not name or name in (".", ".."):
+        raise ValueError(f"bad --fetch value {prefix!r}")
+    headers = {"Authorization": f"Bearer {TOKENS.get()}"}
+    count, page = 0, None
+    with instrument.external("gcs_download", f"gs://{bucket}/{prefix}/"):
+        while True:
+            params = {"prefix": prefix + "/", "fields": "items(name),nextPageToken"}
+            if page:
+                params["pageToken"] = page
+            r = client.get(LIST_URL.format(bucket=bucket), params=params, headers=headers)
+            r.raise_for_status()
+            body = r.json()
+            for item in body.get("items", []):
+                rel = item["name"][len(prefix) + 1:]
+                if not rel or rel.endswith("/") or ".." in Path(rel).parts:
+                    continue
+                obj = client.get(OBJECT_URL.format(bucket=bucket, name=quote(item["name"], safe="")), headers=headers)
+                obj.raise_for_status()
+                dest = runs / name / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(obj.content)
+                count += 1
+            page = body.get("nextPageToken")
+            if not page:
+                break
+    if not count:
+        raise FileNotFoundError(f"nothing under gs://{bucket}/{prefix}/")
+    return count
+
+
 def ensure_report(run_dir: Path, run_id: str, script: str, args: list[str], code: int, tail: str) -> None:
     """errors.json for a dir the script left without one (killed, out of memory, crash before setup)."""
     path = run_dir / "errors.json"
@@ -96,6 +146,7 @@ def ensure_report(run_dir: Path, run_id: str, script: str, args: list[str], code
 
 
 def main(argv: list[str]) -> int:
+    fetch, argv = split_fetch(list(argv))
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
         return 0 if argv else 2
@@ -119,7 +170,7 @@ def main(argv: list[str]) -> int:
     started = time.time()
     with otel_live.span(f"job {path.name}", {"shipwright.run_id": run_id, "shipwright.script": path.name,
                                             "shipwright.argv": " ".join(argv[1:])[:1000]}, root=True) as sp:
-        code, dirs, log_path = _run_and_upload(owner, bucket, path, argv[1:], run_id, execution)
+        code, dirs, log_path = _run_and_upload(owner, bucket, path, argv[1:], run_id, execution, fetch)
         if code:
             otel_live.mark_error(sp, f"exit {code}")
         trace_id = otel_live.current_ids()[0]
@@ -139,9 +190,19 @@ def main(argv: list[str]) -> int:
     return code
 
 
-def _run_and_upload(owner: str, bucket: str, path: Path, args: list[str], run_id: str, execution: str
-                    ) -> tuple[int, list[str], str | None]:
+def _run_and_upload(owner: str, bucket: str, path: Path, args: list[str], run_id: str, execution: str,
+                    fetch: list[str] | None = None) -> tuple[int, list[str], str | None]:
     runs = ROOT / "runs"
+    fetch_error = None
+    for prefix in fetch or []:
+        try:
+            with httpx.Client(timeout=300) as client:
+                n = fetch_dir(client, bucket, prefix, runs)
+            print(f"[job_entry] fetched {n} files from gs://{bucket}/{prefix}/", flush=True)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"fetch of {prefix} failed", exc_info=True)
+            fetch_error = f"fetch of {prefix} failed: {e}"
+            break
     before = run_dirs(runs)
     cmd = [sys.executable, str(path), *args]
     env = dict(os.environ)
@@ -151,17 +212,22 @@ def _run_and_upload(owner: str, bucket: str, path: Path, args: list[str], run_id
     logger.info("job start", script=path.name, args=args, owner=owner, execution=execution)
     print(f"[job_entry] {' '.join(cmd[1:])}", flush=True)
     log_buf = bytearray()
-    try:
-        proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            sys.stdout.buffer.write(line)
-            sys.stdout.flush()
-            log_buf += line
-        code = proc.wait()
-    except Exception:  # noqa: BLE001
-        logger.exception("could not run the script")
-        code = 1
+    if fetch_error:
+        print(f"[job_entry] {fetch_error}", flush=True)
+        log_buf += (fetch_error + "\n").encode()
+        code = 2
+    else:
+        try:
+            proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                sys.stdout.buffer.write(line)
+                sys.stdout.flush()
+                log_buf += line
+            code = proc.wait()
+        except Exception:  # noqa: BLE001
+            logger.exception("could not run the script")
+            code = 1
     print(f"[job_entry] exit {code}", flush=True)
     logger.log(40 if code else 20, f"script exit {code}", exit_code=code, script=path.name)
 
