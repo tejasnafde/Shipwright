@@ -10,7 +10,7 @@ to `runs/round-N.json` (run dir, exit code, estimate, actual cost). Read the man
 | `teacher` | Cloud Run job | teacher replays the weight-fix failures, 3 trials; passes kept | $1.60 | $2.00 |
 | `data` | laptop | `build_sft.py` from the teacher passes, pushed to the HF dataset repo | 0 | 0 |
 | `train` | HF Job, L4, 1h | LoRA with AgentTune (`--launch` to submit) | $0.40 | $0.80 |
-| `gate` | HF Job, A10G large, 1h | base vs the adapter, 20 held-out tasks, k=3 (`--launch` to submit) | $1.80 | $2.10 |
+| `gate` | HF Job, A10G large, 90 min | base vs the adapter, 20 held-out tasks, k=3, HF router user simulator (`--launch` to submit) | $2.30 | $3.00 |
 
 ```sh
 ARGS="--round 2 --user-model vertex/openai/gpt-oss-120b-maas --teacher-model vertex/deepseek-ai/deepseek-v4.1-flash-maas"

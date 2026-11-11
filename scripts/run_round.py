@@ -52,16 +52,21 @@ class StageBudget:
 # Estimates come from the round 1 runs (runs/r1-baseline-train: $1.49 for 74 runs, runs/r1-teacher-t1:
 # $0.53 for 54 runs, so 3 trials of about 54 tasks is about $1.60). GPU caps are price x timeout:
 # train L4 $0.80/h x 1h, gate A10G large $1.50/h x 1h plus about $0.60 of user simulator calls.
-GPU_TIMEOUT = "1h"  # the gate's Vertex token lasts about 1 hour (AGENTS.md traps), so the gate must fit in it
+TRAIN_TIMEOUT = "1h"
+GATE_TIMEOUT = "90m"
 TRAIN_FLAVOR = "l4x1"
 GATE_FLAVOR = "a10g-large"
+# The gate's user simulator is an HF router model: a Vertex token minted at launch lasts about 1 hour
+# with no refresh (AGENTS.md traps), and the gate (120 tau2 runs, BFCL, model load) can run longer, which
+# would turn runs into infra errors and reject for "too few valid runs". Both systems use the same simulator.
+GATE_USER_MODEL = "openai/openai/gpt-oss-120b:cerebras"
 BUDGETS = {
     "baseline": StageBudget(estimate_usd=1.5, cap_usd=2.0),
     "classify": StageBudget(estimate_usd=0.05, cap_usd=0.30),
     "teacher": StageBudget(estimate_usd=1.6, cap_usd=2.0),
     "data": StageBudget(estimate_usd=0.0, cap_usd=0.0),
     "train": StageBudget(estimate_usd=0.4, cap_usd=0.8),
-    "gate": StageBudget(estimate_usd=1.8, cap_usd=2.1),
+    "gate": StageBudget(estimate_usd=2.3, cap_usd=3.0),  # A10G $1.50/h x 1.5h = $2.25 cap, plus about $0.60 of simulator
 }
 DESCRIPTIONS = {
     "baseline": "Tiny Aya (no adapter, no tool patches) on the 74 train tasks, 1 trial",
@@ -69,7 +74,7 @@ DESCRIPTIONS = {
     "teacher": "the teacher replays the weight-fix failures, 3 trials each; passes are kept",
     "data": "build the SFT dataset from the teacher passes and push it to the HF dataset repo",
     "train": "LoRA on Tiny Aya Global with AgentTune (HF Job, L4, 1h limit)",
-    "gate": "base vs the new adapter on the 20 held-out tasks, k=3, 8 checks (HF Job, A10G, 1h limit)",
+    "gate": "base vs the new adapter on the 20 held-out tasks, k=3, 8 checks (HF Job, A10G, 90 min limit)",
 }
 
 
@@ -293,13 +298,13 @@ def run_gpu_stage(stage: str, options: argparse.Namespace) -> dict:
     if stage == "train":
         command = [sys.executable, str(ROOT / "scripts" / "train_job.py"),
                    "--dataset-revision", revision, "--revision", revision,
-                   "--flavor", TRAIN_FLAVOR, "--timeout", GPU_TIMEOUT]
+                   "--flavor", TRAIN_FLAVOR, "--timeout", TRAIN_TIMEOUT]
     else:
         command = [sys.executable, str(ROOT / "scripts" / "gate_job.py"), "--round", str(options.round),
                    "--current", "configs/systems/base.yaml",
                    "--candidate", f"configs/systems/r{options.round}-weight.yaml",
-                   "--user-model", options.user_model,
-                   "--flavor", GATE_FLAVOR, "--timeout", GPU_TIMEOUT]
+                   "--user-model", GATE_USER_MODEL,
+                   "--flavor", GATE_FLAVOR, "--timeout", GATE_TIMEOUT]
     if options.launch:
         command.append("--launch")
     exit_code = subprocess.run(command).returncode

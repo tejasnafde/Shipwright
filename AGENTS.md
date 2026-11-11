@@ -107,7 +107,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - 2026-11-11: Agent-R (MCTS revision data) was removed as scope creep: 1 valid revision for about $1 in round 1.
   The only weight-fix data source is teacher replay. Do not add a second data source before a full round has
   reached a gate decision.
-- 2026-11-12: A round runs through `scripts/run_round.py` (`docs/pipeline/round.md`): one stage per command, a cost estimate and a hard cap per stage (`--max-cost-usd` on `baseline.py` and `teacher_runs.py`), a manifest `runs/round-N.json`. The baseline and the weight candidate have no tool patches, so a gain is the weights.
+- 2026-11-12: A round runs through `scripts/run_round.py` (`docs/pipeline/round.md`): one stage per command, a cost estimate and a hard cap per stage (`--max-cost-usd` on `baseline.py` and `teacher_runs.py`), a manifest `runs/round-N.json`. The baseline and the weight candidate have no tool patches, so a gain is the weights. The round 2 gate uses an HF router user simulator (`GATE_USER_MODEL` in the script) and a 90 minute limit: a Vertex token would expire mid-gate.
 - Gate (step 05): `docs/pipeline/gate.md`. `scripts/gate_job.py` (HF Job, vLLM serves base + LoRA) or `scripts/gate_eval.py --local-dry-run` (offline). Config `configs/gate.yaml` (status `proposed` until the team freezes it), systems in `configs/systems/`. Metrics come from AuditKIT; the user model is a required argument (no default).
 
 ## Logs and debugging
