@@ -154,9 +154,12 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   Task" tab and a genuine gate-rejection walkthrough, since no real round-2 adapter has been
   trained yet. Every staged dir carries a `demo.json` marker; `render_demo_banner()` shows an
   orange "STAGED EXAMPLE" banner wherever one is loaded, so staged and real data are never
-  visually confused. The sidebar's "Load demo scenario" button jumps straight to these four dirs
-  (`DEMO_SCENARIO` in `app.py`) instead of making a live demo align four dropdowns by hand; the
-  manual pickers still work for any real run dir.
+  visually confused.
+- 2026-11-11 (Ishank): the sidebar's "Load demo scenario" dropdown (`SCENARIOS` in `app.py`: the
+  real round 1, the staged walkthrough) fills in the manual run-dir pickers, which stay visible
+  below it for overrides. A scenario is listed only when all of its dirs exist. Traces render as
+  chat bubbles with a raw-JSON expander under each, so no caller may put a trace inside an
+  expander (Streamlit cannot nest them).
 
 ## Infrastructure
 
