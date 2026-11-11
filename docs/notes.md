@@ -75,6 +75,13 @@ Suggested upgrades (in order):
 ## Self-healing research (2026-11-07, subagent web search; numbers marked "check" are from secondary sources)
 - Taxonomy: MAST, arxiv 2503.13657 (14 failure modes, 3 categories). Add our own "environment/transient" label and exclude it from training.
 - Corrections: Agent-R, arxiv 2501.11425 (splice a correct branch at the first wrong step; code bytedance/Agent-R).
+  Implemented 2026-11-11 (Mitushi), `docs/pipeline/agent-r.md`. Values from the paper: c_uct 0.25, 4 children per
+  expansion at temperature 1, depth 20, beta 0.2, alpha 0.5 / 0.7 / 1.0 per iteration, eta 0.2.
+  Our changes, decided before any Agent-R round: 24 rollouts per task (paper 200 to 300, budget), the revision
+  thought inline before the first good action (paper: an extra Assistant / "OK." turn pair, which our user
+  simulator would have to answer), LoRA lr 2e-4 as in our other training (paper: full fine-tune, lr 2e-5).
+  Paper and code differ on pairs: we pair each bad leaf with its adjacent good leaf (longest shared prefix),
+  as the abstract says; the released code pairs any leaves with a reward gap.
   APIGen-MT, arxiv 2504.03601 (verified multi-turn tool data, keep only runs that reach the goal state; xLAM-2 beats GPT-4o on tau-bench per abstract).
   APIGen, arxiv 2406.18518: verify in 3 steps (format, real execution, semantic).
 - No paper compares tool-layer fixes with weight fixes. That comparison is our own testable claim.
@@ -114,3 +121,19 @@ Suggested upgrades (in order):
 - tools/skill_ledger.py: JSONL audit of every edit with content-addressed before/after snapshots, one-step rollback.
 - agent/curator.py: unused skills go stale, then archived, never deleted.
 - Borrow for our tool-fix branch: the ledger + rollback for each tool patch, and the reviewer fork with a whitelist.
+
+## Task splits fixed (2026-11-11, Mitushi)
+- Problem: AGENTS.md promised train 40 / held-out 20 / hidden 20, but the code trained on the whole tau2
+  retail `train` split (74 tasks) and gated on the whole `test` split (40 tasks). There was no hidden set.
+- tau2 retail has two disjoint splits: train 74, test 40. Runs so far (baseline, teacher, tool patches)
+  used only train tasks, so the test split is untouched.
+- Change: train pool = all 74 train tasks. The 40 test tasks are shuffled with seed 300 and cut in two:
+  held-out 20 (the gate scores on them) and hidden 20 (opened once, for the final report). The ids are
+  written out in `configs/splits.yaml`, so a tau2 update cannot move them.
+- Why not keep gating on all 40: the final numbers would come from the same tasks the gate used to pick
+  rounds. Why not carve the hidden set from train: the run dirs that show which train ids were used are
+  not all in one place, so contamination could not be ruled out.
+- Gate floors resized from 40 tasks x k=3 (120 runs) to 20 x 3 (60 runs): min_valid_runs 108 -> 54,
+  min_complete_tasks 36 -> 18, target_label_min_drop 0.025 -> 0.05 (still 3 runs). non_target_max_increase
+  stays 0.05 (now 3 runs, was 6). Cost: the gate is noisier; pass^1 and pass^3 still may not drop at all.
+- Status stays `proposed` until the team freezes it.

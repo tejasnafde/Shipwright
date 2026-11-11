@@ -34,7 +34,7 @@ AgentTune already has the self-healing loop: `Project.heal()`, `FailureDetector`
 Check for an existing AgentTune or AuditKIT function before you write a new one.
 
 What we add: the 3-way router, a tool-patch ledger with rollback, the AuditKIT gate (pass^k, BFCL),
-and the tool-fix vs weight-fix comparison.
+the tool-fix vs weight-fix comparison, and Agent-R revision data for the weight fix (below).
 
 2026-11-09: detect, classify, the retrain trigger and the gate call AgentTune classes
 (`src/shipwright/heal/agenttune_bridge.py`, table in `docs/pipeline/baseline.md`); our rules and AuditKIT thresholds
@@ -43,12 +43,11 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 
 ## Evaluation rules
 
-- Three frozen task splits: **train pool** (40 tasks, the loop learns from it), **held-out**
-  (20, the gate scores on it), **hidden** (20, opened once, for the final report). Never train on
-  held-out or hidden tasks. Sized so each failure label shows up more than once or twice a round
-  while keeping judge/teacher API and GPU cost low (`common/config.py`'s frozen-constants pattern
-  was retired 2026-11-10 in favor of writing the numbers directly here and in `configs/gate.yaml`
-  - one source of truth, not two).
+- Three task splits, ids in `configs/splits.yaml` (2026-11-11, why: `docs/notes.md`): **train pool** (the whole
+  tau2 retail `train` split, 74 tasks; the loop learns from it), **held-out** (20 of the 40 `test` tasks; the gate
+  scores on them), **hidden** (the other 20 `test` tasks; opened once, for the final report). Never train on
+  held-out or hidden tasks. `scripts/baseline.py` refuses hidden ids, and a `test` run without `--task-ids`,
+  unless `--open-hidden` is passed (`src/shipwright/heal/splits.py`). Gate floors are sized for 20 tasks x k=3.
 - Frozen before round 1: failure label list, gate thresholds, k for pass^k, seeds, teacher and judge
   model versions. To change one, write the change and the reason in `docs/notes.md` first.
 - The gate never approves by default. Too few test runs means reject.
@@ -69,6 +68,14 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - `scripts/baseline.py` defaults to the tau2 `train` split so held-out tasks stay unused until the splits are frozen.
 - Weight fix (teacher runs, SFT data, LoRA job): `docs/pipeline/training.md`. The teacher gets the student's prompted view (`force_prompted`); the teacher model is passed with `--teacher-model` (no default; team choice above).
 - `scripts/train_job.py` launches nothing without `--launch`, and prints flavor price x timeout first.
+- 2026-11-11 (Mitushi): Agent-R (arxiv 2501.11425) is a second weight-fix data source: MCTS over Tiny Aya's own
+  tau2 runs, the actor finds its first bad step, and a revision run (bad prefix masked, revision thought + good
+  suffix trained) goes into `sft.jsonl` with a per-message `loss_mask`. How: `docs/pipeline/agent-r.md`.
+  Logic in `src/shipwright/heal/agent_r.py`; scripts `agent_r_search.py`, `agent_r_revise.py`, `build_sft.py --agent-r`.
+- A record with `loss_mask` must keep it through AgentTune: `train_lora.py` asserts the EventLog rows have the
+  same mask. Never train on the masked (bad) assistant turns.
+- MCTS branching sets tau2 `Task.initial_state.message_history` to the node prefix; tau2 replays its tool calls
+  strictly. Build branches only through `scripts/agent_r_search.py` (`run_single_task`), not by editing tau2.
 - Gate (step 05): `docs/pipeline/gate.md`. `scripts/gate_job.py` (HF Job, vLLM serves base + LoRA) or `scripts/gate_eval.py --local-dry-run` (offline). Config `configs/gate.yaml` (status `proposed` until the team freezes it), systems in `configs/systems/`. Metrics come from AuditKIT; the user model is a required argument (no default).
 
 ## Logs and debugging
@@ -231,6 +238,9 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - 2026-11-09: DeepSeek V4.1 Flash on Vertex is served only on the `global` endpoint (a `us-central1` call fails). Vertex has no explicit context cache (`cachedContents`) for MaaS open models; implicit prefix caching (Preview) covers `deepseek-v4.1-flash-maas` from 4096 prompt tokens, not gpt-oss-120b. Our fixed teacher prefix (policy + tool list) is about 2.6k tokens, so hits come from the growing conversation of one run.
 - 2026-11-09: Vertex gpt-oss-120b spends reply tokens on reasoning (`reasoning_content`) first. `vertex.py` raises `max_tokens` below 1024 to 1024; `reasoning_effort: low` is accepted.
 - 2026-11-09: A Vertex token lasts about 1 hour and an HF Job cannot run gcloud. `gate_job.py` passes a token minted at launch (`SHIPWRIGHT_VERTEX_TOKEN`), with no refresh: a gate job with a Vertex user model must finish within about 1 hour.
+- 2026-11-11: In tests, `agenttune.agentic` cannot be imported without torch. `tests/heal/test_agent_r.py` loads
+  `agenttune/agentic/events.py` by file path; register the module in `sys.modules` before `exec_module`, or its
+  dataclasses fail (`'NoneType' object has no attribute '__dict__'`).
 - 2026-11-08: The GitHub repo is private, so an HF Job cannot clone it. `scripts/gate_job.py --launch` uploads `git archive HEAD` to the runs dataset; commit before you launch.
 
 - 2026-11-09: Cloud Trace `batchWrite` returns 200 but stores nothing while `observability.googleapis.com` is off (read gives `_Trace bucket not found`). Tejas must enable that API once; until then use `live_spans.jsonl` and the logs (they work).

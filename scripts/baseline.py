@@ -74,6 +74,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--agent-api-base", default=None,
                    help="OpenAI-compatible endpoint for the agent only, e.g. http://localhost:8000/v1 (vLLM)."
                         " The user simulator still goes to the HF router.")
+    p.add_argument("--open-hidden", action="store_true",
+                   help="allow hidden test tasks (configs/splits.yaml): only for the one final-report run")
     p.add_argument("--dry-run", action="store_true", help="fake LLM, no network")
     return p
 
@@ -106,10 +108,42 @@ def run(
     merged into the agent's litellm args (e.g. reasoning_effort). ``role_names`` renames
     roles in the cost estimate (teacher runs: agent -> teacher).
     """
+    out_dir = make_run_dir(args, prefix)
+    setup = prepare(args, out_dir, prompted_models=prompted_models)
+    if setup is None:
+        return None
+    from tau2.runner import run_domain
+
+    results = run_domain(text_run_config(args, out_dir, agent_llm_args))
+    log.fail_point("summary")
+    sims = [s.model_dump(mode="json") for s in results.simulations]
+    out_dir, traces, summary = finish_run(args, out_dir, sims, setup, role_names)
+    return out_dir, traces, summary
+
+
+def make_run_dir(args: argparse.Namespace, prefix: str) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     out_dir = (args.output_dir or ROOT / "runs" / f"{prefix}-{stamp}").resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     log.attach_run_dir(out_dir)
+    return out_dir
+
+
+def prepare(args: argparse.Namespace, out_dir: Path, *, prompted_models: dict[str, int] | None = None,
+            fake_completion=None) -> dict | None:
+    """Everything before tau2 runs: tokens, litellm patches, tool patches, run_config.json.
+
+    Returns {"meter", "rerouter", "tool_names", "active_patches"}, or None without a token.
+    ``fake_completion`` replaces the dry-run fake LLM (scripts/agent_r_search.py).
+    """
+    from shipwright.heal import splits
+
+    try:
+        splits.check_run(args.task_split, args.task_ids, getattr(args, "open_hidden", False))
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    if getattr(args, "open_hidden", False):
+        logger.warning("hidden split opened: this run is for the final report only", task_ids=args.task_ids)
     log.note_repro(**repro.models_from_args(args), dry_run=args.dry_run)
     logger.info("run start", run_dir=str(out_dir), agent_model=args.agent_model, user_model=args.user_model,
                 task_split=args.task_split, dry_run=args.dry_run)
@@ -142,7 +176,6 @@ def run(
 
     from shipwright.llm import patches, prompted_tools
     from shipwright.llm.costs import UsageMeter
-    from shipwright.heal.traces import build_trace, summarize, write_jsonl
 
     for model, reply_tokens in (prompted_models or {}).items():
         prompted_tools.force_prompted(model, reply_tokens)
@@ -155,7 +188,8 @@ def run(
     if args.dry_run:
         from shipwright.llm.dry_run import make_fake_completion
 
-        patches.install(make_fake_completion(args.agent_model), model_map=rerouter, **roles)
+        fake = fake_completion or make_fake_completion(args.agent_model)
+        patches.install(fake, model_map=rerouter, **roles)
     else:
         patches.install(model_map=rerouter, **roles)
         from shipwright.llm import context
@@ -173,9 +207,7 @@ def run(
 
     nl_assertions.DEFAULT_LLM_NL_ASSERTIONS = args.user_model
 
-    from tau2.data_model.simulation import TextRunConfig
     from tau2.registry import registry
-    from tau2.runner import run_domain
 
     domain_tools = registry.get_env_constructor(args.domain)().get_tools()
     tool_names = {t.name for t in domain_tools}
@@ -200,13 +232,19 @@ def run(
     run_config["output_dir"] = str(out_dir)
     run_config["active_tool_patches"] = active_patches
     (out_dir / "run_config.json").write_text(json.dumps(run_config, indent=2))
+    return {"meter": meter, "rerouter": rerouter, "tool_names": tool_names, "active_patches": active_patches}
+
+
+def text_run_config(args: argparse.Namespace, out_dir: Path, agent_llm_args: dict | None = None):
+    """The tau2 TextRunConfig of a run."""
+    from tau2.data_model.simulation import TextRunConfig
 
     agent_args: dict = {"temperature": args.agent_temperature, **(agent_llm_args or {})}
     if args.agent_api_base and not args.dry_run:
         # Per-call endpoint for the agent; vLLM ignores the key (no --api-key on the server).
         agent_args.update(api_base=args.agent_api_base, api_key="EMPTY")  # priced 0: our GPU, per hour
 
-    config = TextRunConfig(
+    return TextRunConfig(
         domain=args.domain,
         agent="llm_agent",
         llm_agent=args.agent_model,
@@ -224,11 +262,19 @@ def run(
         save_to=str(out_dir / "tau2"),  # absolute path: tau2 saves here, not under its data dir
         max_retries=0,
     )
-    results = run_domain(config)
-    log.fail_point("summary")
 
-    sims = [s.model_dump(mode="json") for s in results.simulations]
-    traces = [build_trace(s, tool_names) for s in sims]
+
+def finish_run(args: argparse.Namespace, out_dir: Path, sims: list[dict], setup: dict,
+               role_names: dict[str, str] | None = None,
+               extra: dict | None = None) -> tuple[Path, list[dict], dict]:
+    """traces.jsonl, summary.json, prompts.json and spans from finished simulations."""
+    from shipwright.heal.traces import build_trace, summarize, write_jsonl
+    from shipwright.llm import prompted_tools
+
+    meter, rerouter, active_patches = setup["meter"], setup["rerouter"], setup["active_patches"]
+    traces = [build_trace(s, setup["tool_names"]) for s in sims]
+    for t, s in zip(traces, sims, strict=True):
+        t.update((extra or {}).get(s.get("id"), {}))
     write_jsonl(out_dir / "traces.jsonl", traces)
     summary = summarize(traces)
     summary["usage_by_role"] = meter.by_role()

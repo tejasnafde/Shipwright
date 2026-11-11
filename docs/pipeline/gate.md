@@ -26,14 +26,14 @@ runs; the exact ids go into `gate_inputs.json` and `metrics.jsonl`.
 
 | Check | Rule (proposed values) |
 |---|---|
-| comparable | both ran `retail` `test` (40 tasks), the same task ids, k = 3 |
-| valid_runs | each system: >= 108 valid (non infra-error) runs, >= 90% of tasks x k, >= 36 tasks with all 3 trials valid |
+| comparable | both ran the 20 held-out `retail` `test` tasks (`configs/splits.yaml`), the same task ids, k = 3 |
+| valid_runs | each system: >= 54 valid (non infra-error) runs, >= 90% of tasks x k, >= 18 tasks with all 3 trials valid |
 | pass_1 | candidate pass^1 >= current pass^1 (a tie passes) |
 | pass_k | candidate pass^3 >= current pass^3 (a tie passes) |
-| target | target-label failure rate drops by > 0 and >= 2.5 points (3 of 120 runs); a tie rejects |
+| target | target-label failure rate drops by > 0 and >= 5 points (3 of 60 runs); a tie rejects |
 | non_target | other failure labels rise by <= 5 points |
 | bfcl | BFCL v3 accuracy (simple, multiple, irrelevance; 100 each) drops by <= 2 points; missing BFCL rejects |
-| agenttune_gate | AgentTune `DeploymentGate.evaluate_decision` approves, on >= 108 paired held-out runs |
+| agenttune_gate | AgentTune `DeploymentGate.evaluate_decision` approves, on >= 54 paired held-out runs |
 
 Rates use valid runs as the denominator. Infra-error runs are excluded everywhere and
 counted in `num_infra_errors`. Labels come from `scripts/classify.py`; `classify.classifier_model:
@@ -49,7 +49,7 @@ Promote = AgentTune's `DeploymentGate` approves AND every AuditKIT threshold abo
   per case is PASS or FAIL, so AgentTune compares the two pass rates and blocks a drop of more
   than `agenttune_gate.task_regression_tol` (0.0).
 - AgentTune approves an empty test set (both scores fall back to 0). Our check fails when there
-  are fewer paired runs than `min_test_samples`, which is the `valid_runs` floor (108).
+  are fewer paired runs than `min_test_samples`, which is the `valid_runs` floor (54).
 - AuditKIT: `auditkit.agent_eval.AgentEvalRunner` (recorded mode) with
   `FinalStateAssertion` for pass^1 and pass^k, `ToolCallF1` and the other diagnostics, and
   BFCL v3 scoring (`src/shipwright/heal/bfcl_eval.py`).

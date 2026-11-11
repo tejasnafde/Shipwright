@@ -1,0 +1,23 @@
+# Task splits for tau2 retail (AGENTS.md, Evaluation rules). Read by src/shipwright/heal/splits.py.
+#
+# status: proposed. Freeze with configs/gate.yaml before round 1. Why these splits: docs/notes.md,
+# "Task splits fixed (2026-11-11)".
+#
+# train:   the whole tau2 `train` split (74 tasks). The loop learns only from these.
+# heldout: 20 tasks of the tau2 `test` split. The gate scores on them. Never train on them.
+# hidden:  the other 20 `test` tasks. Opened once, for the final report (baseline.py --open-hidden).
+# The 40 test ids were shuffled with seed 300 and cut in two; they are listed so a tau2 update cannot move them.
+status: proposed
+frozen_on: null
+domain: retail
+seed: 300
+train:
+  task_split: train
+heldout:
+  task_split: test
+  task_ids: ["9", "12", "27", "33", "36", "40", "45", "49", "51", "53",
+             "61", "64", "65", "68", "70", "74", "79", "90", "97", "101"]
+hidden:
+  task_split: test
+  task_ids: ["5", "17", "18", "26", "32", "38", "39", "42", "55", "56",
+             "60", "62", "71", "77", "86", "94", "100", "102", "108", "111"]
