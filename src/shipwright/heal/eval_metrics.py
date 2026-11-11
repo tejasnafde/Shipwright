@@ -182,14 +182,38 @@ def _mean(values: list[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
+def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float] | None:
+    """Wilson score interval for a binomial proportion (default: 95%).
+
+    More reliable than the normal approximation at small n or p near 0/1 - exactly the
+    regime our held-out set (20 tasks) and gate samples sit in. A result like "20/20" is
+    not the same claim as "the true rate is 100%"; this is the same framing a different
+    Track 3 team used for their own 30-task held-out claim ("consistent with a true rate
+    of 88-100%", github.com/Timidan/lexsi-hack) rather than reporting a bare percentage
+    the sample size cannot support.
+    """
+    if n == 0:
+        return None
+    phat = successes / n
+    denom = 1 + z * z / n
+    center = (phat + z * z / (2 * n)) / denom
+    margin = (z * ((phat * (1 - phat) / n + z * z / (4 * n * n)) ** 0.5)) / denom
+    return (round(max(0.0, center - margin), 4), round(min(1.0, center + margin), 4))
+
+
 def pass_metrics(rows: list, k: int) -> dict:
     """pass^1 and pass^k from AuditKIT rows (one per task).
 
-    pass^1: mean over tasks of successes / decided trials.
+    pass^1: mean over tasks of successes / decided trials. ``pass_1_ci`` is a 95% Wilson
+    interval on the pooled (successes, decided trials) count across all tasks - the
+    standard pass@1 convention of treating every decided trial as one Bernoulli draw, same
+    as pass@k literature generally does, not a claim that trials within one task are fully
+    independent of task difficulty.
     pass^k: mean over tasks of AuditKIT ``all_k``, only for tasks with at least k decided
     trials (AuditKIT would silently lower k otherwise). Other tasks are counted, not scored.
     """
     p1, pk = [], []
+    total_s, total_d = 0, 0
     per_task = {}
     for row in rows:
         rel = row.reliability
@@ -202,11 +226,13 @@ def pass_metrics(rows: list, k: int) -> dict:
             all_k = float(n_s) if k == 1 and n_d == 1 else None
         if n_d:
             p1.append(n_s / n_d)
+            total_s += n_s
+            total_d += n_d
         if all_k is not None:
             pk.append(all_k)
         per_task[row.case_id] = {"n_success": n_s, "n_decided": n_d, "pass_k": all_k}
-    return {"pass_1": _mean(p1), "pass_k": _mean(pk), "num_tasks_scored": len(p1),
-            "num_tasks_complete": len(pk), "per_task": per_task}
+    return {"pass_1": _mean(p1), "pass_1_ci": wilson_interval(total_s, total_d), "pass_k": _mean(pk),
+            "num_tasks_scored": len(p1), "num_tasks_complete": len(pk), "per_task": per_task}
 
 
 def diagnostic_metrics(rows: list) -> dict:
@@ -277,6 +303,7 @@ def compute_metrics(run: dict, k: int, system: str | None = None) -> dict:
         "num_valid_runs": len(valid),
         "num_infra_errors": len(traces) - len(valid),
         "pass_1": passes["pass_1"],
+        "pass_1_ci": passes["pass_1_ci"],
         "pass_k": passes["pass_k"],
         "num_tasks_scored": passes["num_tasks_scored"],
         "num_tasks_complete": passes["num_tasks_complete"],
