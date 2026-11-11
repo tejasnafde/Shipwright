@@ -100,6 +100,17 @@ def run(cmd: list[str], log: Path | None = None, cwd: Path | None = None, env: d
         return subprocess.call(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT)
 
 
+def heldout_task_ids(cfg: dict, num_tasks: int | None = None) -> list[str]:
+    """The held-out ids of configs/splits.yaml (never the hidden ones); --num-tasks takes the first N."""
+    from shipwright.heal import splits
+
+    ids = splits.heldout_ids()
+    if len(ids) != cfg["heldout"]["num_tasks"]:
+        raise SystemExit(f"configs/gate.yaml heldout.num_tasks is {cfg['heldout']['num_tasks']}, "
+                         f"configs/splits.yaml has {len(ids)} held-out ids")
+    return ids[:num_tasks] if num_tasks is not None else ids
+
+
 def baseline_cmd(cfg: dict, system: dict, patch_ids: list[str], out: Path, args: argparse.Namespace) -> list[str]:
     from shipwright.heal.systems import agent_model_id, baseline_args
 
@@ -107,7 +118,7 @@ def baseline_cmd(cfg: dict, system: dict, patch_ids: list[str], out: Path, args:
     cmd = [
         sys.executable, str(ROOT / "scripts" / "baseline.py"),
         "--domain", held["domain"], "--task-split", held["task_split"],
-        "--num-tasks", str(args.num_tasks if args.num_tasks is not None else held["num_tasks"]),
+        "--task-ids", *heldout_task_ids(cfg, args.num_tasks),
         "--trials", str(cfg["k"]), "--seed", str(cfg["seed"]),
         "--agent-model", agent_model_id(system),
         "--agent-temperature", str(cfg.get("agent_temperature", 0.0)),

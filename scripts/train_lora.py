@@ -12,6 +12,9 @@ Runs on HF Jobs (see scripts/train_job.py), not locally. Steps:
 1. Download sft.jsonl (scripts/build_sft.py) from the dataset repo.
 2. Turn each example into a full-tier AgentTune ``EventLog``: user turns become
    OBSERVATION events (loss-masked), assistant turns become TEXT events (trained).
+   An example with a ``loss_mask`` (Agent-R revision runs, scripts/agent_r_revise.py)
+   keeps the assistant turns it marks as context masked too: the bad steps before the
+   revision thought are never trained.
    The system prompt (policy + compact tools + JSON block protocol) is kept as the
    first message, loss-masked, so the rows are exactly the student's prompts.
 3. ``agenttune.create_distill_trainer(student, trajectories=..., trainer_factory=...)``
@@ -129,26 +132,101 @@ def make_eventlog_class():
         """
 
         system: str = ""
+        # Event indices of assistant turns that are context only (Agent-R bad steps).
+        context_events: tuple = ()
 
         def as_dataset_rows(self, fmt: str) -> list[dict]:
             rows = super().as_dataset_rows(fmt)
             for r in rows:
-                r["messages"].insert(0, {"role": "system", "content": self.system})
-                r["segment_weights"].insert(0, 0.0)
-                r["loss_mask"].insert(0, True)
+                for i in self.context_events:
+                    r["segment_weights"][i] = 0.0
+                    r["loss_mask"][i] = True
+                if self.system:
+                    r["messages"].insert(0, {"role": "system", "content": self.system})
+                    r["segment_weights"].insert(0, 0.0)
+                    r["loss_mask"].insert(0, True)
             return rows
 
     return SystemPromptEventLog
 
 
-def to_eventlog(cls, messages: list[dict]):
+def context_events(messages: list[dict], loss_mask: list[bool] | None) -> tuple[int, ...]:
+    """Event indices (messages without the system prompt) of masked assistant turns."""
+    if loss_mask is None:
+        return ()
+    if len(loss_mask) != len(messages):
+        raise ValueError("loss_mask must have one entry per message")
+    offset = 1 if messages and messages[0]["role"] == "system" else 0
+    return tuple(i - offset for i, (m, masked) in enumerate(zip(messages, loss_mask, strict=True))
+                 if masked and m["role"] == "assistant")
+
+
+def to_eventlog(cls, messages: list[dict], loss_mask: list[bool] | None = None):
     from agenttune.agentic import Event, EventKind
 
     system, events = split_example(messages)
-    log = cls(tier="full", system=system)
+    log = cls(tier="full", system=system, context_events=context_events(messages, loss_mask))
     for kind, text in events:
         log.append(Event(EventKind.OBSERVATION if kind == "observation" else EventKind.TEXT, {"text": text}))
     return log
+
+
+def windowed_sft_trainer():
+    """A TRL ``SFTTrainer`` subclass that skips computing logits for the loss-masked
+    prefix before the first trained token.
+
+    Tiny Aya's 262,144-token vocabulary makes the full ``[seq_len, vocab]`` logits
+    tensor the memory bottleneck, not the base model's own weights or LoRA's ~30M
+    trainable params - at our own 8192-token ``--max-seq-len``, one bf16 logits
+    tensor alone is already seq_len x vocab x 2 bytes ~= 4.3 GB before gradients or
+    activations. Independently found and fixed the same way for the same model on a
+    16 GB T4 by a different team's DPO trainer: github.com/Timidan/lexsi-hack,
+    ``scripts/train_dpo.py`` (``logits_to_keep`` + a windowed loss, there for
+    ``trl.DPOTrainer``; here for our own ``SFTTrainer`` subclass instead, since
+    ``create_distill_trainer``'s default factory builds a plain TRL ``SFTTrainer``,
+    confirmed by reading ``agenttune.agentic.distill_trainer`` source directly).
+
+    Safe to apply here specifically because ``per_device_train_batch_size=1`` (no
+    per-example window to reconcile across a batch), and ``logits_to_keep`` as a
+    plain Python int ("only project the last N positions through the lm_head") is a
+    long-standing, architecture-independent `transformers` generation API, not
+    something that needs verifying per model family. The loss itself is computed by
+    hand on the returned (smaller) logits tensor, not via the model's own ``labels=``
+    path, specifically so correctness here does not depend on how any particular
+    model class threads ``labels`` through ``logits_to_keep`` internally - that
+    interaction is genuinely model-specific and was NOT verified against Tiny Aya's
+    real modeling code (this repo has no GPU to check on). If the loaded model
+    rejects a plain int ``logits_to_keep`` kwarg, this falls back to the unwindowed
+    loss rather than guess.
+    """
+    from trl import SFTTrainer
+
+    class WindowedSFTTrainer(SFTTrainer):
+        def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+            import torch
+            import torch.nn.functional as F
+
+            labels = inputs.get("labels")
+            if labels is None or labels.shape[0] != 1:
+                return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+            row = labels[0]
+            trained = (row != -100).nonzero(as_tuple=True)[0]
+            if trained.numel() == 0:
+                return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+            start = int(trained[0].item())
+            keep = row.shape[0] - start
+            model_inputs = {k: v for k, v in inputs.items() if k != "labels"}
+            try:
+                outputs = model(**model_inputs, logits_to_keep=keep)
+            except TypeError:
+                return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
+            logits = outputs.logits
+            target = row[start:].unsqueeze(0)
+            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)).float(), target.reshape(-1),
+                                   ignore_index=-100)
+            return (loss, outputs) if return_outputs else loss
+
+    return WindowedSFTTrainer
 
 
 class MaskedSFTFactory:
@@ -222,8 +300,9 @@ class MaskedSFTFactory:
         )
         lora = LoraConfig(r=a.lora_r, lora_alpha=a.lora_alpha, lora_dropout=a.lora_dropout,
                           bias="none", task_type="CAUSAL_LM", target_modules=LORA_TARGETS)
-        self.trainer = SFTTrainer(model=student, args=cfg, train_dataset=Dataset.from_list(rows),
-                                  processing_class=self.tokenizer, peft_config=lora)
+        trainer_cls = windowed_sft_trainer() if a.batch_size == 1 else SFTTrainer
+        self.trainer = trainer_cls(model=student, args=cfg, train_dataset=Dataset.from_list(rows),
+                                   processing_class=self.tokenizer, peft_config=lora)
         return self.trainer
 
 
@@ -270,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     t0 = time.time()
     records, data_stats = load_examples(args.dataset, args.dataset_revision)
     cls = make_eventlog_class()
-    logs = [to_eventlog(cls, r["messages"]) for r in records]
+    logs = [to_eventlog(cls, r["messages"], r.get("loss_mask")) for r in records]
     factory = MaskedSFTFactory(args)
     trainer = create_distill_trainer(args.student, trajectories=logs, trainer_factory=factory,
                                      output_dir=args.output_dir)
@@ -280,6 +359,8 @@ def main(argv: list[str] | None = None) -> int:
     assert len(rows) == len(records)
     for row, rec in zip(rows, records, strict=True):
         assert row["messages"] == [{"role": m["role"], "content": m["content"]} for m in rec["messages"]]
+        if rec.get("loss_mask") is not None:
+            assert row["loss_mask"] == rec["loss_mask"], "AgentTune loss_mask differs from the Agent-R mask"
     print(f"{len(rows)} AgentTune rows match sft.jsonl", flush=True)
 
     result = trainer.train()

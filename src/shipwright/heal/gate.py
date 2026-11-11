@@ -272,7 +272,7 @@ def decide(current: dict, candidate: dict, cfg: dict, targets: list[str] | None 
 
 def metrics_row(round_: int, decision: dict, systems: dict) -> dict:
     """One metrics.jsonl row: round, systems compared, headline metrics, decision."""
-    keys = ("system", "num_runs", "num_valid_runs", "num_tasks_complete", "pass_1", "pass_k",
+    keys = ("system", "num_runs", "num_valid_runs", "num_tasks_complete", "pass_1", "pass_1_ci", "pass_k",
             "failure_rate", "label_rates", "tool_call_error_rate", "avg_steps", "auditkit", "bfcl",
             "active_tool_patches", "agent_model")
     pick = lambda m: {k: m.get(k) for k in keys}  # noqa: E731

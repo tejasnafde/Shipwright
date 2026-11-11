@@ -172,10 +172,128 @@ def stats(records: list[dict], dropped: dict, extra: dict | None = None) -> dict
     return {
         "examples": len(records),
         "by_source": by_source,
-        "tasks": sorted({r["task_id"] for r in records}, key=lambda x: (len(x), x)),
+        "tasks": sorted({r["task_id"] for r in records if r["task_id"] is not None}, key=lambda x: (len(x), x)),
         "assistant_turns": sum(1 for r in records for m in r["messages"] if m["role"] == "assistant"),
         "avg_tokens": round(sum(toks) / len(toks), 1) if toks else 0,
         "max_tokens": max(toks, default=0),
         "dropped": dropped,
         **(extra or {}),
     }
+
+
+# ---- Agent-R revision runs: some assistant turns are context only ----
+
+
+def revision_mask(conv: list[dict], n_context_assistant: int) -> list[bool]:
+    """AgentTune-style loss mask (True = masked) for a rendered revision run.
+
+    convert_messages keeps assistant messages one to one and in order, so the first
+    ``n_context_assistant`` assistant turns (the shared prefix and the bad steps up to t')
+    are context; the later ones (revision thought + good suffix) are targets.
+    """
+    mask, seen = [], 0
+    for m in conv:
+        if m["role"] == "assistant":
+            mask.append(seen < n_context_assistant)
+            seen += 1
+        else:
+            mask.append(True)
+    return mask
+
+
+def masked_examples(conv: list[dict], mask: list[bool], long_mode: str = "window",
+                    budget: int | None = None) -> list[tuple[list[dict], list[bool]]]:
+    """Like conversation_examples, but only unmasked assistant turns are targets.
+
+    A window ends at a target turn; its earlier assistant turns keep their own mask (a bad
+    step stays masked inside any window). Kept assistant turns are mapped to the latest
+    ones before the window end, the same assumption window_examples makes.
+    """
+    budget = prompt_budget() if budget is None else budget
+    targets = [i for i, m in enumerate(conv) if m["role"] == "assistant" and not mask[i]]
+    if not targets:
+        return []
+    end = targets[-1]
+    if count_messages(conv[:end]) <= budget:
+        return [(conv[: end + 1], mask[: end + 1])]
+    if long_mode == "drop":
+        return []
+    if long_mode != "window":
+        raise ValueError(f"unknown long_mode {long_mode!r}")
+    covered: set[int] = set()
+    out = []
+    for end in reversed(targets):
+        if end in covered:
+            continue
+        prompt, _ = fit_messages(conv[:end], budget)
+        prompt = _move_note_off_assistant(prompt)
+        before = [i for i in range(end) if conv[i]["role"] == "assistant"]
+        kept = sum(1 for m in prompt if m["role"] == "assistant")
+        kept_idx = before[len(before) - kept:] if kept else []
+        it = iter(kept_idx)
+        wmask = [mask[next(it)] if m["role"] == "assistant" else True for m in prompt]
+        covered.update(i for i in kept_idx if not mask[i])
+        covered.add(end)
+        out.append((prompt + [conv[end]], wmask + [False]))
+    out.reverse()
+    return out
+
+
+def revision_records(rev: dict, prompt: dict, long_mode: str = "window") -> list[dict]:
+    """SFT records for one Agent-R revision run (scripts/agent_r_revise.py revisions.jsonl).
+
+    Each record carries ``loss_mask`` (one bool per message, True = context only);
+    scripts/train_lora.py passes it to AgentTune.
+    """
+    conv = render_conversation(prompt["system"], prompt["tools"], trace_to_openai(rev["messages"]))
+    mask = revision_mask(conv, rev["n_context_assistant"])
+    out = []
+    for i, (messages, m) in enumerate(masked_examples(conv, mask, long_mode)):
+        trained = [x for x, masked in zip(messages, m, strict=True) if not masked]
+        out.append({
+            "messages": messages,
+            "loss_mask": m,
+            "source": "revision",
+            "task_id": str(rev.get("task_id")),
+            "simulation_id": rev.get("bad_simulation_id"),
+            "good_simulation_id": rev.get("good_simulation_id"),
+            "window": i,
+            "tokens": count_messages(messages),
+            "reply_tokens_max": longest_reply_tokens(trained),
+        })
+    return out
+
+
+def general_records(rows: list[dict]) -> list[dict]:
+    """General chat data for the (1 - eta) share of Agent-R's Eq. 6 (forgetting guard).
+
+    Accepts {"messages": [{role, content}]} or ShareGPT {"conversations": [{from, value}]}.
+    Rows must end with an assistant turn; others are skipped.
+    """
+    roles = {"human": "user", "user": "user", "gpt": "assistant", "assistant": "assistant", "system": "system"}
+    out = []
+    for r in rows:
+        if "messages" in r:
+            msgs = [{"role": m["role"], "content": m.get("content") or ""} for m in r["messages"]]
+        else:
+            msgs = [{"role": roles.get(m.get("from"), ""), "content": m.get("value") or ""}
+                    for m in r.get("conversations", [])]
+        if not msgs or msgs[-1]["role"] != "assistant" or any(m["role"] not in ("system", "user", "assistant")
+                                                               for m in msgs):
+            continue
+        out.append({"messages": msgs, "source": "general", "task_id": None, "window": 0,
+                    "tokens": count_messages(msgs), "reply_tokens_max": longest_reply_tokens(msgs)})
+    return out
+
+
+def eta_mix(agent: list[dict], general: list[dict], eta: float, seed: int = 300) -> tuple[list[dict], dict]:
+    """Add general examples so that agent data is ``eta`` of the total (paper: eta = 0.2)."""
+    import random
+
+    if not 0 < eta <= 1:
+        raise ValueError("eta must be in (0, 1]")
+    want = round(len(agent) * (1 - eta) / eta)
+    picked = random.Random(seed).sample(general, min(want, len(general)))
+    info = {"eta": eta, "general_wanted": want, "general_used": len(picked),
+            "eta_actual": round(len(agent) / (len(agent) + len(picked)), 3) if agent or picked else None}
+    return agent + picked, info
