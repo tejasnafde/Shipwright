@@ -58,6 +58,15 @@ Without `--wait`, the command returns at once; follow the run in the console
 
 `--output-dir` must be under `runs/` (the default is fine): only `runs/<dir>/` is uploaded.
 
+Each execution starts empty. To read the run dir of an earlier execution, put `--fetch <owner>/<dir>`
+(repeatable) before the script: it downloads `gs://lexsi-hackathon-runs/<owner>/<dir>/` to `runs/<dir>/`
+first (2026-11-11). A fetched dir is uploaded again only if the script changes it.
+
+```sh
+$GC run jobs execute shipwright-tejas --region=asia-south1 --wait \
+  --args=--fetch,tejas/r1-baseline-train,classify.py,runs/r1-baseline-train
+```
+
 ## Read the results
 
 Something failed? `scripts/why.py <execution name>` (docs/ops/debugging.md) prints where and why,

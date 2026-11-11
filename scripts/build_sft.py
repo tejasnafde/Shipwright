@@ -168,6 +168,21 @@ def collect(
     return records
 
 
+def load_valid_revision_pairs(run_directory: Path) -> set[tuple] | None:
+    """(bad, good) simulation ids of the revisions that passed scripts/agent_r_check.py.
+
+    None when the run dir has no check.jsonl (the revisions are then used unchecked).
+    """
+    check_path = run_directory / "check.jsonl"
+    if not check_path.exists():
+        return None
+    return {
+        (check["bad_simulation_id"], check.get("good_simulation_id"))
+        for check in read_json_lines(check_path)
+        if check.get("valid")
+    }
+
+
 def collect_agent_r(
     run_directories: list[Path],
     build_options: argparse.Namespace,
@@ -189,18 +204,30 @@ def collect_agent_r(
         else:
             fallback_prompt = reconstruct_prompt()
 
-        revisions = read_json_lines(run_directory / "revisions.jsonl")
-        for revision in revisions:
+        valid_pairs = load_valid_revision_pairs(run_directory)
+        kept_revision_count = 0
+        invalid_revision_count = 0
+        for revision in read_json_lines(run_directory / "revisions.jsonl"):
+            pair = (revision.get("bad_simulation_id"), revision.get("good_simulation_id"))
+            if valid_pairs is not None and pair not in valid_pairs:
+                invalid_revision_count += 1
+                continue
             prompt = prompts_by_sha.get(revision.get("prompt_sha")) or fallback_prompt
             records += sft_data.revision_records(revision, prompt, build_options.long_mode)
+            kept_revision_count += 1
 
         good_traces = read_json_lines(run_directory / "good.jsonl")
         for trace in good_traces:
             prompt = prompt_for(trace, prompts_by_sha, fallback_prompt)
             records += sft_data.trace_records(trace, prompt, "good", build_options.long_mode)
 
+        if valid_pairs is None:
+            check_status = "unchecked"
+        else:
+            check_status = f"{invalid_revision_count} dropped by agent_r_check"
         notes.append(
-            f"{run_directory.name}: {len(revisions)} Agent-R revision runs, {len(good_traces)} good MCTS leaves"
+            f"{run_directory.name}: {kept_revision_count} Agent-R revision runs ({check_status}),"
+            f" {len(good_traces)} good MCTS leaves"
         )
     return records
 

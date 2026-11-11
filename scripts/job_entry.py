@@ -1,11 +1,15 @@
 """Entry point of the harness image (Cloud Run Jobs shipwright-<owner>, docs/setup/cloud-runs.md).
 
-  job_entry.py <script.py> [args...]
+  job_entry.py [--fetch <owner>/<run-dir>]... <script.py> [args...]
 
 Runs ``python scripts/<script.py> args...`` in /app, then uploads every run dir it wrote under
 ``runs/`` to ``gs://$SHIPWRIGHT_RUNS_BUCKET/$OWNER/<run-dir-name>/`` and the full console log to
 ``gs://$SHIPWRIGHT_RUNS_BUCKET/$OWNER/jobs/<execution>.log``. It uploads after a failure too,
 then exits with the script's exit code.
+
+``--fetch tejas/baseline-x`` first downloads ``gs://$SHIPWRIGHT_RUNS_BUCKET/tejas/baseline-x/`` to
+``runs/baseline-x/``, so a step can read the run dir of an earlier execution (classify a baseline,
+teacher runs from its failures). A fetched dir is uploaded again only if the script changes it.
 
 Debugging (docs/ops/debugging.md): the run id is the Cloud Run execution name; the script gets it as
 ``SHIPWRIGHT_RUN_ID`` and joins this process's trace through ``TRACEPARENT``. This entry logs job
@@ -46,6 +50,8 @@ logger = log.get_logger("job_entry")
 
 DEFAULT_BUCKET = "lexsi-hackathon-runs"
 UPLOAD_URL = "https://storage.googleapis.com/upload/storage/v1/b/{bucket}/o?uploadType=media&name={name}"
+LIST_URL = "https://storage.googleapis.com/storage/v1/b/{bucket}/o"
+OBJECT_URL = "https://storage.googleapis.com/storage/v1/b/{bucket}/o/{name}?alt=media"
 
 
 def run_dirs(runs_directory: Path) -> dict[str, float]:
@@ -81,6 +87,68 @@ def upload(http_client: httpx.Client, bucket: str, object_name: str, data: bytes
         response = http_client.post(url, content=data, headers=headers)
         call_record["status"] = response.status_code
         response.raise_for_status()
+
+
+def split_fetch(argv: list[str]) -> tuple[list[str], list[str]]:
+    """(['owner/run-dir', ...], the rest of argv) from leading ``--fetch X`` pairs."""
+    fetch_prefixes = []
+    while len(argv) >= 2 and argv[0] == "--fetch":
+        fetch_prefixes.append(argv[1].strip("/").removeprefix("gs://"))
+        argv = argv[2:]
+    return fetch_prefixes, argv
+
+
+def fetch_dir(http_client: httpx.Client, bucket: str, prefix: str, runs_directory: Path) -> int:
+    """Download ``gs://bucket/<prefix>/`` (``owner/run-dir``) into ``runs/<run-dir>/``. Returns the file count."""
+    if prefix.startswith(bucket + "/"):
+        prefix = prefix[len(bucket) + 1:]
+    run_directory_name = prefix.rsplit("/", 1)[-1]
+    if not run_directory_name or run_directory_name in (".", ".."):
+        raise ValueError(f"bad --fetch value {prefix!r}")
+
+    headers = {"Authorization": f"Bearer {TOKENS.get()}"}
+    downloaded_count = 0
+    page_token = None
+    with instrument.external("gcs_download", f"gs://{bucket}/{prefix}/"):
+        while True:
+            list_parameters = {"prefix": prefix + "/", "fields": "items(name),nextPageToken"}
+            if page_token:
+                list_parameters["pageToken"] = page_token
+            list_response = http_client.get(LIST_URL.format(bucket=bucket), params=list_parameters, headers=headers)
+            list_response.raise_for_status()
+            list_body = list_response.json()
+
+            for item in list_body.get("items", []):
+                relative_path = item["name"][len(prefix) + 1:]
+                if not relative_path or relative_path.endswith("/") or ".." in Path(relative_path).parts:
+                    continue
+                object_url = OBJECT_URL.format(bucket=bucket, name=quote(item["name"], safe=""))
+                object_response = http_client.get(object_url, headers=headers)
+                object_response.raise_for_status()
+                destination = runs_directory / run_directory_name / relative_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(object_response.content)
+                downloaded_count += 1
+
+            page_token = list_body.get("nextPageToken")
+            if not page_token:
+                break
+    if not downloaded_count:
+        raise FileNotFoundError(f"nothing under gs://{bucket}/{prefix}/")
+    return downloaded_count
+
+
+def fetch_earlier_runs(bucket: str, fetch_prefixes: list[str], runs_directory: Path) -> str | None:
+    """Download every --fetch run dir. Returns an error message for the first failure, else None."""
+    for prefix in fetch_prefixes:
+        try:
+            with httpx.Client(timeout=300) as http_client:
+                file_count = fetch_dir(http_client, bucket, prefix, runs_directory)
+            print(f"[job_entry] fetched {file_count} files from gs://{bucket}/{prefix}/", flush=True)
+        except Exception as fetch_error:  # noqa: BLE001
+            logger.error(f"fetch of {prefix} failed", exc_info=True)
+            return f"fetch of {prefix} failed: {fetch_error}"
+    return None
 
 
 def ensure_report(
@@ -144,6 +212,7 @@ def find_script(argv: list[str]) -> Path | None:
 
 
 def main(argv: list[str]) -> int:
+    fetch_prefixes, argv = split_fetch(list(argv))
     if not argv or argv[0] in ("-h", "--help"):
         print(__doc__)
         if argv:
@@ -175,7 +244,7 @@ def main(argv: list[str]) -> int:
     }
     with otel_live.span(f"job {script_path.name}", span_attributes, root=True) as job_span:
         exit_code, uploaded_run_dirs, log_path = _run_and_upload(
-            owner, bucket, script_path, script_arguments, run_id, execution
+            owner, bucket, script_path, script_arguments, run_id, execution, fetch_prefixes
         )
         if exit_code:
             otel_live.mark_error(job_span, f"exit {exit_code}")
@@ -258,15 +327,25 @@ def _run_and_upload(
     script_arguments: list[str],
     run_id: str,
     execution: str,
+    fetch_prefixes: list[str] | None = None,
 ) -> tuple[int, list[str], str | None]:
-    """Run the script, write failure reports, upload changed run dirs and the log.
+    """Fetch earlier run dirs, run the script, write failure reports, upload changed run dirs and the log.
 
     Returns (exit code, uploaded run dir URLs, log URL). A clean script whose upload failed
-    still exits 1.
+    still exits 1. A failed --fetch skips the script and exits 2.
     """
     runs_directory = ROOT / "runs"
+    fetch_error = fetch_earlier_runs(bucket, fetch_prefixes or [], runs_directory)
+    # Taken after the fetch, so a fetched run dir is uploaded again only if the script changes it.
     mtimes_before = run_dirs(runs_directory)
-    exit_code, output_buffer = run_script_process(script_path, script_arguments, owner, execution)
+    if fetch_error:
+        print(f"[job_entry] {fetch_error}", flush=True)
+        output_buffer = bytearray((fetch_error + "\n").encode())
+        exit_code = 2
+        print(f"[job_entry] exit {exit_code}", flush=True)
+        logger.log(40, f"script exit {exit_code}", exit_code=exit_code, script=script_path.name)
+    else:
+        exit_code, output_buffer = run_script_process(script_path, script_arguments, owner, execution)
 
     changed_names = changed_dirs(mtimes_before, run_dirs(runs_directory))
     if exit_code:

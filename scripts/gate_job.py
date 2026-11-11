@@ -3,7 +3,8 @@
 Without --launch this prints the plan and the cost estimate only: nothing is uploaded,
 nothing runs, nothing is billed. With --launch it
 
-1. packs the committed code (git archive HEAD: src, scripts, configs, patches, pyproject.toml)
+1. packs the committed code (git archive HEAD: src, scripts, configs, patches, pyproject.toml;
+   inside the Cloud Run job, which has no .git, the same paths from the image)
    and uploads it to <runs-repo>/gate/round-N/code/ (the repo is private, so the job
    cannot clone it),
 2. submits gate_eval.py with an explicit timeout (HF Jobs stop after 30 minutes by default).
@@ -19,8 +20,10 @@ the HF router (both from the team's HF credits).
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -75,6 +78,41 @@ def relative_to_root(path: Path) -> str:
 
 def run_git(*git_arguments: str) -> str:
     return subprocess.check_output(["git", "-C", str(ROOT), *git_arguments], text=True).strip()
+
+
+def has_git() -> bool:
+    """False in the harness image (Cloud Run Jobs): it has no .git, only the built tree."""
+    return (ROOT / ".git").exists()
+
+
+def code_sha() -> str:
+    """Short sha of the code: git HEAD, or the image's SHIPWRIGHT_GIT_SHA."""
+    if has_git():
+        return run_git("rev-parse", "--short", "HEAD")
+    image_sha = os.environ.get("SHIPWRIGHT_GIT_SHA", "").strip()
+    if image_sha:
+        return image_sha[:7]
+    return "nogit"
+
+
+def pack_bundle(archive_path: Path) -> None:
+    """git archive HEAD of BUNDLE_PATHS; without .git, a tar of the same paths as built into the image."""
+    if has_git():
+        subprocess.check_call(
+            ["git", "-C", str(ROOT), "archive", "--format=tar.gz", "-o", str(archive_path), "HEAD",
+             "--", *BUNDLE_PATHS]
+        )
+        return
+
+    def skip_python_caches(tar_info: tarfile.TarInfo) -> tarfile.TarInfo | None:
+        if "__pycache__" in tar_info.name or tar_info.name.endswith(".pyc"):
+            return None
+        return tar_info
+
+    with tarfile.open(archive_path, "w:gz") as bundle:
+        for bundle_path in BUNDLE_PATHS:
+            if (ROOT / bundle_path).exists():
+                bundle.add(ROOT / bundle_path, arcname=bundle_path, filter=skip_python_caches)
 
 
 def gate_script_arguments(job_options: argparse.Namespace, code_bundle_path: str) -> list[str]:
@@ -173,7 +211,9 @@ def print_plan(
     )
     print(f"code:      git HEAD {commit_sha} -> {code_bundle_path}")
     print(f"namespace: {job_options.namespace or 'token owner'}")
-    uncommitted_changes = run_git("status", "--porcelain", "--", *BUNDLE_PATHS)
+    uncommitted_changes = ""
+    if has_git():
+        uncommitted_changes = run_git("status", "--porcelain", "--", *BUNDLE_PATHS)
     if uncommitted_changes:
         print("\nwarning: uncommitted changes in the bundle paths are NOT included (git archive HEAD)")
 
@@ -184,10 +224,7 @@ def upload_code_bundle(hf_api, job_options: argparse.Namespace, code_bundle_path
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         archive_path = Path(temporary_directory) / "code.tar.gz"
-        subprocess.check_call(
-            ["git", "-C", str(ROOT), "archive", "--format=tar.gz", "-o", str(archive_path), "HEAD",
-             "--", *BUNDLE_PATHS]
-        )
+        pack_bundle(archive_path)
         with instrument.external("hf_hub_upload", f"datasets/{job_options.runs_repo}/{code_bundle_path}"):
             hf_api.upload_file(
                 path_or_fileobj=str(archive_path),
@@ -217,7 +254,10 @@ def launch_job(
     job_secrets = {"HF_TOKEN": token}
     if user_model_on_vertex:
         try:
-            job_secrets["SHIPWRIGHT_VERTEX_TOKEN"] = vertex.gcloud_token()
+            if vertex.on_gcp():
+                job_secrets["SHIPWRIGHT_VERTEX_TOKEN"] = vertex.metadata_token()[0]
+            else:
+                job_secrets["SHIPWRIGHT_VERTEX_TOKEN"] = vertex.gcloud_token()
         except RuntimeError as token_error:
             print(f"Vertex token: {token_error}", file=sys.stderr)
             return 2
@@ -257,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
         "candidate": load_system(job_options.candidate, ROOT),
     }
     user_model_on_vertex = vertex.is_vertex_model(job_options.user_model)
-    commit_sha = run_git("rev-parse", "--short", "HEAD")
+    commit_sha = code_sha()
     code_bundle_path = f"gate/round-{job_options.round}/code/shipwright-{commit_sha}.tar.gz"
 
     print_plan(job_options, gate_config, systems, code_bundle_path, commit_sha, user_model_on_vertex)

@@ -50,6 +50,7 @@ jobs:
           .venv/bin/python scripts/agent_r_search.py --dry-run --user-model dry-user --task-ids 0 1 \
               --simulations 8 --output-dir runs/ci-agent-r-search
           .venv/bin/python scripts/agent_r_revise.py runs/ci-agent-r-search --dry-run --output-dir runs/ci-agent-r-revise
+          .venv/bin/python scripts/agent_r_check.py runs/ci-agent-r-revise --estimate-tokens
           .venv/bin/python scripts/build_sft.py --agent-r runs/ci-agent-r-revise --estimate-tokens \
               --output-dir runs/ci-agent-r-sft
 

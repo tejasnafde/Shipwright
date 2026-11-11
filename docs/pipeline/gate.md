@@ -93,7 +93,8 @@ simulator goes to the HF router, or to Vertex AI for a `vertex/` id. Served name
 The repo is private, so `gate_job.py --launch` uploads `git archive HEAD` (src, scripts,
 configs, patches, pyproject.toml) to `<runs-repo>/gate/round-N/code/`. The job unpacks it,
 runs `scripts/setup_tau2.sh`, and re-runs `gate_eval.py` in that venv. Commit first:
-uncommitted changes are not in the bundle.
+uncommitted changes are not in the bundle. Launched from the Cloud Run job (where the HF token is),
+the image has no `.git`, so the bundle is the same paths as built into the image, named after its `SHIPWRIGHT_GIT_SHA`.
 
 ## Commands
 
