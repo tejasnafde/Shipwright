@@ -109,6 +109,8 @@ def collect(run_dirs: list[Path], source: str, args: argparse.Namespace, notes: 
     fallback = None
     for run_dir in run_dirs:
         traces, prompts = load_run(run_dir, args.allow_split)
+        cfg_path = run_dir / "run_config.json"
+        model = json.loads(cfg_path.read_text()).get("agent_model") if cfg_path.exists() else None
         for t in traces:
             prompt = prompt_for(t, prompts, None)
             if prompt is None:
@@ -116,7 +118,10 @@ def collect(run_dirs: list[Path], source: str, args: argparse.Namespace, notes: 
                     fallback = reconstruct_prompt()
                     notes.append("some runs had no prompts.json: agent prompt rebuilt from tau2")
                 prompt = fallback
-            records += sft_data.trace_records(t, prompt, source, args.long_mode)
+            recs = sft_data.trace_records(t, prompt, source, args.long_mode)
+            for r in recs:  # which model wrote the targets (teacher id, or Tiny Aya for replay)
+                r["model"] = model
+            records += recs
         notes.append(f"{run_dir.name}: {len(traces)} successful {source} runs")
     return records
 
