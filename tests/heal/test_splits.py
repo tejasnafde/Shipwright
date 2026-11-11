@@ -13,7 +13,7 @@ def test_repo_splits_are_disjoint_20_20_and_cover_the_tau2_test_split():
     cfg = splits.load()
     held, hidden = splits.heldout_ids(cfg), splits.hidden_ids(cfg)
     assert len(held) == len(hidden) == 20 and not set(held) & set(hidden)
-    assert cfg["status"] == "proposed" and cfg["train"]["task_split"] == "train"
+    assert cfg["status"] == "frozen" and cfg["train"]["task_split"] == "train"
     tau2 = pytest.importorskip("tau2.registry")
     load = tau2.registry.get_tasks_loader("retail")
     test_ids = {str(t.id) for t in load(task_split_name="test")}

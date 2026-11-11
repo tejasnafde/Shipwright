@@ -7,7 +7,7 @@ trained yet. Every dir gets a demo.json marker; control-room's render_demo_banne
 and shows an orange "STAGED EXAMPLE, not a measured result" banner wherever that dir's data
 is displayed, so a staged illustration is never mistaken for a real result.
 
-Two scenarios, matching mentor feedback on the demo (docs/notes.md, 2026-11-11):
+Two scenarios, matching mentor feedback on the demo:
 
 1. The "aha moment": task 42 hallucinates an order id and fails in round 1, the teacher-replay
    fix for that same task, and task 42 passing in a staged "round 2".

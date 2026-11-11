@@ -1,7 +1,8 @@
 # AGENTS.md
 
 Rules and facts for any coding agent (Claude Code, Codex, Cursor, ...) that works in this repo.
-Read this file first. Keep it correct (see "Keep this file correct" at the end).
+Read this file first. Keep it correct, and keep it the *only* such file (see "Keep this file
+correct" at the end) - never add a second notes/decisions/journal file alongside it.
 
 ## What we are building
 
@@ -12,8 +13,8 @@ and gate redeployment on measured accuracy."
 - Agent: a customer support tool-calling agent (tau2-bench retail / airline style).
 - Student model: Tiny Aya Global (`CohereLabs/tiny-aya-global`, 3.35B) with LoRA.
 - The loop: run, log, detect, classify, route (tool fix / weight fix / no fix), gate, promote or roll back.
-- Diagram: `docs/system-design.html`. Background and research: `docs/notes.md`. Cloud setup:
-  `docs/setup/gcp-setup.md`, `docs/setup/cloud-runs.md`. HF account/token setup: `docs/setup/hf-setup.md`.
+- Diagram: `docs/system-design.html`. Cloud setup: `docs/setup/gcp-setup.md`,
+  `docs/setup/cloud-runs.md`. HF account/token setup: `docs/setup/hf-setup.md`.
 
 ## Hard rules (break one and the submission can be disqualified)
 
@@ -26,6 +27,23 @@ and gate redeployment on measured accuracy."
 - **Deadline:** Nov 14, 2026, end of day AoE. Demo Day shortlist Nov 16, Demo Day Nov 22.
 - **License:** Tiny Aya is CC-BY-NC. Make no commercial claims in the write-up.
 
+## Submission and judging
+
+- One submission counts: the last one before the deadline. Organizers recommend picking one track.
+- Double-blind: more than one judge scores each team; normalized averages pick the Demo Day
+  teams. Rubric: write-up clarity /10, practical usefulness /10, code/notebook quality /10,
+  overall review /100. An internal team first checks validity (public artifacts, write-up,
+  checklist, no duplicates), then tags each submission to a track.
+- HF article checklist: (1) problem statement and approach, (2) hackathon repos used and for
+  what, (3) models used and their licenses, (4) datasets/benchmarks used and their licenses,
+  (5) model artifacts as a public HF collection, (6) data artifacts as a public HF collection,
+  (7) experiments run and findings, (8) with more credits, what you'd try next, (9) teammates
+  tagged (judges mask names for the double-blind round). A markdown write-up in the GitHub repo
+  is accepted if HF article access is a problem.
+- Organizer clarifications (Discord): not publishing harmful weights is fine; tagging teammates
+  in the article is fine. Docs: agenttune.lexsi.ai, audit.lexsi.ai, curatorkit.lexsi.ai/latest/.
+  Office hours run daily (server Events tab); off-list scope questions go in #report_issues.
+
 ## Build on AgentTune, do not rebuild it
 
 AgentTune already has the self-healing loop: `Project.heal()`, `FailureDetector`, `SelfHealLoop`,
@@ -36,6 +54,13 @@ Check for an existing AgentTune or AuditKIT function before you write a new one.
 What we add: the 3-way router, a tool-patch ledger with rollback, the AuditKIT gate (pass^k, BFCL),
 the tool-fix vs weight-fix comparison, and Agent-R revision data for the weight fix (below).
 
+Design inspiration drawn from outside Track 3 too: the tool-patch ledger + one-step rollback
+follows NousResearch/hermes-agent's `skill_ledger.py` pattern (JSONL audit, content-addressed
+before/after snapshots, never auto-delete). Closest Track 3 competitor found in a repo scan
+(2026-11-07, 18 repos): UEddy/Kataa (Tiny Aya + AgentTune, using AgentTune's own DPO self-heal
+path) - its gate rejected every repair attempt (99% escalation) because it is not a 3-way
+failure-routing loop; closing that gap is this project's main bet.
+
 2026-11-09: detect, classify, the retrain trigger and the gate call AgentTune classes
 (`src/shipwright/heal/agenttune_bridge.py`, table in `docs/pipeline/baseline.md`); our rules and AuditKIT thresholds
 add to them. agenttune is installed `--no-deps` (`scripts/setup_tau2.sh`): its torch pin fails on a Mac.
@@ -43,13 +68,24 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 
 ## Evaluation rules
 
-- Three task splits, ids in `configs/splits.yaml` (2026-11-11, why: `docs/notes.md`): **train pool** (the whole
-  tau2 retail `train` split, 74 tasks; the loop learns from it), **held-out** (20 of the 40 `test` tasks; the gate
-  scores on them), **hidden** (the other 20 `test` tasks; opened once, for the final report). Never train on
-  held-out or hidden tasks. `scripts/baseline.py` refuses hidden ids, and a `test` run without `--task-ids`,
-  unless `--open-hidden` is passed (`src/shipwright/heal/splits.py`). Gate floors are sized for 20 tasks x k=3.
+- Three task splits, ids in `configs/splits.yaml` (frozen 2026-11-11, Mitushi): **train pool** (the
+  whole tau2 retail `train` split, 74 tasks; the loop learns from it), **held-out** (20 of the 40
+  `test` tasks; the gate scores on them), **hidden** (the other 20 `test` tasks; opened once, for
+  the final report). Never train on held-out or hidden tasks. `scripts/baseline.py` refuses hidden
+  ids, and a `test` run without `--task-ids`, unless `--open-hidden` is passed
+  (`src/shipwright/heal/splits.py`). Why a held-out/hidden split at all: the code originally
+  trained on the whole train split and gated on the whole 40-task test split, with no hidden set -
+  the final numbers would otherwise come from the same tasks the gate used to pick rounds. The ids
+  are listed explicitly (not re-derived) so a tau2 update can't move them.
+- Gate floors are sized for 20 held-out tasks x k=3 (60 runs per system), not the full 40-task test
+  split: `min_valid_runs` 54 (90% of 60), `min_complete_tasks` 18, `target_label_min_drop` 0.05
+  (one of 3 runs/task), `non_target_max_increase` 0.05. `configs/gate.yaml` is frozen together with
+  the splits (`status: frozen`, 2026-11-11) - a stale branch with the pre-split numbers
+  (`min_valid_runs: 108`, sized for 40 tasks) would reject every gate for "too few valid runs"
+  against a split it was never actually scoring on; freezing both files together is what stops
+  that drift from coming back.
 - Frozen before round 1: failure label list, gate thresholds, k for pass^k, seeds, teacher and judge
-  model versions. To change one, write the change and the reason in `docs/notes.md` first.
+  model versions. To change a frozen value, add the change and the reason as a new line here.
 - The gate never approves by default. Too few test runs means reject.
 - Every round appends one row to `metrics.jsonl`.
 
@@ -117,7 +153,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - Deploys as its own, much smaller Hugging Face Space image: `infra/space/Dockerfile` (no GPU, no
   AgentTune/AuditKIT, no secrets) - see `infra/space/README.md`. Decided after reviewing a strong
   submission for a different problem statement: a live, interactive HF Space is clearly rewarded in
-  this judging round (`docs/notes.md`, "Demo format decision").
+  this judging round.
 - 2026-11-11: `scripts/demo_data.py` writes four clearly-labeled staged run dirs (a round-1
   failure, its teacher fix, a staged round-2 pass, a staged gate rejection) for the "Follow a
   Task" tab and a genuine gate-rejection walkthrough, since no real round-2 adapter has been
@@ -176,8 +212,8 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 ## Repo layout (keep the root clean)
 
 - Root: only `README.md`, `AGENTS.md`, `CLAUDE.md`, config files (`.gitignore`, `pyproject.toml`) and top-level dirs.
-- `docs/` (reorganized 2026-11-10, Ishank): `notes.md` (research log) and `system-design.html`
-  (diagram) at the root; everything else grouped by what it's for -
+- `docs/` (reorganized 2026-11-10, Ishank): `system-design.html` (diagram) at the root; everything
+  else grouped by what it's for -
   `docs/setup/` (`gcp-setup.md`, `hf-setup.md`, `cloud-runs.md` - accounts, tokens, infra setup),
   `docs/pipeline/` (`baseline.md`, `gate.md`, `training.md` - how to run each loop step),
   `docs/ops/` (`debugging.md`, `observability.md` - logs, traces, debugging a run).
@@ -245,7 +281,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - 2026-11-09: AuditKIT `reliability()` takes `independent=`, while `AgentEvalRunner` takes `reset_confirmed=` (we use the runner). Verdicts are `success` / `failure` / `unknown`, not pass/fail.
 - 2026-11-09: DeepSeek V4.1 Flash on Vertex is served only on the `global` endpoint (a `us-central1` call fails). Vertex has no explicit context cache (`cachedContents`) for MaaS open models; implicit prefix caching (Preview) covers `deepseek-v4.1-flash-maas` from 4096 prompt tokens, not gpt-oss-120b. Our fixed teacher prefix (policy + tool list) is about 2.6k tokens, so hits come from the growing conversation of one run.
 - 2026-11-09: Vertex gpt-oss-120b spends reply tokens on reasoning (`reasoning_content`) first. `vertex.py` raises `max_tokens` below 1024 to 1024; `reasoning_effort: low` is accepted.
-- 2026-11-09: A Vertex token lasts about 1 hour and an HF Job cannot run gcloud. `gate_job.py` passes a token minted at launch (`SHIPWRIGHT_VERTEX_TOKEN`), with no refresh: a gate job with a Vertex user model must finish within about 1 hour.
+- 2026-11-09: A Vertex token lasts about 1 hour and an HF Job cannot run gcloud. `gate_job.py` passes a token minted at launch (`SHIPWRIGHT_VERTEX_TOKEN`), with no refresh: a gate job with a Vertex user model must finish within about 1 hour. 20 tasks x k=3 x 2 systems (120 tau2 runs) at `max_concurrency: 8` is the scenario this was sized for; don't raise `heldout.num_tasks` back toward 40 without also moving the user model off Vertex (an HF router model instead), or the run risks losing its user simulator partway through.
 - 2026-11-11: In tests, `agenttune.agentic` cannot be imported without torch. `tests/heal/test_agent_r.py` loads
   `agenttune/agentic/events.py` by file path; register the module in `sys.modules` before `exec_module`, or its
   dataclasses fail (`'NoneType' object has no attribute '__dict__'`).
@@ -292,16 +328,26 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 
 ## Keep this file correct
 
-This file corrects itself through you. In the same change as your work:
+This file corrects itself through you. **`AGENTS.md` is the only file that carries facts, traps
+and decisions forward between sessions or agents - never create a second one** (a `notes.md`,
+a `DECISIONS.md`, a `journal.md`, anything with a similar job) to hold this kind of thing instead.
+One repo history had exactly that problem (a `docs/notes.md` research log duplicating and drifting
+from this file) and was folded back in and deleted on 2026-11-11 for that reason - don't recreate
+it under a different name. If a fact belongs somewhere more specific (`docs/setup/gcp-setup.md` and
+the like, for setup/ops detail a coding agent doesn't need on every read), it still only lives in
+one place: put it there, or here, and point to it from the other - never both, and never a third
+file that duplicates either.
+
+In the same change as your work:
 
 1. **A fact here is wrong or out of date** (a command fails, an API changed, a rule moved):
    fix the line and add the date.
 2. **A trap cost you more than about 10 minutes** and is not listed: add it to "Known traps"
    with the date and the fix.
 3. **You made a decision that later agents must follow** (a frozen value, a file format, a split):
-   add it to the section it belongs to.
-4. **You find a duplicate or a contradiction** between this file, `docs/notes.md` and `docs/setup/gcp-setup.md`:
-   keep the fact in one place and point to it from the others.
+   add it to the section it belongs to, in this file.
+4. **You find a duplicate or a contradiction** between this file and another doc: resolve it by
+   the single-source rule above, in the same change.
 
 Keep entries short: one fact per line. Delete a trap when the cause is gone.
 Do not add task logs or status updates here: they go in pull requests.

@@ -6,7 +6,6 @@ A tool-calling support agent on Tiny Aya Global that finds its own failed runs, 
 failed, fixes the tool or retrains the model, and redeploys only when AuditKIT shows it is better.
 
 - Design: [docs/system-design.html](docs/system-design.html)
-- Notes and research: [docs/notes.md](docs/notes.md)
 - Setup: [docs/setup/gcp-setup.md](docs/setup/gcp-setup.md), [docs/setup/hf-setup.md](docs/setup/hf-setup.md), [docs/setup/cloud-runs.md](docs/setup/cloud-runs.md)
 - Running the loop: [docs/pipeline/baseline.md](docs/pipeline/baseline.md), [docs/pipeline/training.md](docs/pipeline/training.md), [docs/pipeline/gate.md](docs/pipeline/gate.md)
 - Debugging a run: [docs/ops/debugging.md](docs/ops/debugging.md), [docs/ops/observability.md](docs/ops/observability.md)
