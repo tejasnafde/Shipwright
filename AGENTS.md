@@ -162,6 +162,10 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   it reads the gate dir too). A scenario is listed only when all of its dirs exist. Traces render as
   chat bubbles with a raw-JSON expander under each, so no caller may put a trace inside an
   expander (Streamlit cannot nest them).
+- 2026-11-12 (Ishank): Fix & Train shows tool patches per baseline run, not per ledger `round`:
+  "active" = the ids in that run's `run_config.json` `active_tool_patches`, "proposed from" =
+  ledger rows whose `source_failures` are that run's simulation ids. The 35 round-1 patches were
+  proposed on Nov 8 from a run no longer on disk, and `r1-baseline-train` ran with all 35 active.
 
 ## Infrastructure
 

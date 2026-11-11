@@ -20,6 +20,7 @@ Run: streamlit run src/shipwright/control_room/app.py
 
 from __future__ import annotations
 
+import datetime
 import json
 import re
 from collections import Counter
@@ -31,6 +32,7 @@ import streamlit as st
 from shipwright.control_room import gcs_runs
 
 RUNS_DIR = Path(__file__).resolve().parents[3] / "runs"
+LEDGER_PATH = RUNS_DIR.parent / "patches" / "ledger.jsonl"
 
 
 
@@ -219,7 +221,7 @@ def _pick_dir(label: str, role: str, key: str, container=None, default_to_real_r
 class RoundData:
     """Everything read from disk for one round, loaded once per render."""
 
-    def __init__(self, baseline_dir: Path, sft_dir: Path | None, gate_dir: Path | None, round_num: int):
+    def __init__(self, baseline_dir: Path, sft_dir: Path | None, gate_dir: Path | None, round_num: int | None):
         self.baseline_dir = baseline_dir
         self.sft_dir = sft_dir
         self.gate_dir = gate_dir
@@ -231,8 +233,15 @@ class RoundData:
         self.round_status = _read_json(baseline_dir / "round_status.json")
         self.run_summary = _read_json(baseline_dir / "summary.json")
 
-        ledger_all = _read_jsonl(Path("patches") / "ledger.jsonl")
-        self.ledger = [e for e in ledger_all if e.get("round") == round_num]
+        # Tool patches, split by how they relate to this run: the ones it ran with (its
+        # run_config.json names them) and the ones proposed from its own failures.
+        ledger = _read_jsonl(LEDGER_PATH)
+        run_config = _read_json(baseline_dir / "run_config.json") or {}
+        active_patch_ids = set(run_config.get("active_tool_patches") or [])
+        simulation_ids = {t.get("simulation_id") for t in self.traces if t.get("simulation_id")}
+        self.active_patches = [row for row in ledger if row.get("id") in active_patch_ids]
+        self.proposed_patches = [row for row in ledger
+                                 if simulation_ids.intersection(row.get("source_failures") or [])]
 
         self.sft_kept = _read_jsonl(sft_dir / "kept.jsonl") if sft_dir else []
         self.teacher_summary = _read_json(sft_dir / "teacher_summary.json") if sft_dir else None
@@ -310,7 +319,7 @@ def _stage_status(data: RoundData) -> list[dict]:
     else:
         out.append({"state": "pending", "caption": "-"})
 
-    n_patches = len(data.ledger)
+    n_patches = len(data.proposed_patches)
     n_teacher = len(data.sft_kept)
     if n_patches or n_teacher:
         out.append({"state": "info", "caption": f"{n_patches} patches, {n_teacher} corrections"})
@@ -403,7 +412,7 @@ def render_header(data: RoundData) -> None:
 
     top = st.columns([2, 1, 1, 1, 1])
     with top[0]:
-        st.markdown(f"### Round {data.round_num}")
+        st.markdown(f"### Round {data.round_num}" if data.round_num is not None else "### Selected run")
         st.markdown(f'<span class="cr-badge {outcome_state}">{outcome_text}</span>', unsafe_allow_html=True)
     with top[1]:
         st.metric("Trials run", data.num_trials)
@@ -656,6 +665,16 @@ def tab_classify_route(data: RoundData) -> None:
     )
 
 
+def _proposed_dates(patches: list[dict]) -> str:
+    """'Nov 08' or 'Nov 08 to Nov 10': when these patches entered the ledger as proposed."""
+    dates = sorted({entry["at"][:10] for row in patches for entry in row.get("history") or []
+                    if entry.get("status") == "proposed" and entry.get("at")})
+    if not dates:
+        return "(date unknown)"
+    labels = [datetime.date.fromisoformat(date).strftime("%b %d") for date in (dates[0], dates[-1])]
+    return labels[0] if labels[0] == labels[1] else f"{labels[0]} to {labels[1]}"
+
+
 def tab_fix_train(data: RoundData) -> None:
     render_demo_banner(data.sft_dir)
     tool_column, weight_column = st.columns(2)
@@ -667,16 +686,21 @@ def tab_fix_train(data: RoundData) -> None:
             "- **Approved by:** a human, because a tool edit changes every run from now on.\n"
             "- **Undo:** one-step rollback from `patches/ledger.jsonl`."
         )
-        if data.ledger:
-            source_counts = Counter(entry.get("source") for entry in data.ledger)
-            status_counts = Counter(entry.get("status") for entry in data.ledger)
-            tiles = st.columns(3)
-            tiles[0].metric("Patches this round", len(data.ledger))
-            tiles[1].metric("By regex rule", source_counts.get("rules", 0))
-            tiles[2].metric("By LLM fallback", source_counts.get("llm", 0))
-            st.caption("Status: " + ", ".join(f"{status} {count}" for status, count in status_counts.most_common()))
-        else:
-            st.caption(f"No tool patches recorded for round {data.round_num}.")
+        active_tiles = st.columns(2)
+        active_tiles[0].metric("Active during this run", len(data.active_patches),
+                               help="Applied patches this baseline ran with (its run_config.json).")
+        active_tiles[1].metric("Proposed from this run", len(data.proposed_patches),
+                               help="Ledger rows whose source failures are runs in this baseline.")
+        if data.active_patches:
+            st.caption(f"The {len(data.active_patches)} active patches were proposed "
+                       f"{_proposed_dates(data.active_patches)}, before this run: they shaped it, "
+                       "they were not made from it.")
+        if data.proposed_patches:
+            source_counts = Counter(row.get("source") for row in data.proposed_patches)
+            status_counts = Counter(row.get("status") for row in data.proposed_patches)
+            st.caption(f"Proposed from this run: {source_counts.get('rules', 0)} by regex rule, "
+                       f"{source_counts.get('llm', 0)} by LLM fallback; "
+                       + ", ".join(f"{status} {count}" for status, count in status_counts.most_common()) + ".")
     with weight_column:
         st.markdown("### Weight fix: teacher replay")
         st.info(
@@ -687,11 +711,16 @@ def tab_fix_train(data: RoundData) -> None:
         if data.sft_dir is not None:
             st.metric("Teacher corrections kept", len(data.sft_kept))
 
-    if data.ledger:
-        st.dataframe(
-            [{k: e.get(k) for k in ("id", "source", "tool", "field", "before", "after", "status")} for e in data.ledger],
-            width="stretch", hide_index=True,
-        )
+    for title, patches in (("Patches proposed from this run's failures", data.proposed_patches),
+                           ("Patches active during this run", data.active_patches)):
+        if patches:
+            st.markdown(f"**{title}**")
+            st.dataframe(
+                [{"id": row.get("id"), "proposed": _proposed_dates([row]), "source": row.get("source"),
+                  "tool": row.get("tool"), "field": row.get("field"), "before": row.get("before"),
+                  "after": row.get("after"), "status": row.get("status")} for row in patches],
+                width="stretch", hide_index=True,
+            )
 
     st.divider()
     st.markdown("### Student vs teacher, task by task")
@@ -964,7 +993,7 @@ class RoundSelection:
     sft_dir: Path | None
     gate_dir: Path | None
     after_dir: Path | None
-    round_num: int
+    round_num: int | None
     scenario: Scenario | None
     scenario_name: str
 
@@ -989,7 +1018,6 @@ def _apply_scenario() -> None:
     st.session_state["sft_choice"] = scenario.sft or "(none)"
     st.session_state["gate_choice"] = scenario.gate or "(none)"
     st.session_state["after_choice"] = scenario.after or "(none)"
-    st.session_state["round_num"] = scenario.round_num
     st.session_state.pop("task_id_choice", None)
 
 
@@ -1010,15 +1038,13 @@ def select_round() -> RoundSelection:
     st.sidebar.caption("The gate run is picked in Gate & Outcome, the after-training run in Follow a Task.")
     baseline_dir = _pick_dir("Baseline run (the agent run being judged)", "baseline", "baseline")
     sft_dir = _pick_dir("Teacher/SFT output dir", "sft", "sft")
-    if "round_num" not in st.session_state:
-        st.session_state["round_num"] = 1
-    round_num = st.sidebar.number_input("Round number (patches/ledger.jsonl)", min_value=0, step=1, key="round_num")
 
     if gcs_runs.gcloud_binary() is not None:
         render_pull_runs_button(st.sidebar.expander("Pull runs from GCS"))
     if "pull_message" in st.session_state:
         st.sidebar.success(st.session_state.pop("pull_message"))
-    return RoundSelection(baseline_dir, sft_dir, None, None, int(round_num), scenario, scenario_name)
+    round_num = scenario.round_num if scenario else None
+    return RoundSelection(baseline_dir, sft_dir, None, None, round_num, scenario, scenario_name)
 
 
 def pick_gate_dir() -> Path | None:
@@ -1094,10 +1120,13 @@ def main() -> None:
     with tabs[0]:
         selection.after_dir = pick_after_dir(selection.baseline_dir)
 
+    scenario_matches = selection.scenario is not None and _scenario_still_matches(selection)
+    if not scenario_matches:
+        selection.round_num = None  # a hand-picked mix of runs is not a numbered round
     data = RoundData(selection.baseline_dir, selection.sft_dir, selection.gate_dir, selection.round_num)
     task_id = select_task_id(data, selection)
 
-    if selection.scenario and _scenario_still_matches(selection):
+    if scenario_matches:
         scenario_slot.info(f"**{selection.scenario_name}.** {selection.scenario.summary}")
     with header_slot:
         render_header(data)
