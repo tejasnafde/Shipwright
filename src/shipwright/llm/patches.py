@@ -16,13 +16,16 @@ tokens of every call by role (agent, user, judge) for the cost estimate.
 from __future__ import annotations
 
 import json
+import random
 import threading
+import time
 from typing import Any, Callable
 
 from shipwright.observability import instrument
-from shipwright.llm import vertex
+from shipwright.llm import guards, vertex
+from shipwright.llm.context import fit_messages
 from shipwright.llm.costs import UsageMeter
-from shipwright.llm.prompted_tools import convert_response, is_prompted_model, prepare_request
+from shipwright.llm.prompted_tools import TRACE_FIELD, convert_response, is_prompted_model, prepare_request
 from shipwright.heal.traces import MALFORMED_KEY
 
 _lock = threading.Lock()
@@ -79,6 +82,21 @@ def strip_json_fences(response: Any) -> None:
 NL_JUDGE_JSON_RETRIES = 2
 
 
+# The user simulator sometimes replies with no text and no tool call; tau2 then raises
+# "UserMessage must have either content or tool_calls" and the run is an infra error (round 1).
+EMPTY_USER_REPLY_RETRIES = 2
+
+
+def is_empty_reply(response: Any) -> bool:
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return True
+    message = choices[0].message
+    has_text = bool((getattr(message, "content", None) or "").strip())
+    has_tool_call = bool(getattr(message, "tool_calls", None))
+    return not (has_text or has_tool_call)
+
+
 def is_json_reply(response: Any) -> bool:
     """True when every choice's content parses as JSON (what tau2's NL judge expects)."""
 
@@ -89,6 +107,96 @@ def is_json_reply(response: Any) -> bool:
         except ValueError:
             return False
     return bool(choices)
+
+
+# Waits before retrying a transient error (rate limit, timeout, server error) on a call that does
+# not go to Vertex (Vertex has its own retries in vertex.call_with_refresh). In round 1, Tiny Aya on
+# the HF router had no retry at all: one 429 or timeout turned the whole run into an infra error.
+TRANSIENT_ERROR_WAITS = (2.0, 5.0, 10.0, 20.0)
+TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+TRANSIENT_ERROR_NAMES = ("RateLimit", "Timeout", "ServiceUnavailable", "InternalServer", "APIConnection")
+
+
+def is_transient_error(error: BaseException) -> bool:
+    if getattr(error, "status_code", None) in TRANSIENT_STATUS_CODES:
+        return True
+    error_name = type(error).__name__
+    for transient_name in TRANSIENT_ERROR_NAMES:
+        if transient_name in error_name:
+            return True
+    return False
+
+
+def call_with_transient_retries(call: Callable[..., Any], call_kwargs: dict,
+                                sleep: Callable[[float], None] = time.sleep) -> Any:
+    """Run ``call(**call_kwargs)``; on a transient error wait and retry (TRANSIENT_ERROR_WAITS)."""
+    remaining_waits = list(TRANSIENT_ERROR_WAITS)
+    while True:
+        try:
+            return call(**call_kwargs)
+        except Exception as call_error:  # noqa: BLE001
+            if not (is_transient_error(call_error) and remaining_waits):
+                raise
+            sleep(remaining_waits.pop(0) * (1 + random.random() / 2))
+
+
+def proposed_tool_call(response: Any) -> guards.ToolCall | None:
+    """The first tool call in a (converted) agent reply, or None for a text reply."""
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return None
+    tool_calls = getattr(choices[0].message, "tool_calls", None) or []
+    if not tool_calls:
+        return None
+    function = tool_calls[0].function
+    return guards.tool_call_from_message({"function": {"name": function.name, "arguments": function.arguments}})
+
+
+def trace_fields(response: Any) -> dict:
+    """The shipwright fields convert_response put on the reply (raw text, parse status, context)."""
+    message = response.choices[0].message
+    provider_fields = getattr(message, "provider_specific_fields", None) or {}
+    return provider_fields.get(TRACE_FIELD) or {}
+
+
+def ask_again_until_policy_ok(conversation: list[dict], request_kwargs: dict, response: Any,
+                              ask_model: Callable[[dict], Any]) -> Any:
+    """Tool-call guards (shipwright.llm.guards): while the agent's tool call breaks a policy check,
+    show it the rejected reply and the reason, and ask again (at most MAX_GUARD_RETRIES times).
+
+    ``conversation`` is the tau2 history (what the guards check against); ``request_kwargs`` is the
+    prompted request that produced ``response``. Returns the reply tau2 should get. The rejected
+    replies are recorded in the reply's trace fields (``guard_rejections``), not in the history.
+    """
+    rejections = []
+    retry_messages = list(request_kwargs["messages"])
+    for _ in range(guards.MAX_GUARD_RETRIES):
+        call = proposed_tool_call(response)
+        if call is None:
+            break
+        violation = guards.first_violation(conversation, call)
+        if violation is None:
+            break
+        rejected_text = trace_fields(response).get("raw_text") or ""
+        rejections.append({"rule": violation.rule, "raw_text": rejected_text})
+        retry_messages.append({"role": "assistant", "content": rejected_text})
+        retry_messages.append({"role": "user", "content": guards.feedback_turn(violation)})
+        fitted_messages, _ = fit_messages(retry_messages)
+        retry_kwargs = dict(request_kwargs)
+        retry_kwargs["messages"] = fitted_messages
+        response = ask_model(retry_kwargs)
+
+    if rejections:
+        final_call = proposed_tool_call(response)
+        final_violation = guards.first_violation(conversation, final_call) if final_call else None
+        fields = dict(trace_fields(response))
+        fields["guard_rejections"] = rejections
+        fields["guard_allowed_after_retries"] = final_violation.rule if final_violation else None
+        message = response.choices[0].message
+        provider_fields = dict(getattr(message, "provider_specific_fields", None) or {})
+        provider_fields[TRACE_FIELD] = fields
+        message.provider_specific_fields = provider_fields
+    return response
 
 
 def call_role(original: dict, kwargs: dict, agent_model: str | None, user_model: str | None) -> str:
@@ -132,6 +240,7 @@ def install(
             role = call_role(original_kwargs, kwargs, agent_model, user_model)
 
             is_prompted_call = is_prompted_model(model) and bool(kwargs.get("tools"))
+            conversation = kwargs.get("messages") or []  # tau2's history, before prompting
             prompt_context = None
             if is_prompted_call:
                 kwargs, prompt_context = prepare_request(kwargs)
@@ -146,28 +255,50 @@ def install(
                 return max(0, attempt_counter[0] - 1)
 
             bad_request_waits = vertex.BAD_REQUEST_WAITS if role in ("user", "judge") else ()
-            if fake_completion is None and vertex.is_vertex_model(model):
-                def make_call() -> Any:
-                    return vertex.call_with_refresh(counted_completion, kwargs, bad_request_waits=bad_request_waits)
-            else:
-                def make_call() -> Any:
-                    return counted_completion(**kwargs)
+
+            def make_call_with(call_kwargs: dict) -> Any:
+                if fake_completion is not None:
+                    return counted_completion(**call_kwargs)
+                if vertex.is_vertex_model(model):
+                    return vertex.call_with_refresh(counted_completion, call_kwargs,
+                                                    bad_request_waits=bad_request_waits)
+                return call_with_transient_retries(counted_completion, call_kwargs)
+
+            def ask_model(call_kwargs: dict) -> Any:
+                model_response = instrument.llm_call(role, model, call_kwargs, lambda: make_call_with(call_kwargs),
+                                                     retries=retry_count)
+                if meter is not None:
+                    meter.add(role, model, getattr(model_response, "usage", None))
+                return model_response
 
             is_nl_judge_call = is_nl_judge_request(kwargs)
-            judge_attempts = 1
+            is_user_simulator_call = role == "user"
+            attempts = 1
             if is_nl_judge_call:
-                judge_attempts += NL_JUDGE_JSON_RETRIES
-            for _ in range(judge_attempts):
-                response = instrument.llm_call(role, model, kwargs, make_call, retries=retry_count)
-                if meter is not None:
-                    meter.add(role, model, getattr(response, "usage", None))
-                if not is_nl_judge_call:
-                    break
-                strip_json_fences(response)
-                if is_json_reply(response):
+                attempts += NL_JUDGE_JSON_RETRIES
+            elif is_user_simulator_call:
+                attempts += EMPTY_USER_REPLY_RETRIES
+            for _ in range(attempts):
+                response = ask_model(kwargs)
+                if is_nl_judge_call:
+                    strip_json_fences(response)
+                    if is_json_reply(response):
+                        break
+                elif is_user_simulator_call:
+                    if not is_empty_reply(response):
+                        break
+                else:
                     break
             if is_prompted_call:
                 convert_response(response, prompt_context)
+                if guards.is_enabled() and role == "agent":
+
+                    def ask_prompted_model(call_kwargs: dict) -> Any:
+                        retried_response = ask_model(call_kwargs)
+                        convert_response(retried_response, prompt_context)
+                        return retried_response
+
+                    response = ask_again_until_policy_ok(conversation, kwargs, response, ask_prompted_model)
             sanitize_tool_calls(response)
             return response
 

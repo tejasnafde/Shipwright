@@ -88,6 +88,10 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   model versions. To change a frozen value, add the change and the reason as a new line here.
 - The gate never approves by default. Too few test runs means reject.
 - Every round appends one row to `metrics.jsonl`.
+- 2026-11-12 (Mitushi), frozen-value change: `classify.py` now also finds `premature_transfer` by rule (a transfer
+  before any attempt to authenticate). The label list is unchanged: `premature_transfer` was already a judge label.
+  Reason: it was the most common round 1 failure (37 of 59 valid runs transferred, 18 as the very first tool call)
+  and no rule counted it, so no candidate could target it.
 
 ## Baseline harness
 
@@ -99,6 +103,16 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - 2026-11-08: Tiny Aya has no native tool calling (template and HF router drop `tools`). We use prompted JSON tool calls (`src/shipwright/llm/prompted_tools.py`, format in `docs/pipeline/baseline.md`). Training data must use the same format.
 - Failure labels, rule labels and the router are defined in `src/shipwright/heal/classify.py` (how to run: `docs/pipeline/baseline.md`).
 - Tool patches: `patches/ledger.jsonl` is committed (small config, not run output). Change a patch status only with `scripts/tool_fix.py`.
+- 2026-11-12 (Mitushi): tool guards, the "add validation" half of the tool fix (`src/shipwright/llm/guards.py`,
+  `baseline.py --tool-guards`, system key `tool_guards: true`, candidate `configs/systems/r1-guards.yaml`). Before a
+  student tool call runs, policy checks: authenticate first, no made-up ids, no transfer before trying to
+  authenticate, an explicit yes before a change, no repeat of a failed call, order status fits the tool. On a
+  violation the agent is asked again with the reason (at most 2 times, then the call runs as written). Rejected
+  replies go to the trace (`guard_rejections`), never into the history, so training data stays clean. Off by
+  default and never on for teacher runs. How it was checked: `docs/pipeline/baseline.md`, "Tool guards".
+- 2026-11-12 (Mitushi): the prompted-tools instruction has a 5-step "How to handle a request" checklist
+  (authenticate, look ids up, confirm before a change, read errors, transfer last). Like the few-shot change
+  below, runs made before it are not comparable with new ones.
 - CI (`.github/workflows/ci.yml`, every push and PR): `setup_tau2.sh`, pytest, the offline dry run,
   rule-only classify, and the span round trip. No secrets, no model API calls. Keep it offline.
 - `scripts/baseline.py` defaults to the tau2 `train` split so held-out tasks stay unused until the splits are frozen.
@@ -269,6 +283,10 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - 2026-11-08: tau2 runs `json.loads` on tool-call arguments, so one malformed call crashes the run. `src/shipwright/llm/patches.py` wraps bad arguments instead.
 - 2026-11-08: Tiny Aya context is 8192 tokens; the cohere provider rejects longer requests. `src/shipwright/llm/context.py` trims the prompt and sets `max_tokens` 700.
 - 2026-11-08: tau2 calls its own default models (NL judge `gpt-5.4-mini-2026-03-17` and others), which do not exist on the HF router. `scripts/baseline.py` reroutes them to the user model.
+- 2026-11-12: Tiny Aya on the HF router had no retry: a 429, timeout or 5xx ended the run as an infra error.
+  `patches.call_with_transient_retries` now waits and retries those (2, 5, 10, 20 s) on every non-Vertex call.
+  An empty user-simulator reply (tau2: "UserMessage must have either content or tool_calls") is asked again twice.
+  `context.TOKENIZER_MARGIN` is 250 (was 100): a request was rejected 18 tokens over 8192.
 - 2026-11-08: Tiny Aya copies example values from tool descriptions (`#W0000000`, `sara_doe_496`, `1008292230`) as real ids: 13 of 19 failures in the first 20-task run. The classifier labels this `tool_example_copied` and routes it to `tool_fix`.
 - 2026-11-08: AgentTune `EventLog` has no system event, and its built-in distill factory trains on every token (TRL `assistant_only_loss` depends on chat template generation markers, not verified for Tiny Aya). `scripts/train_lora.py` adds the system prompt back (`SystemPromptEventLog`) and masks labels itself.
 - 2026-11-08: tau2 appends a language clause to the agent policy at run time, so `env.get_policy()` alone is not the agent prompt. Runs now record the real prompt in `prompts.json`.

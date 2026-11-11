@@ -118,6 +118,8 @@ A ```json fence around the judge reply is removed, because tau2 parses it with `
 
 `summary.json` has `pass_rate` (all runs), `pass_rate_excluding_infra_errors`,
 `num_infra_errors` and `infra_error_messages` (first 150 chars, counted).
+Calls that do not go to Vertex retry 429s, timeouts and 5xx errors (`patches.call_with_transient_retries`);
+Vertex calls have their own retries (`vertex.call_with_refresh`).
 
 ## Malformed tool calls
 
@@ -260,6 +262,43 @@ loads `heal_loop.py` (which needs only AgentTune's contracts) directly.
   (tau2 is not edited). Each must match its `before` sha256, so a conflict fails at start.
   Fields changed by LLM patches are shown in full in the tool list. Active patch ids go to
   `run_config.json` and `summary.json`.
+
+## Tool guards (the "add validation" half of the tool fix, no GPU)
+
+```sh
+.venv/bin/python scripts/baseline.py --num-tasks 20 --tool-patches patches/ledger.jsonl --tool-guards
+.venv/bin/python scripts/check_guards.py runs/<teacher run> runs/<student run>   # offline, no credits
+```
+
+Before a Tiny Aya tool call reaches tau2, `src/shipwright/llm/guards.py` checks it against the
+retail policy. In order:
+
+| Rule | Rejects | Policy |
+|---|---|---|
+| `early_transfer` | a transfer before any authentication attempt | transfer "if and only if the request cannot be handled" |
+| `not_authenticated` | any lookup or change before a user id was found (`find_user_id_*`) | "authenticate ... even when the user already provides the user id" |
+| `repeated_failed_call` | the same call that already returned an error | |
+| `made_up_id` | an `*_id` / `*_ids` value that no customer message or tool result contains (`#` ignored) | "should not make up any information" |
+| `wrong_order_status` | a `*_pending_*` tool on a non-pending order, a `*_delivered_*` tool on a non-delivered one | |
+| `no_confirmation` | a change unless the customer's latest message says yes to an agent question | "obtain explicit user confirmation (yes)" |
+
+On a violation the agent gets its rejected reply and a user turn with the reason, and is asked
+again (`MAX_GUARD_RETRIES` = 2); after that the call runs as written, so a wrong guard can cost
+turns but never blocks a task. tau2 only sees the final call. Each agent turn in `traces.jsonl`
+has `guard_rejections` (rule and rejected text) and `guard_allowed_after_retries`;
+`summary.json` has `tool_guards`, `guard_rejections_by_rule` and
+`guard_allowed_after_retries_by_rule`.
+
+Checked offline on round 1 (2026-11-12, `scripts/check_guards.py`):
+
+- Teacher (DeepSeek V4.1 Flash), 82 passing runs, 512 tool calls: 3 runs get a rejection, all
+  task 22, a second address change without a new "yes" (the guard adds one confirmation turn;
+  the result is the same). One task 19 rejection is an exchange that tau2 then refused anyway.
+- Student (Tiny Aya, `r1-baseline-train`), 56 failed valid runs: 53 have at least one call a
+  guard rejects. By rule: not_authenticated 100, early_transfer 36, repeated_failed_call 33,
+  made_up_id 12, no_confirmation 2, wrong_order_status 1.
+
+Not measured yet: how many of those runs then pass. That needs a live run (credits).
 
 ## Weight fix (teacher data and LoRA training)
 
