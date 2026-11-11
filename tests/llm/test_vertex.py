@@ -105,6 +105,31 @@ def test_call_with_refresh_retries_once_on_401():
         vertex.call_with_refresh(boom, {"model": TEACHER, "messages": []}, tokens)
 
 
+def test_call_with_refresh_waits_and_retries_on_429():
+    tokens = vertex.TokenProvider(fetch=lambda: "tok")
+    waits, attempts = [], []
+
+    class RateLimitError(Exception):
+        status_code = 429
+
+    def call(**kw):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise RateLimitError()
+        return "ok"
+
+    assert vertex.call_with_refresh(call, {"model": TEACHER, "messages": []}, tokens, sleep=waits.append) == "ok"
+    assert len(waits) == 2 and waits[0] >= vertex.RATE_LIMIT_WAITS[0]
+
+    def always(**kw):
+        raise RateLimitError()
+
+    waits.clear()
+    with pytest.raises(RateLimitError):
+        vertex.call_with_refresh(always, {"model": TEACHER, "messages": []}, tokens, sleep=waits.append)
+    assert len(waits) == len(vertex.RATE_LIMIT_WAITS)
+
+
 def test_gcloud_token_uses_named_config_not_adc(monkeypatch):
     calls = []
 
@@ -293,3 +318,36 @@ def test_token_with_expiry_refreshes_before_it_expires():
     assert tokens.get() == "m2"
     now[0] = 300 + 45 * 60
     assert tokens.get() == "m3" and tokens.fetches == 3
+
+
+def test_call_with_refresh_retries_400_only_when_asked():
+    tokens = vertex.TokenProvider(fetch=lambda: "tok")
+    waits, attempts = [], []
+
+    class BadRequestError(Exception):
+        status_code = 400
+
+    def flaky(**kw):
+        attempts.append(1)
+        if len(attempts) < 2:
+            raise BadRequestError()
+        return "ok"
+
+    kwargs = {"model": vertex.USER_MODEL, "messages": []}
+    assert vertex.call_with_refresh(flaky, kwargs, tokens, sleep=waits.append,
+                                    bad_request_waits=vertex.BAD_REQUEST_WAITS) == "ok"
+    assert len(waits) == 1
+
+    def always(**kw):
+        raise BadRequestError()
+
+    waits.clear()
+    with pytest.raises(BadRequestError):
+        vertex.call_with_refresh(always, kwargs, tokens, sleep=waits.append,
+                                 bad_request_waits=vertex.BAD_REQUEST_WAITS)
+    assert len(waits) == len(vertex.BAD_REQUEST_WAITS)
+
+    waits.clear()
+    with pytest.raises(BadRequestError):  # the agent and teacher get no 400 retry
+        vertex.call_with_refresh(always, kwargs, tokens, sleep=waits.append)
+    assert waits == []

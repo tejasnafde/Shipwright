@@ -236,16 +236,47 @@ def is_auth_error(error: BaseException) -> bool:
     return getattr(error, "status_code", None) == 401 or "401" in type(error).__name__
 
 
-def call_with_refresh(call: Callable[..., Any], kwargs: dict, tokens: TokenProvider | None = None) -> Any:
-    """Run ``call(**route_kwargs(kwargs))``; on a 401, get a new token and retry once."""
+def is_rate_limit(error: BaseException) -> bool:
+    return getattr(error, "status_code", None) == 429 or "RateLimit" in type(error).__name__
+
+
+# Waits (seconds) before the retries of a 429. Vertex gpt-oss-120b MaaS answers 429 at 4 to 6
+# concurrent tau2 runs (2026-11-11: 15 of 74 baseline runs lost as infra errors with no retry).
+RATE_LIMIT_WAITS = (2.0, 5.0, 10.0, 20.0, 40.0)
+# Waits before the retries of a 400 from the user simulator or judge. Vertex gpt-oss-120b answers
+# some valid requests with a 400 that passes on a retry (2026-11-11: 9 bake-off runs lost).
+BAD_REQUEST_WAITS = (2.0, 5.0)
+
+
+def is_bad_request(error: BaseException) -> bool:
+    return getattr(error, "status_code", None) == 400 or "BadRequest" in type(error).__name__
+
+
+def call_with_refresh(call: Callable[..., Any], kwargs: dict, tokens: TokenProvider | None = None,
+                      sleep: Callable[[float], None] = time.sleep,
+                      bad_request_waits: tuple[float, ...] = ()) -> Any:
+    """Run ``call(**route_kwargs(kwargs))``; on a 401, get a new token and retry once; on a 429,
+    wait and retry (RATE_LIMIT_WAITS, with jitter); on a 400, wait and retry once per entry of
+    ``bad_request_waits`` (empty by default: only the user simulator and judge pass it)."""
+    import random
+
     tokens = tokens or provider()
-    try:
-        return call(**route_kwargs(kwargs, tokens))
-    except Exception as call_error:  # noqa: BLE001
-        if not is_auth_error(call_error):
-            raise
-        tokens.invalidate()
-        return call(**route_kwargs(kwargs, tokens))
+    auth_already_refreshed = False
+    rate_limit_waits = list(RATE_LIMIT_WAITS)
+    bad_request_retry_waits = list(bad_request_waits)
+    while True:
+        try:
+            return call(**route_kwargs(kwargs, tokens))
+        except Exception as call_error:  # noqa: BLE001
+            if is_auth_error(call_error) and not auth_already_refreshed:
+                tokens.invalidate()
+                auth_already_refreshed = True
+            elif is_rate_limit(call_error) and rate_limit_waits:
+                sleep(rate_limit_waits.pop(0) * (1 + random.random() / 2))
+            elif is_bad_request(call_error) and bad_request_retry_waits:
+                sleep(bad_request_retry_waits.pop(0) * (1 + random.random() / 2))
+            else:
+                raise
 
 
 def endpoint(model: str, hf_token: str | None, hf_base: str) -> tuple[str, str, Callable[[], dict]]:

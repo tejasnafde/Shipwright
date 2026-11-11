@@ -288,6 +288,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   dataclasses fail (`'NoneType' object has no attribute '__dict__'`).
 - 2026-11-08: The GitHub repo is private, so an HF Job cannot clone it. `scripts/gate_job.py --launch` uploads `git archive HEAD` to the runs dataset; commit before you launch.
 
+- 2026-11-11: Vertex gpt-oss-120b (user simulator) returns 429 at 4 to 6 concurrent tau2 runs; with no retry, 15 of 74 baseline runs became infra errors. `vertex.call_with_refresh` now waits and retries a 429 up to 5 times. Some 400s from the same model remain (cause not found yet); 2026-11-12: user and judge calls retry a 400 twice (`BAD_REQUEST_WAITS`), and the NL judge is asked again (twice) when its reply is not JSON (tau2 `json.loads` crashed the run, 3 infra errors in round 1).
 - 2026-11-09: Cloud Trace `batchWrite` returns 200 but stores nothing while `observability.googleapis.com` is off (read gives `_Trace bucket not found`). Tejas must enable that API once; until then use `live_spans.jsonl` and the logs (they work).
 - 2026-11-10 (Ishank): confirmed by actually installing `agenttune==1.1.3 --no-deps` and
   inspecting the real classes (not just source reading) - `FailureClassifier` has no `classify()`

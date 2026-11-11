@@ -156,6 +156,10 @@ def collect(
     rebuilt_prompt = None
     for run_directory in run_directories:
         traces, prompts_by_sha = load_run(run_directory, build_options.allow_split)
+        run_config_path = run_directory / "run_config.json"
+        writer_model = None
+        if run_config_path.exists():
+            writer_model = json.loads(run_config_path.read_text()).get("agent_model")
         for trace in traces:
             prompt = prompt_for(trace, prompts_by_sha, None)
             if prompt is None:
@@ -163,7 +167,10 @@ def collect(
                     rebuilt_prompt = reconstruct_prompt()
                     notes.append("some runs had no prompts.json: agent prompt rebuilt from tau2")
                 prompt = rebuilt_prompt
-            records += sft_data.trace_records(trace, prompt, source, build_options.long_mode)
+            trace_records = sft_data.trace_records(trace, prompt, source, build_options.long_mode)
+            for record in trace_records:  # which model wrote the targets (teacher id, or Tiny Aya for replay)
+                record["model"] = writer_model
+            records += trace_records
         notes.append(f"{run_directory.name}: {len(traces)} successful {source} runs")
     return records
 

@@ -74,6 +74,23 @@ def strip_json_fences(response: Any) -> None:
             choice.message.content = text.strip()
 
 
+# tau2's NL-assertion judge runs json.loads on the reply; gpt-oss sometimes answers with empty
+# or non-JSON text, and the whole run became an infra error (2026-11-11). Ask again this often.
+NL_JUDGE_JSON_RETRIES = 2
+
+
+def is_json_reply(response: Any) -> bool:
+    """True when every choice's content parses as JSON (what tau2's NL judge expects)."""
+
+    choices = getattr(response, "choices", None) or []
+    for choice in choices:
+        try:
+            json.loads(choice.message.content or "")
+        except ValueError:
+            return False
+    return bool(choices)
+
+
 def call_role(original: dict, kwargs: dict, agent_model: str | None, user_model: str | None) -> str:
     """Which role a call belongs to: judge (NL judge or a rerouted tau2 default), agent or user."""
     if is_nl_judge_request(kwargs) or original.get("model") != kwargs.get("model"):
@@ -128,18 +145,27 @@ def install(
             def retry_count() -> int:
                 return max(0, attempt_counter[0] - 1)
 
+            bad_request_waits = vertex.BAD_REQUEST_WAITS if role in ("user", "judge") else ()
             if fake_completion is None and vertex.is_vertex_model(model):
                 def make_call() -> Any:
-                    return vertex.call_with_refresh(counted_completion, kwargs)
+                    return vertex.call_with_refresh(counted_completion, kwargs, bad_request_waits=bad_request_waits)
             else:
                 def make_call() -> Any:
                     return counted_completion(**kwargs)
 
-            response = instrument.llm_call(role, model, kwargs, make_call, retries=retry_count)
-            if meter is not None:
-                meter.add(role, model, getattr(response, "usage", None))
-            if is_nl_judge_request(kwargs):
+            is_nl_judge_call = is_nl_judge_request(kwargs)
+            judge_attempts = 1
+            if is_nl_judge_call:
+                judge_attempts += NL_JUDGE_JSON_RETRIES
+            for _ in range(judge_attempts):
+                response = instrument.llm_call(role, model, kwargs, make_call, retries=retry_count)
+                if meter is not None:
+                    meter.add(role, model, getattr(response, "usage", None))
+                if not is_nl_judge_call:
+                    break
                 strip_json_fences(response)
+                if is_json_reply(response):
+                    break
             if is_prompted_call:
                 convert_response(response, prompt_context)
             sanitize_tool_calls(response)
