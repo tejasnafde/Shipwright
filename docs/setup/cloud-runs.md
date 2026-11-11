@@ -67,6 +67,7 @@ first (2026-11-11). A fetched dir is uploaded again only if the script changes i
 ```sh
 $GC run jobs execute shipwright-tejas --region=asia-south1 --wait \
   --args=--fetch,tejas/r1-baseline-train,classify.py,runs/r1-baseline-train
+# several dirs: use --fetch=<dir> (and --flag=value in the script args), since --args rejects a repeated value
 ```
 
 ## Read the results
