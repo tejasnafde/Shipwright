@@ -150,6 +150,13 @@
   /* branch row (tool / model / env) */
   .branches { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin:18px 0; }
   @media (max-width:760px) { .branches { grid-template-columns:1fr; } }
+  .gates-compare { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:14px 0 18px; }
+  @media (max-width:760px) { .gates-compare { grid-template-columns:1fr; } }
+  .gates-compare .branch h4 { margin:2px 0 8px; font-size:1rem; }
+  .gates-compare .approver { font-family:"JetBrains Mono",monospace; font-size:0.72rem; font-weight:700;
+    letter-spacing:0.03em; text-transform:uppercase; display:inline-block; margin-top:8px; }
+  .gates-compare .branch.tool .approver { color:var(--tool); }
+  .gates-compare .branch.model .approver { color:var(--model); }
   .branch { border-radius:10px; padding:14px 15px; border:1px solid; }
   .branch.tool { background:var(--tool-bg); border-color:var(--tool); }
   .branch.model { background:var(--model-bg); border-color:var(--model); }
@@ -364,9 +371,15 @@ flowchart TD
     <div class="tag">Tool fault</div>
     <p>The tool's own description misled the model: an ambiguous field, an example value the model
       copied as if it were real, a schema with no argument check.</p>
-    <div class="subcard"><b>Fix:</b> edit the tool spec. No training. Verified by re-running the same
-      failing tasks before the patch is marked resolved. Logged in a ledger with a before/after
-      snapshot and one-step rollback.</div>
+    <div class="subcard"><b>Fix:</b> edit the tool spec. No training. The edit itself is generated
+      automatically, not hand-written, and cheaply first: a deterministic regex rewrites concrete
+      example ids into placeholders in under a millisecond, no model call at all - and on its own,
+      that rule produced every one of round 1's 35 patches. An LLM only steps in as the fallback,
+      for whatever semantic ambiguity the regex can't catch, bound to a constrained prompt (no
+      renaming fields, no concrete ids, keep it short) and the actual failure text. Every proposal
+      is validated automatically before it's even added to the ledger. The one human step is
+      deciding <i>which</i> proposed patches to apply - not writing them. Logged with a
+      before/after snapshot and one-step rollback.</div>
   </div>
   <div class="branch model">
     <div class="tag">Model fault</div>
@@ -383,6 +396,36 @@ flowchart TD
       compensate for a flaky environment teaches it the wrong lesson.</div>
   </div>
 </div>
+
+<h3>Two gates, by design, not by accident</h3>
+<p>The tool-fault and model-fault branches both generate their fix automatically, with no human
+  writing a patch or a training example by hand. Where they deliberately differ is who signs off
+  before that fix goes live - and the reason is the same reason in both directions: match the
+  approval to how reversible the fix is before it ships.</p>
+<div class="gates-compare">
+  <div class="branch tool">
+    <h4>Tool patch gate</h4>
+    <p>Automated generation (regex, LLM fallback) &rarr; <b>human</b> approval.</p>
+    <p class="small">Editing a tool's description changes the environment every agent sees, for
+      every run, the moment it's applied - there's no sandbox to test it in first. A person
+      decides which proposed patches go live; nothing else stands between a proposal and
+      production.</p>
+    <span class="approver">approver: a person, every time</span>
+  </div>
+  <div class="branch model">
+    <h4>Model weight gate</h4>
+    <p>Automated generation (teacher replay, Agent-R) &rarr; <b>automated</b> approval.</p>
+    <p class="small">A new LoRA adapter doesn't touch anything until it's promoted: it can be
+      loaded side by side with the one actually serving, scored on the same held-out tasks, and
+      compared before it ever replaces anything. That side-by-side measurement <i>is</i> the eight
+      checks below - nobody has to eyeball a diff and guess.</p>
+    <span class="approver">approver: the eight-check gate</span>
+  </div>
+</div>
+<p class="small">Put another way: the tool gate is strict because it <i>can't</i> be sandboxed
+  cheaply - the moment you'd test it, you've already shipped it. The model gate can afford to be
+  fully automated because sandboxing it first is exactly what AgentTune's <code>DeploymentGate</code>
+  and AuditKIT's scores are for.</p>
 
 <div class="flow">
   <div class="flow-connector" style="margin-left:50%"></div>

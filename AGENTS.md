@@ -272,6 +272,15 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   savings in a real training run - the *correctness* of the windowed loss itself does not depend on
   anything Tiny-Aya-specific (`logits_to_keep` as a plain int is a long-standing, architecture-
   independent `transformers` API), only the *memory savings* are unverified.
+- 2026-11-11: `scripts/teacher_runs.py`'s `kept.jsonl` is a list of full trace dicts (reward == 1
+  runs, same shape as `traces.jsonl` rows - `agent_turns`, `reward`, `task_id`, no contrastive
+  pairing), not `{student/rejected, teacher/chosen}` pairs. No current producer script writes that
+  pair shape for a single task - not `teacher_runs.py`, not `build_sft.py`'s `sft.jsonl`
+  (`{"messages": [...], "source", "task_id"}`), not Agent-R's `revisions.jsonl`. Control-room's
+  "Fix & Train" and "Follow a Task" tabs read `kept.jsonl` expecting that pair shape and silently
+  fall back to "(not captured)" on every real run dir today. Not fixed here (out of scope for the
+  demo-UI pass this came up in) - whoever adds a real before/after capture for one task should
+  write that pairing into `kept.jsonl` (or a new file) in that shape, not invent a third one.
 
 ## Keep this file correct
 
