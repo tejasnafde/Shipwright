@@ -109,6 +109,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="allow hidden test tasks (configs/splits.yaml): only for the one final-report run",
     )
 
+    parser.add_argument(
+        "--max-cost-usd",
+        type=float,
+        default=None,
+        help="stop the run once its metered cost passes this (the remaining tasks end as infra errors)",
+    )
+
     # Tool patches (the tool fix).
     parser.add_argument(
         "--tool-patches",
@@ -245,7 +252,7 @@ def install_llm_patches(
 ):
     """Patch litellm for tau2. Returns (usage_meter, model_rerouter)."""
     from shipwright.llm import patches, prompted_tools
-    from shipwright.llm.costs import UsageMeter
+    from shipwright.llm.costs import SpendGuard, UsageMeter
 
     for model_name, reply_tokens in (prompted_models or {}).items():
         prompted_tools.force_prompted(model_name, reply_tokens)
@@ -261,6 +268,11 @@ def install_llm_patches(
         "agent_model": run_options.agent_model,
         "user_model": run_options.user_model,
     }
+    if run_options.max_cost_usd is not None:
+        patch_roles["spend_guard"] = SpendGuard(
+            run_options.max_cost_usd,
+            lambda: cost_estimate(usage_meter, run_options)["total"],
+        )
 
     if run_options.dry_run:
         from shipwright.llm.dry_run import make_fake_completion
@@ -442,6 +454,8 @@ def finish_run(
     summary = summarize(traces)
     summary["usage_by_role"] = run_setup.usage_meter.by_role()
     summary["cost_estimate_usd"] = cost_estimate(run_setup.usage_meter, run_options, role_names)
+    summary["max_cost_usd"] = run_options.max_cost_usd
+    summary["cost_cap_hit"] = any("max-cost-usd" in str(trace.get("error") or "") for trace in traces)
     summary["agent_model"] = run_options.agent_model
     summary["user_model"] = run_options.user_model
     summary["domain"] = run_options.domain

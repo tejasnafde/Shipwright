@@ -107,6 +107,7 @@ def install(
     meter: UsageMeter | None = None,
     agent_model: str | None = None,
     user_model: str | None = None,
+    spend_guard: Callable[[], None] | None = None,
 ) -> None:
     """Patch ``tau2.utils.llm_utils.completion``. Call once, before running tau2.
 
@@ -114,6 +115,7 @@ def install(
     ids are then not routed). ``model_map`` rewrites the request kwargs first (used to
     reroute tau2's built-in default models, e.g. the NL-assertion judge, to the user model).
     ``meter`` counts usage by role (``call_role``), keyed by the model id before routing.
+    ``spend_guard`` is called before every model call and raises when the run is over budget.
     """
     global _installed
     import tau2.utils.llm_utils as llm_utils
@@ -125,6 +127,8 @@ def install(
 
         # *args and **kwargs pass litellm's own call signature through untouched.
         def wrapped_completion(*args: Any, **kwargs: Any) -> Any:
+            if spend_guard is not None:
+                spend_guard()
             original_kwargs = kwargs
             if model_map is not None:
                 kwargs = model_map(kwargs)

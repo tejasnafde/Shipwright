@@ -90,6 +90,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     # How the run executes.
     parser.add_argument("--max-concurrency", type=int, default=4)
+    parser.add_argument("--max-cost-usd", type=float, default=None, help="stop the run once its metered cost passes this")
     parser.add_argument("--max-steps", type=int, default=100)
     parser.add_argument("--seed", type=int, default=300)
     parser.add_argument("--output-dir", type=Path, default=None)
@@ -138,6 +139,8 @@ def build_baseline_argv(teacher_options: argparse.Namespace, task_ids: list[str]
         baseline_argv += ["--num-tasks", "0"]
     if teacher_options.output_dir:
         baseline_argv += ["--output-dir", str(teacher_options.output_dir)]
+    if teacher_options.max_cost_usd is not None:
+        baseline_argv += ["--max-cost-usd", str(teacher_options.max_cost_usd)]
     if teacher_options.dry_run:
         baseline_argv.append("--dry-run")
     return baseline_argv

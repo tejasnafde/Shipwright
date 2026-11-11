@@ -77,8 +77,16 @@ def list_remote_runs(owner: str) -> list[str]:
     return run_names
 
 
-def pull_runs(owners: list[str], runs_directory: Path, only_run_names: list[str] | None = None) -> list[PullResult]:
-    """Copy every remote run dir of these owners that is not in runs_directory yet."""
+def pull_runs(
+    owners: list[str],
+    runs_directory: Path,
+    only_run_names: list[str] | None = None,
+    replace_existing: bool = False,
+) -> list[PullResult]:
+    """Copy every remote run dir of these owners that is not in runs_directory yet.
+
+    ``replace_existing`` deletes a local copy first: for a run dir that a later step changed in the bucket.
+    """
     binary = gcloud_binary()
     if binary is None:
         raise RuntimeError("gcloud not found: install it or set SHIPWRIGHT_GCLOUD")
@@ -88,6 +96,8 @@ def pull_runs(owners: list[str], runs_directory: Path, only_run_names: list[str]
         for run_name in list_remote_runs(owner):
             if only_run_names and run_name not in only_run_names:
                 continue
+            if replace_existing and (runs_directory / run_name).exists():
+                shutil.rmtree(runs_directory / run_name)
             if (runs_directory / run_name).exists():
                 results.append(PullResult(owner, run_name, "already local"))
                 continue

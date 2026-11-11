@@ -9,7 +9,7 @@ cached prompt tokens. Prices are estimates; check HF billing and GCP billing for
 from __future__ import annotations
 
 import threading
-from typing import Any
+from typing import Any, Callable
 
 # USD per 1M tokens: (input, cached input, output).
 VERTEX_PRICES = {  # Vertex AI MaaS list prices, checked 2026-11-09
@@ -144,6 +144,28 @@ class UsageMeter:
                     role_totals[counter_name] += row[counter_name]
                 role_totals["models"].append(model)
         return totals_by_role
+
+
+class BudgetExceeded(RuntimeError):
+    """Raised by SpendGuard before a model call once the run has spent its --max-cost-usd."""
+
+
+class SpendGuard:
+    """Stops a run from spending more than ``limit_usd``: call it before every model call.
+
+    ``spent_usd`` returns the cost metered so far. Calls already in flight when the limit is
+    crossed still finish, so the final cost can pass the limit by a few cents.
+    """
+
+    def __init__(self, limit_usd: float, spent_usd: Callable[[], float]) -> None:
+        self.limit_usd = limit_usd
+        self.spent_usd = spent_usd
+        self.hit = False
+
+    def __call__(self) -> None:
+        if self.hit or self.spent_usd() >= self.limit_usd:
+            self.hit = True
+            raise BudgetExceeded(f"run stopped: spent the --max-cost-usd limit of ${self.limit_usd:.2f}")
 
 
 def cost_usd(prompt: int, cached: int, completion: int, price: tuple[float, float, float]) -> float:
