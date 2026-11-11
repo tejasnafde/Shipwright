@@ -52,6 +52,8 @@ $GC run jobs execute shipwright-ishank --region=asia-south1 \
 ```
 
 A value that holds a comma needs another delimiter: `--args='^|^baseline.py|--task-ids|1,2'`.
+`--args` rejects a list with the same value twice (`"2" cannot be specified multiple times`, for
+example `--trials 2` with task id 2): write flags as `--trials=2` (2026-11-12).
 Without `--wait`, the command returns at once; follow the run in the console
 (Cloud Run, Jobs, `shipwright-<owner>`, Executions) or with
 `$GC run jobs executions list --job=shipwright-ishank --region=asia-south1`.
