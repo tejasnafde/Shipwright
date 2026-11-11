@@ -224,16 +224,35 @@ def is_auth_error(exc: BaseException) -> bool:
     return getattr(exc, "status_code", None) == 401 or "401" in type(exc).__name__
 
 
-def call_with_refresh(call: Callable[..., Any], kwargs: dict, tokens: TokenProvider | None = None) -> Any:
-    """Run ``call(**route_kwargs(kwargs))``; on a 401, get a new token and retry once."""
+def is_rate_limit(exc: BaseException) -> bool:
+    return getattr(exc, "status_code", None) == 429 or "RateLimit" in type(exc).__name__
+
+
+# Waits (seconds) before the retries of a 429. Vertex gpt-oss-120b MaaS answers 429 at 4 to 6
+# concurrent tau2 runs (2026-11-11: 15 of 74 baseline runs lost as infra errors with no retry).
+RATE_LIMIT_WAITS = (2.0, 5.0, 10.0, 20.0, 40.0)
+
+
+def call_with_refresh(call: Callable[..., Any], kwargs: dict, tokens: TokenProvider | None = None,
+                      sleep: Callable[[float], None] = time.sleep) -> Any:
+    """Run ``call(**route_kwargs(kwargs))``; on a 401, get a new token and retry once; on a 429,
+    wait and retry (RATE_LIMIT_WAITS, with jitter)."""
+    import random
+
     tokens = tokens or provider()
-    try:
-        return call(**route_kwargs(kwargs, tokens))
-    except Exception as e:  # noqa: BLE001
-        if not is_auth_error(e):
-            raise
-        tokens.invalidate()
-        return call(**route_kwargs(kwargs, tokens))
+    refreshed = False
+    waits = list(RATE_LIMIT_WAITS)
+    while True:
+        try:
+            return call(**route_kwargs(kwargs, tokens))
+        except Exception as e:  # noqa: BLE001
+            if is_auth_error(e) and not refreshed:
+                tokens.invalidate()
+                refreshed = True
+            elif is_rate_limit(e) and waits:
+                sleep(waits.pop(0) * (1 + random.random() / 2))
+            else:
+                raise
 
 
 def endpoint(model: str, hf_token: str | None, hf_base: str) -> tuple[str, str, Callable[[], dict]]:
