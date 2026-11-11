@@ -51,7 +51,6 @@ CSS = """
 .cr-badge.good{background:rgba(22,163,74,0.15);color:#16a34a;border:1px solid #16a34a;}
 .cr-badge.bad{background:rgba(220,38,38,0.15);color:#dc2626;border:1px solid #dc2626;}
 .cr-badge.pending{background:rgba(154,160,166,0.15);color:#9aa0a6;border:1px solid #9aa0a6;}
-.cr-sidecaption{color:#8a8f98;font-size:0.8rem;margin-top:-0.5rem;margin-bottom:0.75rem;}
 .cr-demo-banner{background:#fff4e0;border:1px solid #d97706;border-radius:8px;padding:10px 14px;
   margin-bottom:12px;font-size:0.85rem;color:#7a4a0a;}
 .cr-demo-banner b{color:#9a5b00;}
@@ -100,17 +99,19 @@ def render_demo_banner(run_dir: Path | None) -> None:
                     f'{note}</div>', unsafe_allow_html=True)
 
 
-def _pick_dir(label: str, prefix: str, key: str) -> Path | None:
+def _pick_dir(label: str, prefix: str, key: str, container=None) -> Path | None:
     """A dropdown of runs/<prefix>* dirs (most recent selected by default), plus a
-    manual path for anything elsewhere."""
+    manual path for anything elsewhere. Renders into ``container`` (default: the
+    sidebar itself) so callers can tuck a picker inside an expander."""
+    box = container if container is not None else st.sidebar
     candidates = _candidate_dirs(prefix)
     options = ["(none)", *candidates, "(enter a path)"]
     default_index = 1 if candidates else 0
-    choice = st.sidebar.selectbox(label, options, index=default_index, key=f"{key}_choice")
+    choice = box.selectbox(label, options, index=default_index, key=f"{key}_choice")
     if choice == "(none)":
         return None
     if choice == "(enter a path)":
-        manual = st.sidebar.text_input(f"{label} path", key=f"{key}_manual")
+        manual = box.text_input(f"{label} path", key=f"{key}_manual")
         return Path(manual) if manual else None
     return RUNS_DIR / choice
 
@@ -564,15 +565,12 @@ def main() -> None:
     st.title("Shipwright: the loop, round by round")
     st.markdown(CSS, unsafe_allow_html=True)
 
-    st.sidebar.header("Run dirs for this round")
-    st.sidebar.markdown(
-        '<p class="cr-sidecaption">Each step writes its own run dir - pick the three that make up one round.</p>',
-        unsafe_allow_html=True,
-    )
-    baseline_dir = _pick_dir("Baseline run dir", "baseline-", "baseline")
-    sft_dir = _pick_dir("Teacher/SFT output dir (optional)", "sft-", "sft")
-    gate_dir = _pick_dir("Gate-eval output dir (optional)", "gate-", "gate")
-    round_num = st.sidebar.number_input("Round number (for patches/ledger.jsonl)", min_value=0, step=1, value=1)
+    st.sidebar.header("Round")
+    baseline_dir = _pick_dir("Baseline run", "baseline-", "baseline")
+    advanced = st.sidebar.expander("+ teacher, gate, round #")
+    sft_dir = _pick_dir("Teacher/SFT output dir", "sft-", "sft", container=advanced)
+    gate_dir = _pick_dir("Gate-eval output dir", "gate-", "gate", container=advanced)
+    round_num = advanced.number_input("Round number (patches/ledger.jsonl)", min_value=0, step=1, value=1)
 
     if baseline_dir is None or not baseline_dir.exists():
         st.warning(
@@ -583,14 +581,11 @@ def main() -> None:
 
     data = RoundData(baseline_dir, sft_dir, gate_dir, int(round_num))
 
+    st.sidebar.divider()
     st.sidebar.header("Follow a task")
-    st.sidebar.markdown(
-        '<p class="cr-sidecaption">Pick one task id to see its before/fix/after story.</p>',
-        unsafe_allow_html=True,
-    )
     task_ids = sorted({str(t.get("task_id")) for t in data.traces if t.get("task_id") is not None})
     task_id = st.sidebar.selectbox("Task id", [""] + task_ids) if task_ids else ""
-    after_dir = _pick_dir("Compare against (after) baseline dir", "baseline-", "after")
+    after_dir = _pick_dir("Compare to (after)", "baseline-", "after")
 
     render_header(data)
     st.divider()
