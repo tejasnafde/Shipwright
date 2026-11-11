@@ -3,534 +3,730 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Self-healing support agent - system diagram</title>
+<title>Shipwright: system design</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap">
 <style>
-  :root { --bg:#f6f4ef; --ink:#1d1d1b; --muted:#6b6860; --line:#d8d3c7; --card:#fffdf8; }
+  :root {
+    --bg:#f7f5ef; --card:#fffdf9; --card-soft:#fbf8f0;
+    --ink:#1c1b17; --ink-soft:#5c584e; --ink-faint:#8a8575;
+    --line:#ddd6c4; --line-soft:#eae4d4;
+    --run:#2f6f5e; --run-bg:#eaf3ee;
+    --tool:#2b5d8a; --tool-bg:#eaf1f8;
+    --model:#9a3f3f; --model-bg:#f8edec;
+    --env:#6b6860; --env-bg:#f1efe9;
+    --gate:#3d3d8a; --gate-bg:#edecf7;
+    --warn:#95611a; --warn-bg:#f7eedd;
+    --good:#1f7a4d; --good-bg:#e7f3ec;
+    --bad:#a23b3b; --bad-bg:#f8eaea;
+    --pending-bg:#f0eee6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:#181713; --card:#211f1a; --card-soft:#272420;
+      --ink:#efeae0; --ink-soft:#bab49f; --ink-faint:#8a8575;
+      --line:#3a362b; --line-soft:#2c2920;
+      --run:#6fbf9f; --run-bg:#1b2b23;
+      --tool:#7fb0e0; --tool-bg:#1b2938;
+      --model:#e39a9a; --model-bg:#302121;
+      --env:#a8a394; --env-bg:#272521;
+      --gate:#9b9be8; --gate-bg:#24233a;
+      --warn:#e0ab5c; --warn-bg:#332a19;
+      --good:#7fd1a6; --good-bg:#1b2c22;
+      --bad:#e38f8f; --bad-bg:#332020;
+      --pending-bg:#272420;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:#181713; --card:#211f1a; --card-soft:#272420;
+    --ink:#efeae0; --ink-soft:#bab49f; --ink-faint:#8a8575;
+    --line:#3a362b; --line-soft:#2c2920;
+    --run:#6fbf9f; --run-bg:#1b2b23;
+    --tool:#7fb0e0; --tool-bg:#1b2938;
+    --model:#e39a9a; --model-bg:#302121;
+    --env:#a8a394; --env-bg:#272521;
+    --gate:#9b9be8; --gate-bg:#24233a;
+    --warn:#e0ab5c; --warn-bg:#332a19;
+    --good:#7fd1a6; --good-bg:#1b2c22;
+    --bad:#e38f8f; --bad-bg:#332020;
+    --pending-bg:#272420;
+  }
+
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink);
-         font:15px/1.5 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; }
-  main { max-width:1180px; margin:0 auto; padding:32px 20px 64px; }
-  h1 { font-size:24px; margin:0 0 4px; }
-  h2 { font-size:16px; margin:36px 0 10px; }
-  h3 { font-size:13.5px; margin:20px 0 6px; color:#44423c; }
-  .sub { color:var(--muted); margin:0 0 18px; }
-  svg { width:100%; height:auto; display:block; background:var(--card); border:1px solid var(--line); border-radius:8px; }
-  svg text { font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; fill:#2a2925; font-size:12.5px; }
-  svg .t { font-weight:650; font-size:13.5px; fill:var(--ink); }
-  svg .k { font:600 10.5px ui-monospace,Menlo,monospace; letter-spacing:.04em; }
-  svg .lib { font:600 10.5px ui-monospace,Menlo,monospace; fill:var(--muted); }
-  svg .lbl { font-size:11.5px; fill:var(--muted); }
-  .box { stroke-width:1.2; rx:7; }
-  .wire { fill:none; stroke:#8d897f; stroke-width:1.4; marker-end:url(#a); }
-  .dash { stroke-dasharray:5 4; }
-  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); font-size:13px; margin-bottom:8px; }
-  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { background:#efebe2; }
-  code { font:12.5px ui-monospace,Menlo,monospace; background:#efebe2; padding:1px 4px; border-radius:3px; }
-  ul { margin:0; padding-left:18px; font-size:13.5px; }
-  li { margin:3px 0; }
-  p { font-size:13.5px; }
-  .tag { display:inline-block; font:600 10.5px ui-monospace,Menlo,monospace; color:#6b6860; border:1px solid var(--line); border-radius:4px; padding:1px 5px; margin-right:4px; }
+  body {
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"Public Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    line-height:1.55; font-size:16px;
+  }
+  .layout { display:grid; grid-template-columns: 240px minmax(0,1fr); gap:0; max-width:1280px; margin:0 auto; }
+  nav.toc {
+    position:sticky; top:0; align-self:start; height:100vh; overflow-y:auto;
+    padding:28px 18px 28px 20px; border-right:1px solid var(--line);
+  }
+  nav.toc .brand { font-family:"Archivo",sans-serif; font-weight:800; font-size:1.1rem; margin-bottom:2px; }
+  nav.toc .brand-sub { color:var(--ink-faint); font-size:0.78rem; margin-bottom:18px; }
+  nav.toc ol { list-style:none; margin:0; padding:0; counter-reset:toc; }
+  nav.toc li { counter-increment:toc; margin:0; }
+  nav.toc a {
+    display:flex; gap:8px; padding:6px 8px; margin:1px 0; border-radius:6px;
+    color:var(--ink-soft); text-decoration:none; font-size:0.86rem; line-height:1.3;
+  }
+  nav.toc a:hover { background:var(--card-soft); color:var(--ink); }
+  nav.toc a::before {
+    content:counter(toc, decimal-leading-zero); font-family:"JetBrains Mono",monospace;
+    font-size:0.72rem; color:var(--ink-faint); flex-shrink:0; padding-top:1px;
+  }
+  main { padding:32px 28px 100px; max-width:900px; }
+
+  h1 { font-family:"Archivo",sans-serif; font-weight:800; font-size:2rem; margin:0 0 6px; text-wrap:balance; }
+  h2 {
+    font-family:"Archivo",sans-serif; font-weight:700; font-size:1.4rem; margin:52px 0 6px;
+    padding-top:14px; border-top:1px solid var(--line); scroll-margin-top:16px;
+  }
+  section:first-of-type h2 { border-top:none; padding-top:0; }
+  h3 { font-family:"Archivo",sans-serif; font-weight:700; font-size:1.08rem; margin:26px 0 8px; }
+  h4 { font-family:"Archivo",sans-serif; font-weight:600; font-size:0.95rem; margin:18px 0 6px; }
+  p { margin:10px 0; max-width:680px; }
+  .lede { color:var(--ink-soft); font-size:1.08rem; max-width:680px; margin:10px 0 22px; }
+  .eyebrow {
+    font-family:"JetBrains Mono",monospace; font-size:0.72rem; letter-spacing:0.07em;
+    text-transform:uppercase; color:var(--ink-faint); font-weight:600;
+  }
+  a { color:var(--tool); }
+  code {
+    font-family:"JetBrains Mono",monospace; font-size:0.84em; background:var(--card-soft);
+    padding:0.12em 0.4em; border-radius:4px; border:1px solid var(--line-soft);
+  }
+  ul, ol.plain { margin:10px 0; padding-left:22px; }
+  ul li, ol.plain li { margin:5px 0; }
+  .muted { color:var(--ink-soft); }
+  .small { font-size:0.86rem; color:var(--ink-soft); }
+
+  /* status badges */
+  .badge {
+    display:inline-flex; align-items:center; gap:5px; font-family:"JetBrains Mono",monospace;
+    font-size:0.7rem; font-weight:700; letter-spacing:0.04em; text-transform:uppercase;
+    padding:3px 9px; border-radius:999px; white-space:nowrap;
+  }
+  .badge.done { background:var(--good-bg); color:var(--good); border:1px solid var(--good); }
+  .badge.pending { background:var(--pending-bg); color:var(--ink-faint); border:1px solid var(--line); }
+  .badge.part { background:var(--warn-bg); color:var(--warn); border:1px solid var(--warn); }
+
+  /* hero stat strip */
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:1px;
+    background:var(--line); border:1px solid var(--line); border-radius:10px; overflow:hidden; margin:20px 0; }
+  .stat { background:var(--card); padding:14px 14px; }
+  .stat .num { font-family:"JetBrains Mono",monospace; font-weight:700; font-size:1.5rem;
+    font-variant-numeric:tabular-nums; }
+  .stat .cap { font-size:0.76rem; color:var(--ink-soft); margin-top:2px; line-height:1.3; }
+  .stat.hot .num { color:var(--model); }
+  .stat.ok .num { color:var(--good); }
+
+  /* cards */
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin:10px 0; }
+  .card-row { display:grid; gap:12px; margin:14px 0; }
+  .card-row.cols-2 { grid-template-columns:1fr 1fr; }
+  .card-row.cols-3 { grid-template-columns:1fr 1fr 1fr; }
+  @media (max-width:760px) { .card-row.cols-2, .card-row.cols-3 { grid-template-columns:1fr; } }
+
+  /* pipeline flow */
+  .flow { display:flex; flex-direction:column; gap:0; margin:22px 0; }
+  .flow-step {
+    display:flex; gap:14px; align-items:flex-start; background:var(--card);
+    border:1px solid var(--line); border-radius:10px; padding:14px 16px; position:relative;
+  }
+  .flow-connector { width:2px; background:var(--line); margin-left:33px; height:16px; }
+  .flow-num {
+    font-family:"JetBrains Mono",monospace; font-weight:700; font-size:0.85rem; flex-shrink:0;
+    width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    color:#fff;
+  }
+  .flow-step.run .flow-num { background:var(--run); } .flow-step.run { border-left:3px solid var(--run); }
+  .flow-step.detect .flow-num, .flow-step.classify .flow-num { background:var(--warn); }
+  .flow-step.detect, .flow-step.classify { border-left:3px solid var(--warn); }
+  .flow-step.gate .flow-num { background:var(--gate); } .flow-step.gate { border-left:3px solid var(--gate); }
+  .flow-body h4 { margin:0 0 3px; }
+  .flow-lib { font-family:"JetBrains Mono",monospace; font-size:0.74rem; color:var(--ink-faint); margin-top:4px; }
+
+  /* branch row (tool / model / env) */
+  .branches { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin:18px 0; }
+  @media (max-width:760px) { .branches { grid-template-columns:1fr; } }
+  .branch { border-radius:10px; padding:14px 15px; border:1px solid; }
+  .branch.tool { background:var(--tool-bg); border-color:var(--tool); }
+  .branch.model { background:var(--model-bg); border-color:var(--model); }
+  .branch.env { background:var(--env-bg); border-color:var(--env); }
+  .branch .tag { font-family:"JetBrains Mono",monospace; font-size:0.72rem; font-weight:700;
+    text-transform:uppercase; letter-spacing:0.04em; }
+  .branch.tool .tag { color:var(--tool); } .branch.model .tag { color:var(--model); } .branch.env .tag { color:var(--env); }
+  .branch p { font-size:0.88rem; margin:6px 0; max-width:none; }
+  .subcard { background:var(--card); border:1px solid var(--line-soft); border-radius:8px; padding:9px 11px; margin-top:8px; font-size:0.84rem; }
+
+  /* tables */
+  .tbl-wrap { overflow-x:auto; margin:14px 0; }
+  table { width:100%; border-collapse:collapse; font-size:0.89rem; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { background:var(--card-soft); font-family:"JetBrains Mono",monospace; font-size:0.72rem;
+    text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:600; }
+  tr:last-child td { border-bottom:none; }
+  td.num, th.num { font-family:"JetBrains Mono",monospace; font-variant-numeric:tabular-nums; }
+
+  details.deep { background:var(--card); border:1px solid var(--line); border-radius:10px; margin:12px 0; padding:4px 16px; }
+  details.deep summary { cursor:pointer; padding:10px 0; font-weight:600; font-size:0.92rem; list-style:none; display:flex; align-items:center; gap:8px;}
+  details.deep summary::before { content:"+"; font-family:"JetBrains Mono",monospace; color:var(--tool); font-weight:700; width:16px; }
+  details.deep[open] summary::before { content:"\2212"; }
+  details.deep .deep-body { padding:2px 0 14px; }
+
+  .pill-row { display:flex; gap:6px; flex-wrap:wrap; margin:8px 0; }
+  .pill { font-family:"JetBrains Mono",monospace; font-size:0.74rem; background:var(--card-soft);
+    border:1px solid var(--line); border-radius:999px; padding:3px 10px; color:var(--ink-soft); }
+
+  .glossary dt { font-family:"JetBrains Mono",monospace; font-weight:700; font-size:0.9rem; margin-top:14px; color:var(--tool); }
+  .glossary dd { margin:3px 0 0 0; font-size:0.9rem; color:var(--ink-soft); }
+
+  footer { margin-top:70px; padding-top:20px; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.84rem; }
+
+  .mobile-toc-toggle { display:none; }
+  @media (max-width:860px) {
+    .layout { grid-template-columns:1fr; }
+    nav.toc { position:static; height:auto; border-right:none; border-bottom:1px solid var(--line); padding:16px 20px; }
+    nav.toc ol { display:none; }
+    nav.toc[data-open="true"] ol { display:block; }
+    .mobile-toc-toggle {
+      display:inline-block; font-family:"JetBrains Mono",monospace; font-size:0.78rem; font-weight:600;
+      background:var(--card-soft); border:1px solid var(--line); border-radius:6px; padding:6px 12px;
+      color:var(--ink); cursor:pointer; margin-top:4px;
+    }
+    main { padding:24px 18px 80px; }
+  }
+  pre.mermaid {
+    background:var(--card); border:1px solid var(--line); border-radius:10px;
+    padding:14px; margin:18px 0; overflow-x:auto; text-align:center;
+  }
 </style>
 </head>
 <body>
+<div class="layout">
+
+<nav class="toc" id="toc" data-open="false">
+  <div class="brand">&#x1F6E0;&#xFE0F; Shipwright</div>
+  <div class="brand-sub">System design &middot; updated 2026-11-11</div>
+  <button class="mobile-toc-toggle" onclick="document.getElementById('toc').dataset.open = document.getElementById('toc').dataset.open === 'true' ? 'false' : 'true'">Contents &#8597;</button>
+  <ol>
+    <li><a href="#what">What this is</a></li>
+    <li><a href="#proof">What's actually run</a></li>
+    <li><a href="#loop">The loop</a></li>
+    <li><a href="#steps">Walking through it</a></li>
+    <li><a href="#fixes">Two ways to fix a mistake</a></li>
+    <li><a href="#models">The models, and why</a></li>
+    <li><a href="#eval">Evaluation you can trust</a></li>
+    <li><a href="#libs">Library integration map</a></li>
+    <li><a href="#observability">Seeing what happened</a></li>
+    <li><a href="#infra">Where it runs</a></li>
+    <li><a href="#demo">Watching the loop: control-room</a></li>
+    <li><a href="#status">What's real right now</a></li>
+    <li><a href="#layout">Repo layout</a></li>
+    <li><a href="#glossary">Glossary</a></li>
+  </ol>
+</nav>
+
 <main>
-<h1>Self-healing support agent</h1>
-<p class="sub">Lexsi hackathon, Track 3, problem statement 8. Updated 2026-11-10, grounded in the actual
-AgentTune and AuditKIT source (not just their docs). Status: round 1 has actually run - a real
-baseline against tau2-bench retail, real failures found and classified (AgentTune's
-<code>FailureDetector</code>/<code>FailureClassifier</code>, <code>src/shipwright/heal/agenttune_bridge.py</code>),
-35 tool-description patches applied through the ledger, and teacher-generated SFT data built for the
-weight-fix path. No local fallback for AgentTune: it installs <code>--no-deps</code> on Linux (CI,
-Cloud Run Jobs, HF Jobs), not on a CPU-only macOS dev machine (<code>AGENTS.md</code> known traps).
-A real LoRA training run and a real gate decision still need GPU time and the Vertex AI budget, see
-<code>docs/pipeline/training.md</code> and <code>docs/pipeline/gate.md</code>.</p>
 
-<svg viewBox="0 0 1120 1230" role="img" aria-label="System diagram of the self-healing loop">
-  <defs>
-    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="#8d897f"/>
-    </marker>
-  </defs>
+<h1>Shipwright</h1>
+<p class="lede">A customer-support agent that finds its own mistakes, works out why it made them, fixes
+itself, and only ships the fix once it's measured to actually be better. Built for Lexsi Labs' AI Safety
+and Alignment Hackathon, Track 3 (self-healing agents).</p>
 
-  <!-- section labels -->
-  <text x="20" y="22" class="k" fill="#2f6f5e">RUN AND OBSERVE</text>
-  <text x="20" y="292" class="k" fill="#8a5a1f">ROUTE BY FAILURE TYPE</text>
-  <text x="20" y="772" class="k" fill="#3d3d8a">GATE AND REDEPLOY</text>
-  <text x="20" y="1092" class="k" fill="#6b6860">INFRASTRUCTURE</text>
+<section id="what">
+<h2>1. What this is</h2>
+<p>Most AI agents fail quietly: something goes wrong mid-conversation, nobody notices, and the same
+mistake happens again tomorrow. This project is about closing that loop for a small, open-weight model
+instead of papering over it with a bigger one.</p>
+<p>The agent is <b>Tiny Aya Global</b>, a 3.35-billion-parameter model from Cohere Labs, acting as a retail
+customer-support assistant that can look up orders, process refunds, and so on through a fixed set of
+tools. It runs real conversations against <a href="https://github.com/sierra-research/tau2-bench">tau2-bench</a>,
+a benchmark built for exactly this kind of tool-using agent, with a simulated customer on the other end
+and a strict grader checking whether the right thing actually happened in the system (not just whether
+the reply sounded right).</p>
+<p>When the agent gets something wrong, the system doesn't just log it and move on. It works out
+<i>why</i> the failure happened, and that diagnosis decides what happens next: if the tool's own
+description misled the model, the fix is a one-line edit to the tool, verified and applied in minutes,
+no retraining. If the model itself reasoned badly, the fix is a small amount of further training,
+and - critically - that retrained version is only allowed to replace the old one if it's measured to be
+strictly better on tasks it's never trained on. A gate that can say no is the whole point: a system that
+always approves its own updates isn't really self-healing, it's just retraining on a schedule.</p>
+</section>
 
-  <!-- Row A -->
-  <rect class="box" x="20" y="36" width="170" height="84" fill="#eef5f2" stroke="#2f6f5e"/>
-  <text x="34" y="60" class="t">Task pool</text>
-  <text x="34" y="80">tau2-bench retail /</text>
-  <text x="34" y="96">airline, train split</text>
+<section id="proof">
+<h2>2. What's actually run (not a projection)</h2>
+<p class="small">These numbers are from a real round against tau2-bench retail, not a simulation. See
+<a href="#status">What's real right now</a> for exactly which parts of the loop below these numbers
+cover, and which are still ahead.</p>
+<div class="stats">
+  <div class="stat hot"><div class="num">1 / 20</div><div class="cap">tasks the untrained agent passed (5%)</div></div>
+  <div class="stat hot"><div class="num">67%</div><div class="cap">of its tool calls returned an error</div></div>
+  <div class="stat"><div class="num">35</div><div class="cap">tool-description patches applied, round 1</div></div>
+  <div class="stat ok"><div class="num">13&#8594;2</div><div class="cap">failures from copying example IDs out of a tool's own description</div></div>
+  <div class="stat ok"><div class="num">&minus;50%</div><div class="cap">tool-call errors after the patches</div></div>
+  <div class="stat"><div class="num">10</div><div class="cap">remaining failures diagnosed as <i>needing a weight fix</i>, not a tool fix</div></div>
+</div>
+<p>That last number is the interesting one: the tool patches fixed exactly the failures they were meant
+to and nothing else. The pass rate didn't move, because ten failures were the model picking the wrong
+tool entirely - a routing mistake no amount of rewording a tool description can fix. The classifier
+correctly told the difference and routed those ten toward retraining instead. That's the tool-fix vs
+weight-fix split actually working, not asserted.</p>
+</section>
 
-  <rect class="box" x="230" y="36" width="220" height="84" fill="#eef5f2" stroke="#2f6f5e"/>
-  <text x="244" y="56" class="k" fill="#2f6f5e">01 RUN</text>
-  <text x="244" y="76" class="t">Agent</text>
-  <text x="244" y="94">Tiny Aya Global + LoRA, tools</text>
-  <text x="244" y="110" class="lib">AgentTune Project</text>
+<section id="loop">
+<h2>3. The loop</h2>
+<p>One round, start to finish. Detect and classify always run; which branch fires depends on what went
+wrong, and the two weight-fix sources (teacher replay and Agent-R) run independently and feed the same
+training set. The diagram is the whole shape at a glance; the numbered cards below walk through each
+box in plain language.</p>
 
-  <rect class="box" x="490" y="36" width="200" height="84" fill="#eef5f2" stroke="#2f6f5e"/>
-  <text x="504" y="56" class="k" fill="#2f6f5e">02 LOG</text>
-  <text x="504" y="76" class="t">Trace store</text>
-  <text x="504" y="94">audit.jsonl per round</text>
-  <text x="504" y="110" class="lib">EventLog, raw-text sidecar</text>
+<pre class="mermaid">
+flowchart TD
+    A["Task pool: tau2-bench retail"] --> B["01 Run - Tiny Aya + LoRA"]
+    B --> C["02 Log - traces.jsonl + OTel"]
+    C --> D["03 Detect - AgentTune FailureDetector"]
+    D --> E["04 Classify - rules, then FailureClassifier"]
+    E --> F{"05 Route"}
+    F -->|tool fault| G["Patch the tool: ledger + rollback"]
+    F -->|model fault| H["Teacher replay"]
+    F -->|model fault| I["Agent-R: MCTS + self-critique"]
+    F -->|environment fault| J["Retry or skip - never used as training data"]
+    G -. unfixed failures .-> H
+    H --> K["06 Curate"]
+    I --> K
+    K --> L["07 Train - LoRA via AgentTune"]
+    L --> M{"08 Gate - 8 checks, all required"}
+    M -->|promote| N["Adapter live, keep the tool patch"]
+    M -->|reject| O["Roll back, revert the tool patch"]
+    N --> A
+    O --> A
 
-  <rect class="box" x="730" y="36" width="200" height="84" fill="#f8f1e7" stroke="#8a5a1f"/>
-  <text x="744" y="56" class="k" fill="#8a5a1f">03 DETECT</text>
-  <text x="744" y="76" class="t">Pass or fail</text>
-  <text x="744" y="94">outcome oracle + loop rules</text>
-  <text x="744" y="110" class="lib">FailureDetector</text>
+    classDef run fill:#eaf3ee,stroke:#2f6f5e,color:#1c1b17;
+    classDef warn fill:#f7eedd,stroke:#95611a,color:#1c1b17;
+    classDef tool fill:#eaf1f8,stroke:#2b5d8a,color:#1c1b17;
+    classDef model fill:#f8edec,stroke:#9a3f3f,color:#1c1b17;
+    classDef env fill:#f1efe9,stroke:#6b6860,color:#1c1b17;
+    classDef gate fill:#edecf7,stroke:#3d3d8a,color:#1c1b17;
+    class A,B,N,O run;
+    class C,D,E warn;
+    class F warn;
+    class G tool;
+    class H,I model;
+    class J env;
+    class K,L gate;
+    class M gate;
+</pre>
 
-  <path class="wire" d="M190,78 H228"/>
-  <path class="wire" d="M450,78 H488"/>
-  <path class="wire" d="M690,78 H728"/>
+<div class="flow">
+  <div class="flow-step run">
+    <div class="flow-num">01</div>
+    <div class="flow-body"><h4>Run</h4><p class="small">Tiny Aya Global + LoRA plays the agent side of a tau2-bench task. The simulated customer and the
+      grading are also an LLM (gpt-oss-120b), kept separate from the teacher model.</p>
+      <div class="flow-lib">tau2-bench &middot; AgentTune's prompted-tool-call format for Cohere models</div></div>
+  </div>
+  <div class="flow-connector"></div>
+  <div class="flow-step run">
+    <div class="flow-num">02</div>
+    <div class="flow-body"><h4>Log</h4><p class="small">Every turn's full raw model output is kept, not just the parsed tool call - otherwise a
+      "the model reasoned its way to the wrong conclusion" failure is unclassifiable after the fact.
+      OTel spans are built from the same trace for anyone who wants a standard trace viewer.</p>
+      <div class="flow-lib">traces.jsonl &middot; otel_spans.jsonl</div></div>
+  </div>
+  <div class="flow-connector"></div>
+  <div class="flow-step detect">
+    <div class="flow-num">03</div>
+    <div class="flow-body"><h4>Detect</h4><p class="small">A run is a failure if the task reward says so, or if AgentTune's own rule-based detector
+      flags it independently (a tool call erroring, a loop of repeated steps). Both signals are kept, not
+      just one.</p>
+      <div class="flow-lib">AgentTune FailureDetector</div></div>
+  </div>
+  <div class="flow-connector"></div>
+  <div class="flow-step classify">
+    <div class="flow-num">04</div>
+    <div class="flow-body"><h4>Classify</h4><p class="small">Cheap, deterministic rules run first (did the model invent an id that only appears as an
+      example in a tool's own description? did it repeat a call it already knows failed?). Only a
+      failure no rule explains goes to AgentTune's real classifier, a model call.</p>
+      <div class="flow-lib">rule labels &middot; AgentTune FailureClassifier</div></div>
+  </div>
+  <div class="flow-connector"></div>
+  <div class="flow-step classify">
+    <div class="flow-num">05</div>
+    <div class="flow-body"><h4>Route</h4><p class="small">The classified root cause sorts into one of three branches, below. This mapping is our
+      own addition - neither AgentTune nor AuditKIT has an opinion on which root causes are tool
+      problems versus model problems.</p></div>
+  </div>
+</div>
 
-  <!-- Classify -->
-  <rect class="box" x="730" y="170" width="200" height="84" fill="#f8f1e7" stroke="#8a5a1f"/>
-  <text x="744" y="190" class="k" fill="#8a5a1f">04 CLASSIFY</text>
-  <text x="744" y="210" class="t">Why it failed</text>
-  <text x="744" y="228">rules, then LLM judge</text>
-  <text x="744" y="244" class="lib">FailureClassifier</text>
-  <path class="wire" d="M830,120 V168"/>
-  <text x="838" y="150" class="lbl">failed runs</text>
+<div class="branches">
+  <div class="branch tool">
+    <div class="tag">Tool fault</div>
+    <p>The tool's own description misled the model: an ambiguous field, an example value the model
+      copied as if it were real, a schema with no argument check.</p>
+    <div class="subcard"><b>Fix:</b> edit the tool spec. No training. Verified by re-running the same
+      failing tasks before the patch is marked resolved. Logged in a ledger with a before/after
+      snapshot and one-step rollback.</div>
+  </div>
+  <div class="branch model">
+    <div class="tag">Model fault</div>
+    <p>The model itself reasoned or acted wrongly: picked the wrong tool, invented an id from nothing,
+      looped, broke policy, hallucinated an answer.</p>
+    <div class="subcard"><b>Fix:</b> a small amount of further training (LoRA), from one of two data
+      sources - see <a href="#fixes">below</a>. Never ships without passing the gate.</div>
+  </div>
+  <div class="branch env">
+    <div class="tag">Environment fault</div>
+    <p>Something outside the model's control: a timeout, an API error, the simulated customer itself
+      making a mistake.</p>
+    <div class="subcard"><b>Fix:</b> retry or skip. Never used as training data - training a model to
+      compensate for a flaky environment teaches it the wrong lesson.</div>
+  </div>
+</div>
 
-  <!-- passing runs to replay mix -->
-  <path class="wire dash" d="M930,70 H1100 V630 H722"/>
-  <text x="944" y="62" class="lbl">passing runs (replay mix)</text>
+<div class="flow">
+  <div class="flow-connector" style="margin-left:50%"></div>
+  <div class="flow-step classify">
+    <div class="flow-num">06</div>
+    <div class="flow-body"><h4>Curate</h4><p class="small">Model-fault examples from both sources (teacher replay and Agent-R) are deduplicated and
+      written as training rows in Tiny Aya's own prompt format - the same format it sees at inference
+      time, so training data and live prompts never silently diverge.</p>
+      <div class="flow-lib">scripts/build_sft.py</div></div>
+  </div>
+  <div class="flow-connector"></div>
+  <div class="flow-step classify">
+    <div class="flow-num">07</div>
+    <div class="flow-body"><h4>Train</h4><p class="small">A LoRA adapter (about 30M trainable parameters, &lt;1% of the model) trains on the curated
+      set. The loss is masked to the parts actually worth learning from - never the bad steps a
+      revision run is correcting away from.</p>
+      <div class="flow-lib">AgentTune create_distill_trainer, TRL SFTTrainer</div></div>
+  </div>
+  <div class="flow-connector"></div>
+  <div class="flow-step gate">
+    <div class="flow-num">08</div>
+    <div class="flow-body"><h4>Gate</h4><p class="small">Eight independent checks, described in full under <a href="#eval">Evaluation you can
+      trust</a>. All eight have to pass. A missing number or too small a sample fails its check -
+      the gate never approves by default.</p>
+      <div class="flow-lib">AgentTune DeploymentGate + AuditKIT</div></div>
+  </div>
+  <div class="flow-connector"></div>
+  <div class="flow-step run">
+    <div class="flow-num">09</div>
+    <div class="flow-body"><h4>Promote, or roll back</h4><p class="small">Pass: the new adapter is tagged and pushed, the tool patch stays. Fail: the old adapter
+      keeps serving, the patch reverts. Either way, one row is appended to <code>metrics.jsonl</code>
+      and the next round starts from whichever version is now live.</p></div>
+  </div>
+</div>
+</section>
 
-  <!-- Branch headers -->
-  <rect class="box" x="40" y="310" width="270" height="74" fill="#ecf2f8" stroke="#2b5d8a"/>
-  <text x="54" y="332" class="t" style="fill:#2b5d8a">Tool fault</text>
-  <text x="54" y="350">unclear description, loose schema,</text>
-  <text x="54" y="366">no argument check</text>
+<section id="steps">
+<h2>4. Walking through it in more depth</h2>
+<p class="small">The flow above is the whole story for most readers. These are the exact mechanics for
+anyone who wants them.</p>
 
-  <rect class="box" x="420" y="310" width="280" height="74" fill="#f6eded" stroke="#7a3b3b"/>
-  <text x="434" y="332" class="t" style="fill:#7a3b3b">Model fault</text>
-  <text x="434" y="350">wrong tool, bad args, wrong order,</text>
-  <text x="434" y="366">loop, policy break, invented answer</text>
+<details class="deep">
+<summary>Why rules run before any model call in Detect/Classify</summary>
+<div class="deep-body">
+<p>A model-based classifier costs money and time on every single failure. Several of the most common
+real failures turn out to be fully deterministic to spot: an id argument that matches an example value
+quoted inside a tool's own parameter description is always a copy-paste mistake, never a legitimate id.
+Catching that with a string match costs nothing and never calls a model; it's also exactly the failure
+mode that showed up in 13 of 19 real failures in the first baseline run. Only a failure no rule explains
+falls through to AgentTune's real <code>FailureClassifier</code>, which does call a model.</p>
+</div>
+</details>
 
-  <rect class="box" x="810" y="310" width="270" height="74" fill="#f0efec" stroke="#6b6860"/>
-  <text x="824" y="332" class="t" style="fill:#6b6860">Environment fault</text>
-  <text x="824" y="350">timeout, API error, missing data,</text>
-  <text x="824" y="366">simulated-customer mistake</text>
+<details class="deep">
+<summary>Why the tool-crash signal alone doesn't decide tool-fault vs model-fault</summary>
+<div class="deep-body">
+<p>A tool call erroring could mean two very different things: the model picked the wrong tool for the
+situation (a one-off model mistake), or the tool's own spec is ambiguous enough that it keeps tripping up
+different runs (a tool problem, fixable once). The router tells these apart by watching whether the same
+tool keeps erroring across multiple different trajectories in a round. A repeat offender across
+unrelated tasks is a spec problem; a single bad call in isolation is the model choosing badly.</p>
+</div>
+</details>
 
-  <path class="wire" d="M760,254 L175,308"/>
-  <path class="wire" d="M800,254 L560,308"/>
-  <path class="wire" d="M880,254 L945,308"/>
+<details class="deep">
+<summary>Why environment-fault failures are never used as training data</summary>
+<div class="deep-body">
+<p>If the simulated customer glitches, or an API call times out, that failure has nothing to do with
+whether the model reasoned well. Training on it would teach the model to react to noise as if it were
+signal - the opposite of what a self-healing loop is supposed to do.</p>
+</div>
+</details>
+</section>
 
-  <!-- Tool branch -->
-  <rect class="box" x="40" y="430" width="270" height="100" fill="#ecf2f8" stroke="#2b5d8a"/>
-  <text x="54" y="452" class="t">Patch the tool</text>
-  <text x="54" y="472">edit spec or add validation,</text>
-  <text x="54" y="488">no training, runs first</text>
-  <text x="54" y="506">ledger: before/after snapshot,</text>
-  <text x="54" y="522">one-step rollback</text>
-  <path class="wire" d="M175,384 V428"/>
-  <text x="54" y="560" class="lbl">failures that remain go to retrain</text>
-  <path class="wire dash" d="M310,480 H418"/>
+<section id="fixes">
+<h2>5. Two ways to fix a mistake</h2>
+<p>A model-fault failure can be corrected from two different sources, run independently, feeding the same
+curated training set. They don't compete - a round can use either, both, or neither, depending on what
+failures actually showed up.</p>
 
-  <!-- Model branch -->
-  <rect class="box" x="420" y="430" width="280" height="64" fill="#f6eded" stroke="#7a3b3b"/>
-  <text x="434" y="452" class="t">Teacher replays the task</text>
-  <text x="434" y="472">from the first wrong step, writes a fix</text>
-  <path class="wire" d="M560,384 V428"/>
+<div class="card-row cols-2">
+<div class="card">
+<div class="eyebrow">Source A</div>
+<h3>Teacher replay</h3>
+<p class="small">An open-weight teacher model (<b>DeepSeek V4.1 Flash</b>, never Tiny Aya's own weights)
+replays the failed task from the first wrong step onward, and its corrected trajectory becomes a
+training example - "here's what a stronger model would have done differently from this exact point."</p>
+<p class="small">Simple, cheap, and effective for failures where a clearly better action exists at the
+point things went wrong.</p>
+</div>
+<div class="card">
+<div class="eyebrow">Source B</div>
+<h3>Agent-R <span class="small">(arXiv 2501.11425)</span></h3>
+<p class="small">Instead of asking a different model what it would have done, this searches the
+<b>student's own</b> attempts at a task with Monte Carlo Tree Search, finds a successful branch and a
+failed one that share a path, has the model critique its own failed branch to find exactly where it
+went wrong, and splices in a short "wait, that's not right" revision thought plus the successful
+continuation.</p>
+<p class="small">The lesson is "notice your own mistake and recover," not "imitate someone else" - a
+second, complementary signal next to the teacher's.</p>
+</div>
+</div>
 
-  <rect class="box" x="420" y="520" width="280" height="56" fill="#f6eded" stroke="#7a3b3b"/>
-  <text x="434" y="542" class="t">Verify the fix</text>
-  <text x="434" y="562">keep only fixes the oracle passes</text>
-  <path class="wire" d="M560,494 V518"/>
+<p class="small">Both sources write into the same training format: the bad steps are masked out of the
+loss (never trained on directly, only replaced), and only the corrective continuation counts as a
+target. <code>train_lora.py</code> asserts this mask survives intact through every step of data
+preparation - a silent masking bug would mean quietly training the model to repeat its own mistakes.</p>
+</section>
 
-  <rect class="box" x="420" y="602" width="280" height="56" fill="#f6eded" stroke="#7a3b3b"/>
-  <text x="434" y="624" class="t">Curate</text>
-  <text x="434" y="644">CuratorKIT: dedupe, gate, balance</text>
-  <path class="wire" d="M560,576 V600"/>
-
-  <rect class="box" x="420" y="684" width="280" height="56" fill="#f6eded" stroke="#7a3b3b"/>
-  <text x="434" y="706" class="t">Train new LoRA</text>
-  <text x="434" y="726" class="lib">AgentTune create_distill_trainer</text>
-  <path class="wire" d="M560,658 V682"/>
-
-  <!-- Env branch -->
-  <rect class="box" x="810" y="430" width="270" height="64" fill="#f0efec" stroke="#6b6860"/>
-  <text x="824" y="452" class="t">Retry or skip</text>
-  <text x="824" y="472">never used as training data</text>
-  <path class="wire" d="M945,384 V428"/>
-
-  <!-- Teacher API -->
-  <rect class="box" x="810" y="520" width="270" height="56" fill="#fff" stroke="#b9b3a5"/>
-  <text x="824" y="542" class="t">Teacher, judge, simulated customer</text>
-  <text x="824" y="562">DeepSeek V4.1 Flash + gpt-oss-120b, Vertex AI, not Claude</text>
-  <path class="wire dash" d="M810,540 L702,470"/>
-
-  <!-- Gate -->
-  <rect class="box" x="300" y="790" width="520" height="100" fill="#eeeef7" stroke="#3d3d8a"/>
-  <text x="316" y="812" class="k" fill="#3d3d8a">05 GATE</text>
-  <text x="316" y="832" class="t">AuditKIT scores + AgentTune DeploymentGate, held-out set</text>
-  <text x="316" y="852">ship only if target label drops, pass^k / pass-hat-k hold,</text>
-  <text x="316" y="868">BFCL v3 grade is not FAIL. Too few samples anywhere = reject.</text>
-  <path class="wire" d="M175,530 V840 H298"/>
-  <path class="wire" d="M560,740 V788"/>
-
-  <!-- Frozen eval -->
-  <rect class="box" x="880" y="790" width="200" height="100" fill="#fff" stroke="#b9b3a5"/>
-  <text x="894" y="812" class="t">Frozen eval sets</text>
-  <text x="894" y="832">held-out (gate)</text>
-  <text x="894" y="848">hidden (final report)</text>
-  <text x="894" y="864">BFCL v3 (regression)</text>
-  <path class="wire dash" d="M880,840 H822"/>
-
-  <!-- Promote / Rollback -->
-  <rect class="box" x="300" y="930" width="240" height="70" fill="#eef5f2" stroke="#2f6f5e"/>
-  <text x="316" y="952" class="t" style="fill:#2f6f5e">Pass: promote</text>
-  <text x="316" y="970">adapter to HF Hub, round tag</text>
-  <text x="316" y="986">keep the tool patch</text>
-
-  <rect class="box" x="580" y="930" width="240" height="70" fill="#f6eded" stroke="#7a3b3b"/>
-  <text x="596" y="952" class="t" style="fill:#7a3b3b">Fail: roll back</text>
-  <text x="596" y="970">keep the old adapter</text>
-  <text x="596" y="986">revert the tool patch</text>
-
-  <path class="wire" d="M420,890 V928"/>
-  <path class="wire" d="M700,890 V928"/>
-
-  <!-- metrics + loop -->
-  <rect class="box" x="880" y="930" width="200" height="70" fill="#fff" stroke="#b9b3a5"/>
-  <text x="894" y="952" class="t">metrics.jsonl</text>
-  <text x="894" y="970">one row per round</text>
-  <text x="894" y="986">feeds the write-up charts</text>
-  <path class="wire dash" d="M820,965 H878"/>
-
-  <path class="wire" d="M420,1000 V1040 H14 V150 H340 V122"/>
-  <path class="wire" d="M700,1000 V1040 H420"/>
-  <text x="30" y="1060" class="lbl">next round starts from the promoted (or kept) model. Target: 3 or more rounds.</text>
-
-  <!-- Infra strip -->
-  <rect class="box" x="20" y="1104" width="340" height="110" fill="#fff" stroke="#b9b3a5"/>
-  <text x="34" y="1126" class="t">Compute</text>
-  <text x="34" y="1146">GCP lexsi-hackathon: Spot L4 VM</text>
-  <text x="34" y="1162">HF credits: HF Jobs for train / eval</text>
-  <text x="34" y="1178">Colab / Kaggle as backup</text>
-  <text x="34" y="1196" class="lbl">GCP cap Rs 3000, billing auto-off</text>
-
-  <rect class="box" x="390" y="1104" width="340" height="110" fill="#fff" stroke="#b9b3a5"/>
-  <text x="404" y="1126" class="t">Storage (public at the end)</text>
-  <text x="404" y="1146">traces: HF dataset, GCS working copy</text>
-  <text x="404" y="1162">adapters: HF Hub, one tag per round</text>
-  <text x="404" y="1178">two HF collections: models, data</text>
-  <text x="404" y="1196" class="lbl">OTel spans, no external viewer</text>
-
-  <rect class="box" x="760" y="1104" width="340" height="110" fill="#fff" stroke="#b9b3a5"/>
-  <text x="774" y="1126" class="t">Built on vs added</text>
-  <text x="774" y="1146">AgentTune: detector, classifier,</text>
-  <text x="774" y="1162">example generator, trainer</text>
-  <text x="774" y="1178">Ours: 3-way router, patch ledger,</text>
-  <text x="774" y="1196">AuditKIT+CuratorKIT gate, ROI study</text>
-</svg>
-
-<h2>Service boundaries</h2>
-<p>Three processes: two that do the work, below, and one read-only process that replays what they did
-for a person to watch, covered in the next section. None of them is a 24/7 daemon.</p>
+<section id="models">
+<h2>6. The models, and why</h2>
+<div class="tbl-wrap">
 <table>
-  <tr><th>Service</th><th>Owns</th><th>Why separate</th></tr>
-  <tr>
-    <td><span class="tag">agent-runtime</span></td>
-    <td>Runs the tau2-bench tasks for one round against the currently-deployed Tiny Aya Global + LoRA
-      adapter (<code>scripts/baseline.py</code>, via Cloud Run Jobs - <code>docs/setup/cloud-runs.md</code>).
-      Writes <code>traces.jsonl</code> (every turn's raw output, not only the parsed tool call) plus
-      <code>otel_spans.jsonl</code> built from it. Stateless beyond the adapter checkpoint it loads.</td>
-    <td>Never needs a teacher-model key, AuditKIT, or write access to the tool ledger. The thing that
-      stands in for "serving a customer" should not be able to retrain itself or spend API budget on
-      its own.</td>
-  </tr>
-  <tr>
-    <td><span class="tag">self-heal control plane</span></td>
-    <td>Run once a round's <code>traces.jsonl</code> exists, not continuously:
-      <code>scripts/classify.py</code> (AgentTune's <code>FailureDetector</code> +
-      <code>FailureClassifier</code>, <code>src/shipwright/heal/agenttune_bridge.py</code>, plus our rule
-      labels), <code>scripts/tool_fix.py</code> (the tool-patch ledger), <code>scripts/round_status.py</code>
-      (AgentTune's <code>RetrainingTrigger</code>), <code>scripts/train_lora.py</code> (HF Jobs), and
-      <code>scripts/gate_eval.py</code> (AgentTune's <code>DeploymentGate</code> + AuditKIT thresholds).
-      Separate scripts, not one long-running process, each independently re-runnable.</td>
-    <td>Everything expensive or risky (teacher API calls, retraining, redeploy decisions) lives in
-      steps that are easy to kill, re-run, or roll back without touching the runtime.</td>
-  </tr>
+<tr><th>Role</th><th>Model</th><th>Where it runs</th><th>Why</th></tr>
+<tr><td>Student (the agent)</td><td><code>CohereLabs/tiny-aya-global</code> + LoRA</td><td>HF Inference Providers</td>
+  <td>The model being studied and improved. Required by the hackathon's model list.</td></tr>
+<tr><td>Teacher</td><td>DeepSeek V4.1 Flash</td><td>Vertex AI</td>
+  <td>Open-weight, so its outputs can legally be used as training data.</td></tr>
+<tr><td>Judge &amp; simulated customer</td><td>gpt-oss-120b</td><td>Vertex AI</td>
+  <td>Open-weight (Apache 2.0); plays both the customer in tau2-bench conversations and the quality judge.</td></tr>
 </table>
-<p>AgentTune also ships <code>FullClosedLoop</code>, a true online/always-on variant
-(<code>run_forever()</code>, a background retrain thread so the event buffer keeps filling during
-retrain). We use the same underlying classes but drive them once per round instead of as a daemon:
-the task pool is frozen and finite, and a 24/7 GPU process is the wrong trade against a GCP budget
-that auto-kills billing at Rs 3000/month. This is a cost decision, not a capability gap.</p>
+</div>
 
-<h2>Demo: the loop, round by round</h2>
-<p><b>control-room</b> (<code>src/shipwright/control_room/app.py</code>), read-only with respect to
-everything above. It never calls a teacher API, a trainer, or the gate itself - it only reads the
-run-dir files the harness scripts already produce (<code>traces.jsonl</code>,
-<code>failures.jsonl</code>, <code>patches/ledger.jsonl</code>, <code>round_status.json</code>,
-<code>gate_decision.json</code>) and renders them step by step. This exists because a static
-before/after comparison (one input, two model outputs side by side) is the right demo for a team that
-trained one hardened model once, but it hides the one thing that makes a self-healing system worth
-building: that it is a loop, with a gate in the middle that is allowed to say no. The demo has to show
-the loop, not just its endpoint. Deploys as its own Hugging Face Space image, <code>infra/space/</code>.</p>
+<h3>A real mistake, caught and reversed the same day</h3>
+<p>The teacher and judge roles were briefly set to a closed model (Claude) before anyone wrote any
+training code. That was wrong, and not a minor detail: the terms of service for Anthropic's, OpenAI's and
+Google's closed APIs all forbid using their output to train other models - and "the teacher model
+generates corrective examples that get trained into the student" is exactly that pattern, not a technicality
+around it. It was caught and reversed before any real call was made, by checking the license question
+<i>before</i> picking a model for a role that touches training data, not after. The fix: open-weight
+models only (DeepSeek V4.1 Flash, gpt-oss-120b), served through Vertex AI rather than through OpenAI's or
+Anthropic's own APIs, so no closed-model terms apply at any point in the pipeline. This is written down
+as a hard rule now, not a one-time correction - see the glossary entry for why this matters beyond just
+this project.</p>
+</section>
 
-<svg viewBox="0 0 1120 380" role="img" aria-label="Control room demo service reading round artifacts and replaying the loop step by step">
-  <defs>
-    <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="#8d897f"/>
-    </marker>
-  </defs>
+<section id="eval">
+<h2>7. Evaluation you can trust</h2>
 
-  <rect class="box" x="20" y="20" width="220" height="56" fill="#eef5f2" stroke="#2f6f5e"/>
-  <text x="34" y="40" class="t">Agent runtime</text>
-  <text x="34" y="58" class="lbl">OTel spans, audit.jsonl, raw text</text>
+<h3>Three frozen splits, by exact task id</h3>
+<p>tau2-bench retail splits into a 74-task <code>train</code> pool and a 40-task <code>test</code> pool.
+The 40 test tasks are shuffled once (a fixed random seed) and cut into two fixed lists of exact task
+ids - not just a count - written into <code>configs/splits.yaml</code> so a benchmark update can never
+silently shift which tasks mean what:</p>
+<div class="pill-row">
+  <span class="pill">train &middot; 74 tasks &middot; the loop learns from these</span>
+  <span class="pill">held-out &middot; 20 tasks &middot; the gate scores on these</span>
+  <span class="pill">hidden &middot; 20 tasks &middot; opened once, for the final report</span>
+</div>
+<p class="small">A runtime guard refuses to run on the held-out/hidden split at all unless the exact task
+ids are named, and refuses the hidden ids specifically unless a flag explicitly opens them. The rule
+"never train on held-out or hidden tasks" is enforced by code, not just written down as a convention
+someone could forget.</p>
 
-  <rect class="box" x="880" y="20" width="220" height="56" fill="#eeeef7" stroke="#3d3d8a"/>
-  <text x="894" y="40" class="t">Self-heal control plane</text>
-  <text x="894" y="58" class="lbl">failures, fixes, curated set, gate, ledger</text>
-
-  <path class="wire" marker-end="url(#b)" d="M130,76 V100"/>
-  <path class="wire" marker-end="url(#b)" d="M990,76 V100"/>
-
-  <rect class="box" x="20" y="100" width="1080" height="60" fill="#fff" stroke="#b9b3a5"/>
-  <text x="34" y="122" class="t">Round artifacts (read-only)</text>
-  <text x="34" y="142" class="lbl">audit.jsonl + raw text &#183; failures.jsonl &#183; training_examples.jsonl &#183; curated dataset &#183; GateDecision &#183; metrics.jsonl &#183; patch ledger</text>
-
-  <path class="wire" marker-end="url(#b)" d="M560,160 V180"/>
-
-  <rect class="box" x="360" y="180" width="400" height="70" fill="#f8f1e7" stroke="#8a5a1f"/>
-  <text x="374" y="200" class="k" fill="#8a5a1f">CONTROL ROOM</text>
-  <text x="374" y="220" class="t">Round selector + player</text>
-  <text x="374" y="238" class="lbl">Streamlit. Replay by default, live optional.</text>
-
-  <path class="wire dash" d="M560,250 V270 H77 V288"/>
-  <text x="20" y="282" class="lbl">the player steps through these, left to right, for the round you picked</text>
-
-  <rect class="box" x="20" y="290" width="115" height="50" fill="#eef5f2" stroke="#2f6f5e"/>
-  <text x="30" y="308" class="k" fill="#2f6f5e">RUN</text>
-  <text x="30" y="326" class="lbl">student trace</text>
-
-  <rect class="box" x="143" y="290" width="115" height="50" fill="#f8f1e7" stroke="#8a5a1f"/>
-  <text x="153" y="308" class="k" fill="#8a5a1f">DETECT</text>
-  <text x="153" y="326" class="lbl">rule fired</text>
-
-  <rect class="box" x="266" y="290" width="115" height="50" fill="#f8f1e7" stroke="#8a5a1f"/>
-  <text x="276" y="308" class="k" fill="#8a5a1f">CLASSIFY</text>
-  <text x="276" y="326" class="lbl">root cause</text>
-
-  <rect class="box" x="389" y="290" width="115" height="50" fill="#fff" stroke="#b9b3a5"/>
-  <text x="399" y="308" class="k">ROUTE</text>
-  <text x="399" y="326" class="lbl">branch + why</text>
-
-  <rect class="box" x="512" y="290" width="115" height="50" fill="#f6eded" stroke="#7a3b3b"/>
-  <text x="522" y="308" class="k" fill="#7a3b3b">GENERATE</text>
-  <text x="522" y="326" class="lbl">student vs teacher</text>
-
-  <rect class="box" x="635" y="290" width="115" height="50" fill="#f6eded" stroke="#7a3b3b"/>
-  <text x="645" y="308" class="k" fill="#7a3b3b">CURATE</text>
-  <text x="645" y="326" class="lbl">curated rows</text>
-
-  <rect class="box" x="758" y="290" width="115" height="50" fill="#f6eded" stroke="#7a3b3b"/>
-  <text x="768" y="308" class="k" fill="#7a3b3b">TRAIN</text>
-  <text x="768" y="326" class="lbl">config + curve</text>
-
-  <rect class="box" x="881" y="290" width="115" height="50" fill="#eeeef7" stroke="#3d3d8a"/>
-  <text x="891" y="308" class="k" fill="#3d3d8a">GATE</text>
-  <text x="891" y="326" class="lbl">3 checks, numbers</text>
-
-  <rect class="box" x="1004" y="290" width="115" height="50" fill="#eeeef7" stroke="#3d3d8a"/>
-  <text x="1014" y="308" class="k" fill="#3d3d8a">OUTCOME</text>
-  <text x="1014" y="326" class="lbl">promote / reject</text>
-
-  <path class="wire" marker-end="url(#b)" d="M135,315 H141"/>
-  <path class="wire" marker-end="url(#b)" d="M258,315 H264"/>
-  <path class="wire" marker-end="url(#b)" d="M381,315 H387"/>
-  <path class="wire" marker-end="url(#b)" d="M504,315 H510"/>
-  <path class="wire" marker-end="url(#b)" d="M627,315 H633"/>
-  <path class="wire" marker-end="url(#b)" d="M750,315 H756"/>
-  <path class="wire" marker-end="url(#b)" d="M873,315 H879"/>
-  <path class="wire" marker-end="url(#b)" d="M996,315 H1002"/>
-</svg>
-
+<h3>The gate: eight checks, all required</h3>
+<p>A candidate is promoted only if every one of these passes. Any missing number, or too small a sample,
+fails its check - approving by default is not an option anywhere in this list.</p>
+<div class="tbl-wrap">
 <table>
-  <tr><th>Step</th><th>What a judge actually sees</th></tr>
-  <tr><td>Run</td><td>The student's full turn-by-turn trace &#8212; reasoning text, tool calls, tool
-    results, final outcome &#8212; rendered from the OTel spans and the raw-text sidecar, not a
-    summary of them.</td></tr>
-  <tr><td>Detect</td><td>Which <code>FailureDetector</code> rule fired (<code>loop_collapse</code>,
-    <code>tool_crash</code>, or <code>low_judge_score</code>) and the exact log line it fired on.</td></tr>
-  <tr><td>Classify</td><td><code>FailureClassifier</code>'s <code>root_cause</code>, confidence, and
-    its analysis text.</td></tr>
-  <tr><td>Route</td><td>Which of the 3 branches (tool fault / model fault / environment fault) our
-    router picked, and why.</td></tr>
-  <tr><td>Generate</td><td><b>Model-fault branch:</b> the teacher's full replay trace, from the first
-    wrong step onward, shown side by side with the student's original trace, each labeled
-    "student" / "teacher" &#8212; this is the direct answer to "what do the student and teacher tool
-    traces look like." <b>Tool-fault branch:</b> the before/after tool-spec diff from the patch
-    ledger instead.</td></tr>
-  <tr><td>Curate</td><td>The SFT rows actually built for training (<code>scripts/build_sft.py</code>'s
-    dedup, <code>sft_stats.json</code>) - browsable, not a row count. This is "what it's about to
-    learn," shown literally. CuratorKIT is optional per the hard rules and not currently used; if
-    it is added later it slots in here, curate-only.</td></tr>
-  <tr><td>Train</td><td>The run's LoRA config (rank, target modules, base model, dataset size) and a
-    loss curve if one was logged for that round.</td></tr>
-  <tr><td>Gate</td><td>AgentTune's task-accuracy A/B, AuditKIT's BFCL v3 grade, and AuditKIT's
-    pass^k / pass-hat-k, with the real numbers behind each. At least one recorded round is
-    deliberately a rejection (a planted bad candidate, or a genuinely regressed one), so a judge can
-    watch the gate say no instead of only ever seeing it say yes.</td></tr>
-  <tr><td>Outcome</td><td>The resulting action &#8212; adapter promoted to the HF Hub with a round
-    tag, or rolled back &#8212; plus the ledger entry that recorded it.</td></tr>
+<tr><th>#</th><th>Check</th><th>What it guards against</th></tr>
+<tr><td class="num">1</td><td>Comparable</td><td>Both systems ran the same held-out split, same task ids, same number of trials.</td></tr>
+<tr><td class="num">2</td><td>Valid runs</td><td>Enough non-infrastructure-error runs exist to trust the numbers at all.</td></tr>
+<tr><td class="num">3</td><td>pass<sup>1</sup></td><td>The candidate's single-attempt success rate didn't drop.</td></tr>
+<tr><td class="num">4</td><td>pass<sup>k</sup></td><td>Its reliability across repeated attempts didn't drop.</td></tr>
+<tr><td class="num">5</td><td>Target label</td><td>The specific failure this round targeted actually dropped, and by a real margin - a tie is treated as no measured improvement.</td></tr>
+<tr><td class="num">6</td><td>Non-target labels</td><td>Fixing one thing didn't make a different kind of failure worse.</td></tr>
+<tr><td class="num">7</td><td>BFCL v3</td><td>General tool-calling ability (an external benchmark, not our own tasks) didn't regress.</td></tr>
+<tr><td class="num">8</td><td>AgentTune's own gate</td><td>AgentTune's <code>DeploymentGate</code> itself approves - run with an explicit minimum-sample floor, since its own default would otherwise approve on too little data.</td></tr>
 </table>
+</div>
 
-<p><b>Replay mode (the only mode built):</b> steps through a completed round's real recorded
-artifacts - no short-delay live-tailing mode exists yet, and none is planned unless there is spare
-time after round 3, since Demo Day only needs it to be deterministic and cost nothing live. Built
-as a Streamlit app (<code>src/shipwright/control_room/app.py</code>), deployable to an HF Space
-(<code>infra/space/</code>).</p>
+<h3>Honest about sample size</h3>
+<p>20 held-out tasks is not a lot of tasks. A result like "20 of 20 passed" is a much weaker claim than
+it sounds - it's consistent with a true success rate anywhere from roughly 89% to 100%, not a guarantee
+of 100%. Every pass-rate number this project reports comes with a 95% confidence interval (the Wilson
+score interval, which holds up at small sample sizes where a naive calculation doesn't) alongside the
+raw percentage, specifically so a small-sample result never gets overstated as more precise than it is.</p>
+</section>
 
-<h2>Library integration map</h2>
-<p>Exact calls per stage, confirmed against the AgentTune and AuditKIT source (not just their
-docs) on 2026-11-09/10.</p>
+<section id="libs">
+<h2>8. Library integration map</h2>
+<p class="small">The hackathon's rule is that AgentTune and AuditKIT have to be the real engine, not a
+fallback dressed up to look like one. This table is the receipt: exactly which call does which job.</p>
+<div class="tbl-wrap">
 <table>
-  <tr><th>Stage</th><th>Call</th><th>Note</th></tr>
-  <tr><td>Run</td><td><code>AgentTune Project</code> rollout/harness, our own <code>sandbox_tools()</code></td>
-    <td>Tool execution in a subprocess; a crashing or hung tool cannot take down the rollout. This
-      sandbox is ours, not AgentTune's <code>isolate_tools()</code> - deliberately: it is generic
-      timeout/fallback infrastructure, not self-healing domain logic, so writing our own does not
-      carry the "library as fallback" risk a reimplementation of AgentTune's actual detect/classify/
-      generate/gate classes would (README.md, "Why no local fakes"). Tiny Aya has no hosted SDK with
-      structured tool-calling the way Claude's Messages API does - Cohere-family tool use is
-      prompt-level (a chat template renders the tools in, the model answers with a delimited action
-      block inside its raw text). AgentTune's rollout/harness already parses that action-block
-      format and already has chat-template repair logic for `CohereLabs/tiny-aya-fire`; the real
-      runner calls into that rather than a hand-written parser. This is also why logging the full
-      raw text matters so much here specifically: it is the only faithful record at all, not just
-      extra context for the classifier.</td></tr>
-  <tr><td>Observe</td><td>OTel spans (GenAI semantic conventions) &#8594; AgentTune
-    <code>EventLog.to_audit_records()</code> + our raw-text sidecar</td>
-    <td><code>to_audit_records()</code> emits one record per <code>TOOL_CALL</code> event only; it
-      never reads <code>TEXT</code>/<code>REASONING</code> events. We log the raw model output
-      ourselves or wrong-reasoning failures are unclassifiable. See <code>AGENTS.md</code> traces.</td></tr>
-  <tr><td>Detect</td><td><code>FailureDetector.scan_audit_log()</code></td>
-    <td>Rule-based only, byte-offset incremental: <code>loop_collapse</code> (stage repeated past
-      <code>max_revisits</code>), <code>tool_crash</code> (tool-call status is error),
-      <code>low_judge_score</code> (an upstream judge score under threshold &#8212; the detector does
-      not judge, it reads a score already written to the log).</td></tr>
-  <tr><td>Classify</td><td>subclassed <code>FailureClassifier</code></td>
-    <td>Default <code>ROOT_CAUSES</code> is a class attribute (wrong_tool, wrong_routing,
-      incomplete_reasoning, hallucinated_output, loop_collapse) and the default prompt truncates
-      context to 2000 characters. We subclass to feed the full raw-text sidecar, since the default
-      truncation can cut off exactly the reasoning text that explains a hallucinated_output failure.</td></tr>
-  <tr><td>Route</td><td>ours</td>
-    <td>Maps the 5 <code>ROOT_CAUSES</code> plus <code>tool_crash</code> onto tool fault / model fault /
-      environment fault. Not an AgentTune or AuditKIT concept &#8212; this is the piece AGENTS.md
-      calls out as ours to add.</td></tr>
-  <tr><td>Tool fix</td><td>our patch ledger</td>
-    <td>JSON diff (before/after tool spec), one-step rollback, re-verified by re-running the same
-      failing tasks through our own sandbox before the patch is marked resolved.</td></tr>
-  <tr><td>Model fix (wrong_tool, loop_collapse)</td><td><code>TrainingExampleGenerator</code></td>
-    <td>AgentTune's generator calls a teacher model itself (litellm) and scores completions with
-      TAC + TER. It only acts on these two root causes &#8212; everything else returns
-      <code>None</code>.</td></tr>
-  <tr><td>Model fix (wrong_routing, incomplete_reasoning, hallucinated_output)</td>
-    <td>our teacher-replay generator</td>
-    <td>Same <code>list[ClassifiedFailure] -&gt; list[TrainingExample]</code> contract as AgentTune's
-      generator, so it plugs into the same <code>SelfHealLoop</code> unchanged. This exists because
-      AgentTune's own generator has no coverage for 3 of our 5 model-fault labels, not because we are
-      duplicating something it already does.</td></tr>
-  <tr><td>Curate</td><td><code>scripts/build_sft.py</code>'s own dedup (first-wins on identical
-      rendered conversations)</td>
-    <td>CuratorKIT is optional per the hard rules and not currently used - see "CuratorKIT" below.
-      If added later, it would run curate-only (<code>generation_task=None</code>) through a thin
-      flatten/reconstruct adapter, since none of its exporters have a tool-call schema.</td></tr>
-  <tr><td>Train</td><td><code>create_distill_trainer(student="CohereLabs/tiny-aya-global", use_peft=True, ...)</code></td>
-    <td>TRL + PEFT backend, with chat-template repair logic already written for the Tiny Aya family.
-      Replay mix (old passing runs + new corrections) is our own concatenation before this call;
-      AgentTune does not mix datasets for you.</td></tr>
-  <tr><td>Gate</td><td><code>DeploymentGate.evaluate_decision()</code> AND AuditKIT
-    <code>episode_from_openai_messages</code>/<code>reliability()</code>/<code>ak.compare</code></td>
-    <td>AuditKIT has no deployment gate of its own &#8212; it produces <code>RunResult</code> /
-      <code>RunComparison</code> scores. Our wrapper approves a candidate only if all of: AgentTune's
-      own task-accuracy A/B regression check passes, with a floor well above its default of 1
-      (<code>min_valid_runs</code>, <code>configs/gate.yaml</code>); AuditKIT's
-      <code>reliability()</code> pass^k / pass-hat-k does not regress, and only counts as reliable
-      when <code>independent=True</code> (trials genuinely independent - the keyword is
-      <code>independent</code>, not <code>reset_confirmed</code>, a mistake caught once already,
-      AGENTS.md known traps); AuditKIT's <code>RunComparison.grade()</code> on BFCL v3 is not
-      <code>FAIL</code>, via tau2 traces adapted to OpenAI-style messages
-      (<code>eval_metrics.trace_to_openai_messages</code>) since AuditKIT ships a BFCL loader but
-      no tau2-bench loader.</td></tr>
-  <tr><td>Promote</td><td><code>RunResult.push_to_hub()</code> + HF Hub adapter tag</td>
-    <td>Satisfies the public-artifacts rule directly from AuditKIT's own output.</td></tr>
+<tr><th>Step</th><th>Real call</th><th>Note</th></tr>
+<tr><td>Detect</td><td><code>agenttune.decide.closed_loop.failure_detector.FailureDetector</code></td>
+  <td>Scans the audit log for loop-collapse and tool-crash patterns. Combined with tau2's own pass/fail,
+    not used alone.</td></tr>
+<tr><td>Classify</td><td><code>ShipwrightFailureClassifier</code>, a real subclass of AgentTune's <code>FailureClassifier</code></td>
+  <td>Subclassed specifically to feed the full raw-text trace instead of the default's 2000-character
+    truncation, which was cutting off exactly the reasoning text a wrong-reasoning failure needs.</td></tr>
+<tr><td>Retrain trigger</td><td><code>agenttune.decide.closed_loop.retraining_trigger.RetrainingTrigger</code></td>
+  <td>A buffer of pending model-fault failures plus safety conditions decides whether a round is even
+    worth training on, before any GPU time is spent.</td></tr>
+<tr><td>Train</td><td><code>agenttune.create_distill_trainer(...)</code></td>
+  <td>Builds a TRL <code>SFTTrainer</code> with LoRA under the hood. Our own trainer subclass adds a
+    memory optimization Tiny Aya's unusually large (262k-token) vocabulary needs, skipping logit
+    computation for the parts of a sequence never trained on.</td></tr>
+<tr><td>Gate</td><td><code>agenttune.decide.closed_loop.deployment_gate.DeploymentGate.evaluate_decision</code></td>
+  <td>One of the eight checks above; AgentTune's own class, not a reimplementation, called with an
+    explicit minimum-sample floor above its permissive default.</td></tr>
+<tr><td>Gate scoring</td><td>AuditKIT <code>agent_eval</code> (reliability, BFCL comparison)</td>
+  <td>AuditKIT has no deployment gate of its own - it produces the scores (pass<sup>k</sup>, BFCL grade)
+    that feed into the gate decision above.</td></tr>
 </table>
+</div>
+<p class="small">CuratorKIT (the third, optional Track 3 library) is not currently used: its exporters
+have no tool-call schema at all, so using it would mean flattening every trajectory to plain text and
+reconstructing it afterward. A decision on whether that's worth doing is still open with the hackathon
+organizers; the pipeline works correctly without it either way.</p>
+</section>
 
-<h2>Decisions, frozen 2026-11-09</h2>
-<ul>
-  <li><b>No Kafka.</b> The actual concurrency need is one embarrassingly parallel batch of tau2-bench
-    tasks per round, not a multi-consumer streaming system. Confirmed by reading the source: AgentTune
-    itself has zero pub/sub or event-bus concept anywhere &#8212; its own idiomatic pattern is a flat
-    polled JSONL plus a driven loop. Building a broker around a library that assumes none exists would
-    add infrastructure with no AgentTune touchpoint, under a budget that auto-kills billing at
-    Rs 3000/month.</li>
-  <li><b>OpenTelemetry is the capture and viewer layer. No external viewer (Langfuse or otherwise)
-    is wired in.</b> <code>traces.jsonl</code> is the loop's own input; <code>otel_spans.jsonl</code>
-    is built from it after each run for anyone who wants a GenAI-span view, OTLP export only when
-    <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> is set. See <code>docs/ops/observability.md</code>.</li>
-  <li><b>The gate is an AND of checks, never an OR, and missing data is a reject on every one of
-    them.</b> AgentTune's <code>DeploymentGate</code> alone (with its min-sample trap fixed) is
-    necessary but not sufficient &#8212; it only checks task accuracy. AuditKIT's BFCL regression
-    grade, pass^k reliability, and our own stricter valid-run accounting close the "did we break
-    something else," "is this actually more reliable, not just luckier," and "do we even have
-    enough real data to trust this" gaps.</li>
-  <li><b>CuratorKIT is optional and not currently used.</b> The real pipeline's dedup
-    (<code>scripts/build_sft.py</code>) and the gate's AuditKIT-backed thresholds already cover
-    what a submission needs; CuratorKIT's curate-only mode (dedup, hallucination-gate, label
-    balancing) would slot in as an extra pass on data already generated and already known to pass
-    the task oracle, not a required step.</li>
-</ul>
+<section id="observability">
+<h2>9. Seeing what happened</h2>
+<p>Every script run writes structured logs (one JSON line per event, searchable by run id), a small
+reproducibility file recording exactly what was run and on what code version, and OpenTelemetry spans -
+both live, while a script runs, and exported afterward from the saved trace. The two directions
+round-trip: spans built from a trace convert back to the same trace losslessly, checked automatically on
+every commit.</p>
+<p>When something breaks, <code>scripts/why.py &lt;run id&gt;</code> prints what failed, exactly where
+(which step, which task, which turn), the error and the model's last input and output, with direct links
+to the logs and the trace. <code>scripts/rerun.py</code> prints (or runs) the exact command to reproduce
+just that one failing task.</p>
+</section>
 
-<h2>Metrics, frozen before round 1</h2>
+<section id="infra">
+<h2>10. Where it runs</h2>
+<p>Nothing expensive runs on a laptop. Each team member has their own Cloud Run Job, built automatically
+from their branch, so a round can be reproduced by anyone without "works on my machine" ambiguity.</p>
+
+<pre class="mermaid">
+flowchart LR
+    A["Push to a branch"] --> B["Cloud Build trigger"]
+    B --> C["Harness image, pushed + tagged"]
+    C --> D["Cloud Run Job - one per person"]
+    D --> E["Run artifacts uploaded to GCS"]
+    D -.-> F["LoRA training, gate evals - on HF Jobs instead"]
+    E --> G["scripts/why.py - debug a run"]
+
+    classDef infra fill:#f1efe9,stroke:#6b6860,color:#1c1b17;
+    classDef run fill:#eaf3ee,stroke:#2f6f5e,color:#1c1b17;
+    class A,B,C infra;
+    class D,E,F,G run;
+</pre>
+
+<div class="tbl-wrap">
 <table>
-  <tr><th>Group</th><th>Metric</th><th>Used for</th></tr>
-  <tr><td>Main</td><td>Task success (pass^1), reliability (pass^k / pass-hat-k via AuditKIT
-    <code>reliability()</code>, only claimed when <code>reset_confirmed=True</code>), failure rate per
-    label</td><td>Gate, headline result</td></tr>
-  <tr><td>Tool calls</td><td>Tool choice accuracy, schema-valid arguments (AuditKIT
-    <code>ToolCallValidity</code>), <code>ToolCallF1</code>, steps per task,
-    <code>AgentLoopDetection</code> as a cross-check against AgentTune's own loop rule</td><td>Diagnosis, efficiency</td></tr>
-  <tr><td>Regression</td><td>BFCL v3 (<code>ak.load_bfcl</code> + <code>ToolCallF1</code>), non-target
-    labels</td><td>Gate (no forgetting)</td></tr>
-  <tr><td>Loop</td><td>Fix acceptance rate, failures fixed per round, cost and GPU hours per round</td><td>Write-up</td></tr>
-  <tr><td>Main claim</td><td>Gain from tool fixes vs gain from weight fixes, per GPU hour</td><td>Our finding</td></tr>
+<tr><th>What</th><th>Runs on</th><th>Billed to</th></tr>
+<tr><td>Live agent runs (collecting traces)</td><td>Cloud Run Jobs, one per person, GCP</td><td>GCP budget (~$0.09/hour of CPU)</td></tr>
+<tr><td>LoRA training, GPU gate evals</td><td>HF Jobs</td><td>shared HF credits</td></tr>
+<tr><td>Teacher / judge / simulated customer calls</td><td>Vertex AI</td><td>GCP budget, not HF credits</td></tr>
 </table>
+</div>
+<p class="small">The GCP budget has a hard cap: billing switches off automatically for the entire project
+at a fixed monthly limit, with alerts well before that point. This is a real constraint the design
+respects deliberately - no 24/7 background process, every expensive step is a batch job triggered once
+per round and nothing more.</p>
+</section>
 
-<h2>Before round 1 (needs a human)</h2>
-<p>Scope, models and gate thresholds are frozen (2026-11-09/10, <code>AGENTS.md</code>,
-<code>docs/notes.md</code>, <code>configs/gate.yaml</code>): tau2-bench retail only, 40/20/20 task
-split, 3 rounds, DeepSeek V4.1 Flash as teacher and gpt-oss-120b as judge and simulated customer,
-both via Vertex AI - not Claude, see "Teacher model: do not use Claude" in <code>AGENTS.md</code> for
-why that is a hard rule, not a preference. What is left is literal values and one account, not
-judgment calls:</p>
-<ul>
-  <li>Vertex AI access on the <code>lexsi-hackathon</code> GCP project (auth is a <code>gcloud</code>
-    access token, not an API key - <code>AGENTS.md</code>, "Infrastructure"). Set a budget alert
-    before the first real round.</li>
-  <li>The HF username/org and GitHub org that <code>docs/setup/hf-setup.md</code>,
-    <code>docs/setup/cloud-runs.md</code> and <code>infra/space/README.md</code> currently leave as
-    a placeholder.</li>
-</ul>
+<section id="demo">
+<h2>11. Watching the loop: control-room</h2>
+<p>A before/after comparison - one input, two model outputs side by side - is the natural demo for a team
+that trained one model once. It's the wrong demo here, because it hides the one thing that makes a
+self-healing system worth building at all: that it's a loop, with a gate in the middle that's allowed to
+say no. <b>control-room</b> is built instead to show exactly that - a read-only replay of a real round's
+actual artifacts, step by step, including a genuine gate rejection when the numbers don't support
+promotion. It never calls a model, a trainer, or the gate itself; it only reads what the real pipeline
+already wrote.</p>
+<div class="card">
+<p class="small" style="margin:0"><b>Status:</b> runs locally today (<code>streamlit run src/shipwright/control_room/app.py</code>).
+A public Hugging Face Space is built and ready to deploy (<code>infra/space/</code>) but currently
+blocked on a platform requirement: HF now requires a PRO subscription to host any live-server Space
+(Docker or Gradio), not just a private one.</p>
+</div>
+</section>
 
-<h2>Open questions</h2>
-<p>Resolved: simulated-customer and teacher/judge model (DeepSeek V4.1 Flash + gpt-oss-120b via
-Vertex AI, team choice 2026-11-09, revised away from Claude first - license terms, not cost - and
-then from an earlier HF-router/Groq choice, see <code>AGENTS.md</code>), task-pool sizing (40/20/20),
-Hinglish scope (stretch goal, not 1.0), the AuditKIT/tau2-bench adapter (<code>eval_metrics.py</code>,
-done). What is left:</p>
-<ul>
-  <li>Real cost per round, now that it has actually run once: Vertex pricing for two models in
-    three roles was sized against an estimate before round 1, not a measured round
-    (<code>src/shipwright/llm/costs.py</code> tracks it going forward).</li>
-</ul>
+<section id="status">
+<h2>12. What's real right now</h2>
+<div class="tbl-wrap">
+<table>
+<tr><th>Piece</th><th>Status</th><th>Detail</th></tr>
+<tr><td>Baseline run against tau2-bench retail</td><td><span class="badge done">done</span></td><td>Real, not simulated - see the numbers above.</td></tr>
+<tr><td>Detect + classify</td><td><span class="badge done">done</span></td><td>Real AgentTune classes, run on real failures.</td></tr>
+<tr><td>Tool-fix round 1</td><td><span class="badge done">done</span></td><td>35 patches applied and verified.</td></tr>
+<tr><td>Teacher-replay data</td><td><span class="badge done">done</span></td><td>Built for real failures needing a weight fix.</td></tr>
+<tr><td>Agent-R data</td><td><span class="badge part">verified offline</span></td><td>Full pipeline runs end to end on a zero-cost dry run; not yet run against real tasks.</td></tr>
+<tr><td>Frozen splits + leak guard</td><td><span class="badge done">done</span></td><td>Exact task ids frozen, enforced in code.</td></tr>
+<tr><td>LoRA training</td><td><span class="badge pending">pending</span></td><td>Needs real GPU time; not yet spent.</td></tr>
+<tr><td>A real gate decision</td><td><span class="badge pending">pending</span></td><td>Logic verified offline; needs a real trained candidate to score.</td></tr>
+<tr><td>control-room demo</td><td><span class="badge part">local only</span></td><td>Public HF Space blocked on a PRO subscription requirement.</td></tr>
+</table>
+</div>
+</section>
+
+<section id="layout">
+<h2>13. Repo layout</h2>
+<div class="pill-row">
+  <span class="pill">src/shipwright/heal/</span>
+  <span class="pill">src/shipwright/llm/</span>
+  <span class="pill">src/shipwright/observability/</span>
+  <span class="pill">src/shipwright/control_room/</span>
+  <span class="pill">scripts/</span>
+  <span class="pill">configs/</span>
+  <span class="pill">docs/setup, pipeline, ops</span>
+</div>
+<p class="small"><code>heal/</code> is the self-healing domain logic (classify, route, the tool ledger,
+evaluation metrics, the gate). <code>llm/</code> is model-call plumbing (which provider, request
+shaping, cost tracking). <code>observability/</code> is logging and tracing. Tests mirror this same
+structure. <code>scripts/</code> stays a flat set of runnable entry points on purpose - see
+<code>AGENTS.md</code> for why. Full detail: <code>AGENTS.md</code>, "Repo layout."</p>
+</section>
+
+<section id="glossary">
+<h2>14. Glossary</h2>
+<dl class="glossary">
+  <dt>AgentTune</dt><dd>Lexsi Labs' library for the actual self-healing mechanics: detecting failures, classifying why they happened, deciding when to retrain, and gating redeployment. The required engine for this track, not an optional helper.</dd>
+  <dt>AuditKIT</dt><dd>Lexsi Labs' evaluation library: scores a run's reliability across repeated attempts and compares it against an external tool-calling benchmark (BFCL). Produces the numbers the gate reads; has no gate of its own.</dd>
+  <dt>LoRA</dt><dd>Low-Rank Adaptation: a way to fine-tune a model by training a small add-on (here, about 30 million parameters) instead of all 3.35 billion, far cheaper and faster, and easy to swap out if it turns out worse.</dd>
+  <dt>tau2-bench</dt><dd>A benchmark for tool-using customer-support agents: real multi-turn conversations, a simulated customer, and a grader that checks the actual end state of the system, not just the words in the reply.</dd>
+  <dt>MCTS (Monte Carlo Tree Search)</dt><dd>A search method that tries many possible continuations of a situation and keeps track of which ones worked out, used here to find both a failed and a successful attempt at the same task that share a common starting point.</dd>
+  <dt>pass<sup>1</sup> / pass<sup>k</sup></dt><dd>Pass<sup>1</sup> is the success rate on a single attempt; pass<sup>k</sup> is whether <i>every one</i> of k repeated attempts succeeds - a stricter measure of reliability, not just luck on one try.</dd>
+  <dt>Wilson score interval</dt><dd>A way of stating a success rate with honesty about sample size: "20 of 20 passed" becomes "consistent with a true rate of 89% to 100%," which is a more accurate claim than a bare percentage from a small sample.</dd>
+  <dt>BFCL</dt><dd>The Berkeley Function-Calling Leaderboard, an external, independent benchmark for tool-calling ability - used here purely as a regression check, so a fix for one problem can't be quietly making general tool use worse.</dd>
+  <dt>Closed-model training restriction</dt><dd>The terms of service of closed-API models (Claude, GPT, Gemini) forbid using their output to train other models. A teacher model that generates corrective training examples is doing exactly that, which is why this project uses only open-weight models in any role that touches training data.</dd>
+</dl>
+</section>
+
+<footer>
+Lexsi AI Safety and Alignment Hackathon, Track 3, problem statement 8. Source:
+<a href="https://github.com/tejasnafde/Shipwright">github.com/tejasnafde/Shipwright</a>.
+Background and research notes: <code>docs/notes.md</code>. Rules for coding agents: <code>AGENTS.md</code>.
+</footer>
+
 </main>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "neutral",
+    flowchart: { curve: "basis" },
+    themeVariables: { fontFamily: "Public Sans, sans-serif" }
+  });
+</script>
 </body>
 </html>
