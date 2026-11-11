@@ -106,6 +106,8 @@ def test_call_with_refresh_retries_once_on_401():
 
 
 def test_call_with_refresh_waits_and_retries_on_429():
+    from shipwright.observability import retry
+
     tokens = vertex.TokenProvider(fetch=lambda: "tok")
     waits, attempts = [], []
 
@@ -119,7 +121,7 @@ def test_call_with_refresh_waits_and_retries_on_429():
         return "ok"
 
     assert vertex.call_with_refresh(call, {"model": TEACHER, "messages": []}, tokens, sleep=waits.append) == "ok"
-    assert len(waits) == 2 and waits[0] >= vertex.RATE_LIMIT_WAITS[0]
+    assert len(waits) == 2
 
     def always(**kw):
         raise RateLimitError()
@@ -127,7 +129,7 @@ def test_call_with_refresh_waits_and_retries_on_429():
     waits.clear()
     with pytest.raises(RateLimitError):
         vertex.call_with_refresh(always, {"model": TEACHER, "messages": []}, tokens, sleep=waits.append)
-    assert len(waits) == len(vertex.RATE_LIMIT_WAITS)
+    assert len(waits) == retry.LLM.attempts - 1
 
 
 def test_gcloud_token_uses_named_config_not_adc(monkeypatch):
@@ -283,10 +285,29 @@ def test_metadata_token_request_and_parse():
     assert vertex.metadata_token(fake_get) == ("ya29.meta", 3599.0)
     assert seen["url"] == vertex.METADATA_TOKEN_URL
     assert seen["headers"] == {"Metadata-Flavor": "Google"}
-    with pytest.raises(RuntimeError, match="metadata server"):
+    with pytest.raises(RuntimeError, match="HTTP 404"):  # raised as is, for the retry helper
         vertex.metadata_token(lambda *a, **k: _Resp({}, status=404))
     with pytest.raises(RuntimeError, match="no access_token"):
         vertex.metadata_token(lambda *a, **k: _Resp({"expires_in": 10}))
+
+
+def test_token_provider_retries_a_transient_fetch_error(monkeypatch):
+    from shipwright.observability import retry
+
+    monkeypatch.setattr(retry.time, "sleep", lambda s: None)
+    calls = []
+
+    class ReadTimeout(Exception):
+        pass
+
+    def fetch():
+        calls.append(1)
+        if len(calls) == 1:
+            raise ReadTimeout()
+        return "tok"
+
+    assert vertex.TokenProvider(fetch=fetch).get() == "tok"
+    assert len(calls) == 2
 
 
 def test_on_gcp_selects_metadata_over_gcloud(monkeypatch):
@@ -320,32 +341,22 @@ def test_token_with_expiry_refreshes_before_it_expires():
     assert tokens.get() == "m3" and tokens.fetches == 3
 
 
-def test_call_with_refresh_retries_400_only_when_asked():
+def test_call_with_refresh_retries_400_only_for_the_user_policy():
+    from shipwright.observability import retry
+
     tokens = vertex.TokenProvider(fetch=lambda: "tok")
-    waits, attempts = [], []
+    waits = []
 
     class BadRequestError(Exception):
         status_code = 400
 
-    def flaky(**kw):
-        attempts.append(1)
-        if len(attempts) < 2:
-            raise BadRequestError()
-        return "ok"
-
-    kwargs = {"model": vertex.USER_MODEL, "messages": []}
-    assert vertex.call_with_refresh(flaky, kwargs, tokens, sleep=waits.append,
-                                    bad_request_waits=vertex.BAD_REQUEST_WAITS) == "ok"
-    assert len(waits) == 1
-
     def always(**kw):
         raise BadRequestError()
 
-    waits.clear()
+    kwargs = {"model": vertex.USER_MODEL, "messages": []}
     with pytest.raises(BadRequestError):
-        vertex.call_with_refresh(always, kwargs, tokens, sleep=waits.append,
-                                 bad_request_waits=vertex.BAD_REQUEST_WAITS)
-    assert len(waits) == len(vertex.BAD_REQUEST_WAITS)
+        vertex.call_with_refresh(always, kwargs, tokens, sleep=waits.append, policy=retry.LLM_USER)
+    assert len(waits) == retry.LLM_USER.attempts - 1
 
     waits.clear()
     with pytest.raises(BadRequestError):  # the agent and teacher get no 400 retry

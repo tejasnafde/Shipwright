@@ -19,7 +19,7 @@ import json
 import threading
 from typing import Any, Callable
 
-from shipwright.observability import instrument
+from shipwright.observability import instrument, retry
 from shipwright.llm import vertex
 from shipwright.llm.costs import UsageMeter
 from shipwright.llm.prompted_tools import convert_response, is_prompted_model, prepare_request
@@ -70,21 +70,15 @@ def strip_json_fences(response: Any) -> None:
             choice.message.content = text.strip()
 
 
-# tau2's NL-assertion judge runs json.loads on the reply; gpt-oss sometimes answers with empty
-# or non-JSON text, and the whole run became an infra error (2026-11-11). Ask again this often.
-NL_JUDGE_JSON_RETRIES = 2
-
-
-def is_json_reply(response: Any) -> bool:
-    """True when every choice's content parses as JSON (what tau2's NL judge expects)."""
-
+def require_json_reply(response: Any) -> None:
+    """Raise ``json.JSONDecodeError`` unless every choice's content is JSON. tau2's NL judge
+    json.loads the reply, and gpt-oss sometimes answers with empty text (2026-11-11: 3 runs lost
+    as infra errors). The retry helper treats that error as transient: the judge is asked again."""
     choices = getattr(response, "choices", None) or []
+    if not choices:
+        raise json.JSONDecodeError("reply has no choices", "", 0)
     for choice in choices:
-        try:
-            json.loads(choice.message.content or "")
-        except ValueError:
-            return False
-    return bool(choices)
+        json.loads(choice.message.content or "")
 
 
 def call_role(original: dict, kwargs: dict, agent_model: str | None, user_model: str | None) -> str:
@@ -135,21 +129,23 @@ def install(
                 attempts[0] += 1
                 return real(*args, **kw)
 
-            bad_waits = vertex.BAD_REQUEST_WAITS if role in ("user", "judge") else ()
-            if fake_completion is None and vertex.is_vertex_model(model):
-                do = lambda: vertex.call_with_refresh(counted, kwargs, bad_request_waits=bad_waits)  # noqa: E731
-            else:
-                do = lambda: counted(**kwargs)  # noqa: E731
+            policy = retry.LLM_USER if role in ("user", "judge") else retry.LLM
             nl_judge = is_nl_judge_request(kwargs)
-            for judge_try in range(1 + (NL_JUDGE_JSON_RETRIES if nl_judge else 0)):
-                response = instrument.llm_call(role, model, kwargs, do, retries=lambda: max(0, attempts[0] - 1))
-                if meter is not None:
-                    meter.add(role, model, getattr(response, "usage", None))
-                if not nl_judge:
-                    break
-                strip_json_fences(response)
-                if is_json_reply(response):
-                    break
+
+            def once() -> Any:
+                if fake_completion is None and vertex.is_vertex_model(model):
+                    resp = vertex.call_with_refresh(counted, kwargs, policy=retry.Policy(attempts=1))
+                else:
+                    resp = counted(**kwargs)
+                if meter is not None:  # every reply that came back is billed, also one retried below
+                    meter.add(role, model, getattr(resp, "usage", None))
+                if nl_judge:
+                    strip_json_fences(resp)
+                    require_json_reply(resp)  # tau2 json.loads it: a non-JSON reply is retried
+                return resp
+
+            do = lambda: retry.call_with_retry(once, policy=policy, what=f"llm {role} {model}")  # noqa: E731
+            response = instrument.llm_call(role, model, kwargs, do, retries=lambda: max(0, attempts[0] - 1))
             if prompted:
                 convert_response(response, context)
             sanitize_tool_calls(response)

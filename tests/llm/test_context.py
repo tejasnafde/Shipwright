@@ -89,15 +89,18 @@ def test_strip_json_fences():
     assert not is_nl_judge_request({"messages": [{"role": "system", "content": "You are a user."}]})
 
 
-def test_is_json_reply():
+def test_require_json_reply():
+    import json
     from types import SimpleNamespace as NS
 
-    from shipwright.llm.patches import is_json_reply
+    import pytest
+
+    from shipwright.llm.patches import require_json_reply
 
     def reply(text):
         return NS(choices=[NS(message=NS(content=text))])
 
-    assert is_json_reply(reply('{"results": []}'))
-    assert not is_json_reply(reply(""))
-    assert not is_json_reply(reply("I think the agent did well."))
-    assert not is_json_reply(NS(choices=[]))
+    require_json_reply(reply('{"results": []}'))
+    for bad in (reply(""), reply("I think the agent did well."), NS(choices=[])):
+        with pytest.raises(json.JSONDecodeError):
+            require_json_reply(bad)

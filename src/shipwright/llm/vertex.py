@@ -38,6 +38,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from shipwright.observability import retry
+
 PREFIX = "vertex/"
 DEFAULT_PROJECT = "lexsi-hackathon"
 DEFAULT_GCLOUD_CONFIG = "personal"
@@ -46,6 +48,10 @@ HOMEBREW_GCLOUD = "/opt/homebrew/share/google-cloud-sdk/bin/gcloud"
 # Tokens from gcloud live about 1 hour; refresh well before that.
 TOKEN_MAX_AGE_S = 45 * 60
 METADATA_TOKEN_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+# Token fetches (metadata server, gcloud) are short calls: retry them quickly.
+TOKEN_POLICY = retry.Policy(attempts=4, base=1.0, max_wait=10.0, max_total_wait=30.0)
+
+
 # Refresh a metadata token this long before it expires.
 TOKEN_EXPIRY_MARGIN_S = 5 * 60
 # gpt-oss spends tokens on reasoning before it answers: a small max_tokens leaves no answer.
@@ -122,16 +128,15 @@ def on_gcp() -> bool:
 
 
 def metadata_token(get: Callable[..., Any] | None = None) -> tuple[str, float]:
-    """(access token, seconds until it expires) for the attached service account."""
+    """(access token, seconds until it expires) for the attached service account.
+
+    HTTP and connection errors propagate as they are, so the retry helper can tell a transient one."""
     import httpx
 
     get = get or httpx.get
-    try:
-        r = get(METADATA_TOKEN_URL, headers={"Metadata-Flavor": "Google"}, timeout=10)
-        r.raise_for_status()
-        body = r.json()
-    except Exception as e:  # noqa: BLE001
-        raise RuntimeError(f"metadata server token failed: {type(e).__name__}: {str(e)[:200]}") from None
+    r = get(METADATA_TOKEN_URL, headers={"Metadata-Flavor": "Google"}, timeout=10)
+    r.raise_for_status()
+    body = r.json()
     token = str(body.get("access_token") or "")
     if not token:
         raise RuntimeError("metadata server returned no access_token")
@@ -172,7 +177,7 @@ class TokenProvider:
 
                 source = getattr(self._fetch, "__name__", "fetch")
                 with instrument.external("token_fetch", source, refresh=self.fetches > 0):
-                    got = self._fetch()
+                    got = retry.call_with_retry(self._fetch, policy=TOKEN_POLICY, what=f"token_fetch {source}")
                 if isinstance(got, tuple):
                     self._token, expires_in = got
                     self._ttl = max(0.0, min(self._max_age, expires_in - TOKEN_EXPIRY_MARGIN_S))
@@ -224,47 +229,24 @@ def is_auth_error(exc: BaseException) -> bool:
     return getattr(exc, "status_code", None) == 401 or "401" in type(exc).__name__
 
 
-def is_rate_limit(exc: BaseException) -> bool:
-    return getattr(exc, "status_code", None) == 429 or "RateLimit" in type(exc).__name__
-
-
-# Waits (seconds) before the retries of a 429. Vertex gpt-oss-120b MaaS answers 429 at 4 to 6
-# concurrent tau2 runs (2026-11-11: 15 of 74 baseline runs lost as infra errors with no retry).
-RATE_LIMIT_WAITS = (2.0, 5.0, 10.0, 20.0, 40.0)
-# Waits before the retries of a 400 from the user simulator or judge. Vertex gpt-oss-120b answers
-# some valid requests with a 400 that passes on a retry (2026-11-11: 9 bake-off runs lost).
-BAD_REQUEST_WAITS = (2.0, 5.0)
-
-
-def is_bad_request(exc: BaseException) -> bool:
-    return getattr(exc, "status_code", None) == 400 or "BadRequest" in type(exc).__name__
-
-
 def call_with_refresh(call: Callable[..., Any], kwargs: dict, tokens: TokenProvider | None = None,
-                      sleep: Callable[[float], None] = time.sleep,
-                      bad_request_waits: tuple[float, ...] = ()) -> Any:
-    """Run ``call(**route_kwargs(kwargs))``; on a 401, get a new token and retry once; on a 429,
-    wait and retry (RATE_LIMIT_WAITS, with jitter); on a 400, wait and retry once per entry of
-    ``bad_request_waits`` (empty by default: only the user simulator and judge pass it)."""
-    import random
-
+                      sleep: Callable[[float], None] = time.sleep, policy: Any = None) -> Any:
+    """Run ``call(**route_kwargs(kwargs))``; on a 401, get a new token and try again at once.
+    Transient errors (429, 5xx, connection errors) retry through ``shipwright.observability.retry``
+    with ``policy`` (default ``retry.LLM``; the user simulator and judge pass ``retry.LLM_USER``,
+    which also retries the gpt-oss 400s)."""
     tokens = tokens or provider()
-    refreshed = False
-    waits = list(RATE_LIMIT_WAITS)
-    bad_waits = list(bad_request_waits)
-    while True:
+
+    def once() -> Any:
         try:
             return call(**route_kwargs(kwargs, tokens))
         except Exception as e:  # noqa: BLE001
-            if is_auth_error(e) and not refreshed:
-                tokens.invalidate()
-                refreshed = True
-            elif is_rate_limit(e) and waits:
-                sleep(waits.pop(0) * (1 + random.random() / 2))
-            elif is_bad_request(e) and bad_waits:
-                sleep(bad_waits.pop(0) * (1 + random.random() / 2))
-            else:
+            if not is_auth_error(e):
                 raise
+            tokens.invalidate()
+            return call(**route_kwargs(kwargs, tokens))
+
+    return retry.call_with_retry(once, policy=policy or retry.LLM, what=f"llm {kwargs.get('model')}", sleep=sleep)
 
 
 def endpoint(model: str, hf_token: str | None, hf_base: str) -> tuple[str, str, Callable[[], dict]]:
