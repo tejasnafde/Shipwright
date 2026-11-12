@@ -89,6 +89,7 @@ def parse_options() -> argparse.Namespace:
                         help="score BFCL alone before the gate; stop if that check cannot pass")
     parser.add_argument("--gate-flavor", default=GATE_FLAVOR,
                         help="GPU of the gate job: a busy pool can leave an A10G waiting for an hour, an l40sx1 costs $0.30/h more")
+    parser.add_argument("--skip-doctor", action="store_true", help="do not run the free preflight checks first")
     parser.add_argument("--launch", action="store_true", help="run the steps (spends credits); without it, plan only")
     options = parser.parse_args()
     # What run_round's cloud stage reads from its options.
@@ -121,6 +122,14 @@ def previous_recipe(round_number: int) -> recipe_module.Recipe:
             recipe.reasons = []
             return recipe
     return recipe_module.Recipe()
+
+
+def adapter_revision_of(round_number: int) -> str:
+    """The adapter revision the system of that round serves (its config in configs/systems/)."""
+    import yaml
+
+    system = yaml.safe_load((ROOT / "configs" / "systems" / f"{candidate_name(round_number)}.yaml").read_text())
+    return system["adapter"]["revision"]
 
 
 def solvable_task_ids(pool: list[str]) -> list[str]:
@@ -611,6 +620,16 @@ def main() -> int:
     if fetch_gate_decision(options.from_round)["decision"] == "promote":
         print(f"round {options.from_round} was promoted: nothing to heal. Run scripts/promote.py with its decision.")
         return 0
+
+    if options.launch and not options.skip_doctor:
+        import doctor
+
+        adapter_revision = adapter_revision_of(options.from_round)
+        checks = doctor.run_checks(cloud=False, adapter_revision=adapter_revision)
+        doctor.print_checks(checks)
+        if any(check.status == "FAIL" for check in checks):
+            print("\nThe preflight found problems: nothing was started and nothing was spent. Fix them, or --skip-doctor.")
+            return 2
 
     spent, last_round_cost, rounds, outcome = 0.0, None, [], "no promotion"
     for round_index in range(options.max_rounds):

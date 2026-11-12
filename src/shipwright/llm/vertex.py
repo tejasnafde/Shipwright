@@ -110,10 +110,27 @@ def gcloud_binary() -> str:
     return shutil.which("gcloud") or "gcloud"
 
 
+def gcloud_config_name(binary: str) -> str:
+    """$SHIPWRIGHT_GCLOUD_CONFIG, else `lexsi` if that config exists on this machine, else `personal` (Tejas's).
+
+    The same rule as ``control_room.gcs_runs.gcloud_config``: a laptop that has the team's `lexsi` config needs no
+    variable (before 2026-11-13 the default was `personal`, and a local teacher call crashed on every teammate's machine)."""
+    from_environment = os.environ.get("SHIPWRIGHT_GCLOUD_CONFIG")
+    if from_environment:
+        return from_environment
+    try:
+        listed = subprocess.run([binary, "config", "configurations", "list", "--format=value(name)"],
+                                capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return DEFAULT_GCLOUD_CONFIG
+    return "lexsi" if "lexsi" in listed.stdout.split() else DEFAULT_GCLOUD_CONFIG
+
+
 def gcloud_token() -> str:
     """A fresh access token from gcloud, with the named config (never ADC)."""
-    gcloud_config = os.environ.get("SHIPWRIGHT_GCLOUD_CONFIG") or DEFAULT_GCLOUD_CONFIG
-    command = [gcloud_binary(), f"--configuration={gcloud_config}", "auth", "print-access-token"]
+    binary = gcloud_binary()
+    gcloud_config = gcloud_config_name(binary)
+    command = [binary, f"--configuration={gcloud_config}", "auth", "print-access-token"]
     try:
         completed_process = subprocess.run(command, capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as run_error:
