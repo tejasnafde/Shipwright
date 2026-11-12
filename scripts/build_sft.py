@@ -49,6 +49,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         " failed are repeated --boost times in the data, so the next adapter learns from its own failures",
     )
     parser.add_argument("--boost", type=int, default=1, help="with --boost-from: copies of each failed task's examples")
+    parser.add_argument(
+        "--general-replay", type=Path, default=None,
+        help="a jsonl of general function-calling examples (scripts/build_bfcl_replay.py) added to the data as they are:"
+        " they keep the adapter from answering in words where a function should be called (BFCL fell 43 to 34 without them)",
+    )
     parser.add_argument("--max-replay", type=int, default=None, help="cap on replay examples")
     parser.add_argument("--allow-split", action="store_true", help="accept runs not on the train split")
     parser.add_argument(
@@ -303,6 +308,13 @@ def main(argv: list[str] | None = None) -> int:
             f" {len(boosted_records)} examples repeated"
         )
 
+    general_replay_count = 0
+    if build_options.general_replay:
+        general_records = read_json_lines(build_options.general_replay)
+        kept_records = kept_records + general_records
+        general_replay_count = len(general_records)
+        notes.append(f"general replay: {general_replay_count} examples from {build_options.general_replay}")
+
     with open(output_directory / "sft.jsonl", "w") as sft_file:
         for record in kept_records:
             sft_file.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -320,6 +332,7 @@ def main(argv: list[str] | None = None) -> int:
             "boost": build_options.boost if boosted_task_ids else 1,
             "boosted_tasks": boosted_task_ids,
             "examples_before_boost": examples_before_boost,
+            "general_replay": general_replay_count,
         },
     )
     (output_directory / "sft_stats.json").write_text(json.dumps(statistics, indent=2))

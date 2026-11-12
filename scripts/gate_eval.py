@@ -94,6 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="no gate: run only the candidate on --task-ids of the train split (k = --trials) and push the traces. The"
         " failures of the deployed or latest candidate on train tasks are the next round's corrective data",
     )
+    parser.add_argument(
+        "--bfcl-screen", action="store_true",
+        help="no gate: serve only the candidate, run only BFCL (the gate's own 300 samples) and push the score. About 5"
+        " minutes: it tells whether the BFCL check can pass before the 30 minute gate is paid for",
+    )
     parser.add_argument("--task-ids", nargs="*", default=None, help="with --train-eval: the train task ids to run")
     parser.add_argument("--trials", type=int, default=1, help="with --train-eval: trials per task")
     parser.add_argument("--in-job", action="store_true")
@@ -504,10 +509,13 @@ def run_server_plan(
                 role, system = system_by_name[system_name]
                 run_directory = output_directory / system_name
                 run_directory.mkdir(parents=True, exist_ok=True)
-                baseline_exit_code = run(
-                    baseline_cmd(gate_config, system, patch_ids_by_role[role], run_directory, gate_options),
-                    log_path=run_directory / "baseline.log",
-                )
+                if gate_options.bfcl_screen:
+                    baseline_exit_code = None  # no tau2 runs in a BFCL screen
+                else:
+                    baseline_exit_code = run(
+                        baseline_cmd(gate_config, system, patch_ids_by_role[role], run_directory, gate_options),
+                        log_path=run_directory / "baseline.log",
+                    )
                 bfcl_result = None
                 if not gate_options.train_eval:
                     try:
@@ -532,7 +540,7 @@ def serve_and_run(
     from shipwright.heal.systems import serve_plan
 
     serve_mode = (gate_config.get("serve") or {}).get("mode", "lora")
-    if gate_options.train_eval:
+    if gate_options.train_eval or gate_options.bfcl_screen:
         systems = {"candidate": systems["candidate"]}  # no current system: there is no comparison
     system_by_name = {system["name"]: (role, system) for role, system in systems.items()}
     all_systems = list(systems.values())
@@ -581,7 +589,7 @@ def push(output_directory: Path, gate_options: argparse.Namespace, row_file: Pat
             repo_id=gate_options.runs_repo,
             repo_type="dataset",
             path_in_repo=path_in_repo,
-            commit_message=f"{'train-eval' if gate_options.train_eval else 'gate'} round {gate_options.round}: results",
+            commit_message=f"{'bfcl-screen' if gate_options.bfcl_screen else 'train-eval' if gate_options.train_eval else 'gate'} round {gate_options.round}: results",
             ignore_patterns=["**/tau2/**"],  # tau2's own results.json duplicates traces.jsonl
         )
 
@@ -742,10 +750,12 @@ def evaluate_systems(gate_options: argparse.Namespace) -> int:
         for role, system in systems.items():
             run_directory = output_directory / system["name"]
             run_directory.mkdir(parents=True, exist_ok=True)
-            baseline_exit_code = run(
-                baseline_cmd(gate_config, system, patch_ids_by_role[role], run_directory, gate_options),
-                log_path=run_directory / "baseline.log",
-            )
+            baseline_exit_code = None
+            if not gate_options.bfcl_screen:
+                baseline_exit_code = run(
+                    baseline_cmd(gate_config, system, patch_ids_by_role[role], run_directory, gate_options),
+                    log_path=run_directory / "baseline.log",
+                )
             status_by_system[system["name"]] = {
                 "baseline_exit": baseline_exit_code,
                 "bfcl": run_bfcl(gate_config, system, run_directory, gate_options),
@@ -757,10 +767,11 @@ def evaluate_systems(gate_options: argparse.Namespace) -> int:
             print(f"serving or running failed: {serve_error}", file=sys.stderr)
             status_by_system = {"_error": str(serve_error)[:1000]}
 
-    if gate_options.train_eval:
+    if gate_options.train_eval or gate_options.bfcl_screen:
         (output_directory / "run_status.json").write_text(json.dumps(status_by_system, indent=1, default=str))
         if gate_options.in_job and not gate_options.no_push:
-            push(output_directory, gate_options, None, f"{systems['candidate']['name']}-train")
+            suffix = "-bfcl" if gate_options.bfcl_screen else "-train"
+            push(output_directory, gate_options, None, f"{systems['candidate']['name']}{suffix}")
         print(f"\nWrote {output_directory}")
         return 0
 

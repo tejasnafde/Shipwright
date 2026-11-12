@@ -66,6 +66,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="no gate: run only the candidate on --task-ids of the train split and push the traces (the next round's"
         " failures; scripts/run_round.py loop uses it)",
     )
+    parser.add_argument("--bfcl-screen", action="store_true",
+                        help="no gate: BFCL only, on the candidate (gate_eval.py --bfcl-screen)")
     parser.add_argument("--task-ids", nargs="*", default=None, help="with --train-eval")
     parser.add_argument("--trials", type=int, default=1, help="with --train-eval")
 
@@ -140,6 +142,8 @@ def gate_script_arguments(job_options: argparse.Namespace, code_bundle_path: str
         script_arguments += ["--serve-mode", job_options.serve_mode]
     if job_options.train_eval:
         script_arguments += ["--train-eval", "--trials", str(job_options.trials), "--task-ids", *job_options.task_ids]
+    if job_options.bfcl_screen:
+        script_arguments.append("--bfcl-screen")
     return script_arguments
 
 

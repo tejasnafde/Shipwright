@@ -27,9 +27,10 @@ def test_a_step_that_does_not_fit_in_the_budget_is_refused():
 
 
 def test_a_round_needs_its_estimate_or_a_little_more_than_the_last_one_cost():
-    assert run_loop.cost_of_a_full_round(None) == pytest.approx(2.15)
-    assert run_loop.cost_of_a_full_round(1.0) == pytest.approx(2.15)
-    assert run_loop.cost_of_a_full_round(3.0) == pytest.approx(3.3)
+    estimate = sum(run_loop.STEP_ESTIMATES.values())
+    assert run_loop.cost_of_a_full_round(None) == pytest.approx(estimate)
+    assert run_loop.cost_of_a_full_round(1.0) == pytest.approx(estimate)
+    assert run_loop.cost_of_a_full_round(estimate * 2) == pytest.approx(estimate * 2.2)
 
 
 def test_a_rerun_skips_finished_steps_unless_told_to_redo_them():
@@ -49,9 +50,9 @@ def test_the_chosen_recipe_is_kept_in_the_manifest_so_a_rerun_uses_the_same_one(
     manifest: dict = {"stages": {}}
     options = argparse.Namespace(from_round=99)  # no manifest for round 99: the default recipe is the start
     first = run_loop.next_recipe_for(manifest, options, decision)
-    assert first.epochs == 2.0 and manifest["recipe"]["learning_rate"] == 1e-4
+    assert first.general_replay == 100 and manifest["recipe"]["general_replay"] == 100
     again = run_loop.next_recipe_for(manifest, options, {"checks": []})  # even a different decision
-    assert again.epochs == 2.0 and again.reasons == first.reasons
+    assert again.general_replay == 100 and again.reasons == first.reasons
 
 
 def test_the_candidate_config_of_the_next_round_points_at_its_own_adapter(tmp_path, monkeypatch):
@@ -116,3 +117,10 @@ def test_rerunning_the_gate_step_does_not_commit_an_unchanged_config(tmp_path, m
     monkeypatch.setattr(run_loop.subprocess, "run", fake_run)
     run_loop.write_candidate_config(argparse.Namespace(round=4, from_round=3))
     assert not any("commit" in command for command in calls) and not any("push" in command for command in calls)
+
+
+def test_the_bfcl_screen_applies_the_gates_own_rule():
+    assert run_loop.bfcl_screen_passes(41.0, 43.0, 2.0)  # exactly 2 points below is allowed
+    assert not run_loop.bfcl_screen_passes(40.99, 43.0, 2.0)
+    assert not run_loop.bfcl_screen_passes(33.67, 43.0, 2.0)  # round 4
+    assert run_loop.bfcl_screen_passes(50.0, 43.0, 2.0)  # better than the live system

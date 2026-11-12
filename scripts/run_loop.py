@@ -11,8 +11,13 @@ Round N learns from what round N-1's candidate did wrong, instead of training th
   3. classify     AgentTune + our rules label why it failed there (Cloud Run job)
   4. data         the pooled teacher examples, with the examples of the tasks it failed repeated (recipe.boost)
   5. train        AgentTune's retraining trigger decides, then a fresh LoRA on that data (HF Job)
+  5b. bfcl_screen (with --screen-bfcl) the candidate's BFCL score alone, about 5 minutes: the full gate is only paid for
+                  if that check can pass
   6. gate         the new candidate against the deployed system on the held-out tasks (HF Job)
   7. promote      only on a gate "promote": scripts/promote.py, with rollback
+
+--failures-run NAME reuses a classified candidate-on-train run (steps 2 and 3 are skipped), so a round can change one
+thing in the data and nothing else.
 
 With --max-rounds (default 3) it goes round after round, each started from the gate decision of the one before, until one
 is promoted, the budget cannot cover another round, or a step fails. Every step is written to runs/round-N.json as it finishes and is skipped on a rerun, so a failure midway is resumed
@@ -55,8 +60,9 @@ TRAIN_FLAVOR, TRAIN_TIMEOUT = run_round.TRAIN_FLAVOR, "45m"
 GATE_FLAVOR, GATE_TIMEOUT = run_round.GATE_FLAVOR, "60m"
 HF_PRICES = {"a10g-large": 1.50, "l40sx1": 1.80, "a100-large": 2.50}
 # What each step is expected to cost (round 3: the gate 0.75, training 0.62, the classify stage 0.05).
-STEP_ESTIMATES = {"candidate_train": 0.6, "classify": 0.05, "data": 0.0, "train": 0.7, "gate": 0.8}
+STEP_ESTIMATES = {"candidate_train": 0.6, "classify": 0.05, "data": 0.0, "train": 1.2, "bfcl_screen": 0.25, "gate": 0.9}
 STEPS = list(STEP_ESTIMATES)
+BFCL_SCREEN_TIMEOUT = "30m"
 DEFAULT_POOL = ["tejas/r1-teacher-t1", "tejas/r1-teacher-all-t2", "tejas/r1-teacher-ds-a", "tejas/r1-teacher-ds-b",
                 "tejas/r1-teacher-ds-c", "tejas/bake-dsv41flash", "r2-teacher", "r3-teacher"]
 JOB_POLL_SECONDS = 45
@@ -74,6 +80,11 @@ def parse_options() -> argparse.Namespace:
     parser.add_argument("--teacher-model", default=TEACHER_MODEL)
     parser.add_argument("--pool", nargs="*", default=DEFAULT_POOL, help="teacher run dirs whose passes make the data")
     parser.add_argument("--redo", nargs="*", default=[], choices=STEPS, help="run these steps again")
+    parser.add_argument("--failures-run", default=None,
+                        help="a classified candidate-on-train run (e.g. r4-cand-train) to take the failed tasks from: skips "
+                             "the candidate_train and classify steps")
+    parser.add_argument("--screen-bfcl", action="store_true",
+                        help="score BFCL alone before the gate; stop if that check cannot pass")
     parser.add_argument("--gate-flavor", default=GATE_FLAVOR,
                         help="GPU of the gate job: a busy pool can leave an A10G waiting for an hour, an l40sx1 costs $0.30/h more")
     parser.add_argument("--launch", action="store_true", help="run the steps (spends credits); without it, plan only")
@@ -104,7 +115,8 @@ def previous_recipe(round_number: int) -> recipe_module.Recipe:
     if manifest_path.exists():
         saved = json.loads(manifest_path.read_text()).get("recipe")
         if saved:
-            return recipe_module.Recipe(saved["epochs"], saved["learning_rate"], saved["boost"], [])
+            return recipe_module.Recipe(saved["epochs"], saved["learning_rate"], saved["boost"],
+                                        saved.get("general_replay", 0), [])
     return recipe_module.Recipe()
 
 
@@ -204,6 +216,11 @@ def step_is_done(manifest: dict, step: str, options: argparse.Namespace) -> bool
 
 # ---------------------------------------------------------------- the steps
 
+def failures_directory(options: argparse.Namespace) -> Path:
+    """The classified candidate-on-train run the failed tasks come from."""
+    return ROOT / "runs" / (options.failures_run or f"r{options.round}-cand-train")
+
+
 def step_candidate_train(options: argparse.Namespace, task_ids: list[str]) -> dict:
     """The refused candidate on the train tasks the teacher can solve (k=1), then its run dir to laptop and GCS."""
     source = candidate_name(options.from_round)
@@ -241,18 +258,30 @@ def step_classify(options: argparse.Namespace) -> dict:
     return entry
 
 
+def build_general_replay(per_category: int) -> Path:
+    """The general function-calling examples (scripts/build_bfcl_replay.py), built once per size."""
+    output_directory = ROOT / "runs" / f"bfcl-replay-{per_category}"
+    if not (output_directory / "replay.jsonl").exists():
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "build_bfcl_replay.py"), "--per-category", str(per_category),
+                        "--output-dir", str(output_directory)], check=True)
+    return output_directory / "replay.jsonl"
+
+
 def step_data(options: argparse.Namespace, chosen: recipe_module.Recipe) -> dict:
     output_directory = ROOT / "runs" / run_round.sft_dir_name(options.round)
     command = [sys.executable, str(ROOT / "scripts" / "build_sft.py"), "--output-dir", str(output_directory),
                "--only-model", options.teacher_model, "--push", "--revision", f"round-{options.round}",
-               "--boost-from", str(ROOT / "runs" / f"r{options.round}-cand-train"), "--boost", str(chosen.boost)]
+               "--boost-from", str(failures_directory(options)), "--boost", str(chosen.boost)]
+    if chosen.general_replay:
+        command += ["--general-replay", str(build_general_replay(chosen.general_replay))]
     for name in options.pool:
         command += ["--teacher", str(ROOT / "runs" / run_round.local_run_name(name))]
     exit_code = subprocess.run(command).returncode
     statistics = json.loads((output_directory / "sft_stats.json").read_text()) if exit_code == 0 else {}
     return {"exit_code": exit_code, "actual_usd": 0.0, "run_dir": f"runs/{output_directory.name}",
             "examples": statistics.get("examples"), "examples_before_boost": statistics.get("examples_before_boost"),
-            "boosted_tasks": len(statistics.get("boosted_tasks") or []), "boost": statistics.get("boost")}
+            "boosted_tasks": len(statistics.get("boosted_tasks") or []), "boost": statistics.get("boost"),
+            "general_replay": statistics.get("general_replay")}
 
 
 def train_command(options: argparse.Namespace, chosen: recipe_module.Recipe) -> list[str]:
@@ -266,10 +295,10 @@ def train_command(options: argparse.Namespace, chosen: recipe_module.Recipe) -> 
 def step_train(options: argparse.Namespace, chosen: recipe_module.Recipe) -> dict:
     """AgentTune's RetrainingTrigger, then the LoRA job. A trigger that says no stops the loop here."""
     status = subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "round_status.py"), str(ROOT / "runs" / f"r{options.round}-cand-train"),
+        [sys.executable, str(ROOT / "scripts" / "round_status.py"), str(failures_directory(options)),
          "--sft", str(ROOT / "runs" / run_round.sft_dir_name(options.round) / "sft.jsonl")],
         capture_output=True, text=True)
-    status_path = ROOT / "runs" / f"r{options.round}-cand-train" / "round_status.json"
+    status_path = failures_directory(options) / "round_status.json"
     if status.returncode != 0 or not status_path.exists():
         return {"exit_code": 1, "actual_usd": 0.0, "note": "the retraining trigger wrote no round_status.json"}
     trigger = json.loads(status_path.read_text())
@@ -306,6 +335,41 @@ def write_candidate_config(options: argparse.Namespace) -> str:
     return relative_path
 
 
+def bfcl_screen_passes(candidate_points: float, base_points: float, maximum_drop: float) -> bool:
+    """The gate's BFCL rule: the candidate may score at most ``maximum_drop`` points below the live system."""
+    return candidate_points >= base_points - maximum_drop
+
+
+def step_bfcl_screen(options: argparse.Namespace) -> dict:
+    """The candidate's BFCL alone, on the gate's own 300 samples. Fails the step if the gate's BFCL check could not pass."""
+    from huggingface_hub import hf_hub_download
+
+    write_candidate_config(options)
+    name = candidate_name(options.round)
+    command = [sys.executable, str(ROOT / "scripts" / "gate_job.py"), "--round", str(options.round),
+               "--current", run_round.current_system_path(), "--candidate", f"configs/systems/{name}.yaml",
+               "--user-model", run_round.GATE_USER_MODEL, "--bfcl-screen", "--flavor", options.gate_flavor,
+               "--timeout", BFCL_SCREEN_TIMEOUT, "--launch"]
+    job_id = launched_job_id(command)
+    stage, cost = wait_for_job(job_id)
+    if stage != "COMPLETED":
+        return {"exit_code": 1, "actual_usd": cost, "job": job_id, "note": f"the HF job ended as {stage}"}
+    result_path = hf_hub_download(RUNS_REPO, f"gate/round-{options.round}/{name}-bfcl/{name}/bfcl.json",
+                                  repo_type="dataset", force_download=True)
+    candidate_points = json.loads(Path(result_path).read_text())["accuracy_points"]
+
+    previous = fetch_gate_decision(options.from_round)
+    base_points = previous["metrics_current"]["bfcl"]["accuracy_points"]
+    maximum_drop = previous["thresholds"]["bfcl_max_drop_points"]
+    needed = base_points - maximum_drop
+    entry = {"exit_code": 0, "actual_usd": cost, "job": job_id, "bfcl_points": candidate_points,
+             "base_points": base_points, "needed_points": needed}
+    if not bfcl_screen_passes(candidate_points, base_points, maximum_drop):
+        entry.update(exit_code=1, note=f"BFCL screen failed: {candidate_points} points, the gate needs at least {needed:.2f} "
+                                       f"(base {base_points}): the full gate is not run")
+    return entry
+
+
 def step_gate(options: argparse.Namespace) -> dict:
     write_candidate_config(options)
     command = [sys.executable, str(ROOT / "scripts" / "gate_job.py"), "--round", str(options.round),
@@ -332,12 +396,22 @@ def print_plan(options: argparse.Namespace, previous_decision: dict, chosen: rec
           f"{previous_decision['decision'].upper()}")
     failed = [check["name"] for check in previous_decision["checks"] if not check["passed"]]
     print(f"  failed checks: {failed}")
-    print(f"  recipe: epochs {chosen.epochs:g}, learning rate {chosen.learning_rate:g}, boost x{chosen.boost}")
+    print(f"  recipe: epochs {chosen.epochs:g}, learning rate {chosen.learning_rate:g}, boost x{chosen.boost}, "
+          f"general function-calling examples {chosen.general_replay} per category")
     for reason in chosen.reasons:
         print(f"    - {reason}")
-    print(f"  the candidate runs on {len(task_ids)} train tasks the teacher can solve")
+    skipped = set()
+    if options.failures_run:
+        skipped |= {"candidate_train", "classify"}
+        print(f"  failed tasks taken from {options.failures_run} (candidate_train and classify are skipped)")
+    else:
+        print(f"  the candidate runs on {len(task_ids)} train tasks the teacher can solve")
+    if not options.screen_bfcl:
+        skipped.add("bfcl_screen")
     total = 0.0
     for step in STEPS:
+        if step in skipped:
+            continue
         total += STEP_ESTIMATES[step]
         print(f"  {step:16} est ${STEP_ESTIMATES[step]:.2f}")
     print(f"  total est ${total:.2f} of the ${options.budget_usd:.2f} budget")
@@ -358,9 +432,18 @@ def run_one_round(options: argparse.Namespace, spent_in_earlier_rounds: float) -
         "classify": lambda: step_classify(options),
         "data": lambda: step_data(options, chosen),
         "train": lambda: step_train(options, chosen),
+        "bfcl_screen": lambda: step_bfcl_screen(options),
         "gate": lambda: step_gate(options),
     }
+    skipped = set()
+    if options.failures_run:
+        skipped |= {"candidate_train", "classify"}
+        manifest["failures_run"] = options.failures_run
+    if not options.screen_bfcl:
+        skipped.add("bfcl_screen")
     for step in STEPS:
+        if step in skipped:
+            continue
         if step_is_done(manifest, step, options):
             print(f"{step}: already done")
             continue
@@ -395,6 +478,8 @@ def main() -> int:
         round_options = argparse.Namespace(**vars(options))
         round_options.round = options.round + round_index
         round_options.from_round = options.from_round + round_index
+        if round_index > 0:
+            round_options.failures_run = None  # a later round takes the failures of the adapter before it
         if options.launch and cost_of_a_full_round(last_round_cost) + spent > options.budget_usd:
             print(f"\nStopping before round {round_options.round}: a round needs about "
                   f"${cost_of_a_full_round(last_round_cost):.2f} and ${options.budget_usd - spent:.2f} is left of "
@@ -416,10 +501,11 @@ def next_recipe_for(manifest: dict, options: argparse.Namespace, previous_decisi
     """The recipe, kept in the manifest once chosen so a rerun uses the same one."""
     if manifest.get("recipe"):
         saved = manifest["recipe"]
-        return recipe_module.Recipe(saved["epochs"], saved["learning_rate"], saved["boost"], saved["reasons"])
+        return recipe_module.Recipe(saved["epochs"], saved["learning_rate"], saved["boost"],
+                                    saved.get("general_replay", 0), saved["reasons"])
     chosen = recipe_module.next_recipe(previous_decision, previous_recipe(options.from_round))
     manifest["recipe"] = {"epochs": chosen.epochs, "learning_rate": chosen.learning_rate, "boost": chosen.boost,
-                          "reasons": chosen.reasons}
+                          "general_replay": chosen.general_replay, "reasons": chosen.reasons}
     return chosen
 
 

@@ -12,26 +12,26 @@ def decision(failed: list[str], current: dict | None = None, candidate: dict | N
 
 def test_a_promotion_changes_nothing():
     recipe = next_recipe(decision([]), Recipe())
-    assert (recipe.epochs, recipe.learning_rate, recipe.boost) == (3.0, 2e-4, 1)
+    assert (recipe.epochs, recipe.learning_rate, recipe.boost, recipe.general_replay) == (3.0, 2e-4, 1, 0)
 
 
-def test_the_round_3_rejection_gives_fewer_epochs_a_lower_rate_and_a_boost():
-    round_3 = decision(
-        ["pass_k", "non_target", "bfcl"],
-        current={"loop": 0.05, "context_overflow": 0.05},
-        candidate={"loop": 0.45, "context_overflow": 0.30},
-    )
-    recipe = next_recipe(round_3, Recipe())
-    assert recipe.epochs == 2.0 and recipe.learning_rate == 1e-4 and recipe.boost == 3
+def test_a_bfcl_failure_adds_general_examples_and_leaves_the_training_intensity_alone():
+    """Round 4 showed that fewer epochs and a lower rate did not help BFCL: they are no longer touched."""
+    recipe = next_recipe(decision(["bfcl"]), Recipe(epochs=2.0, learning_rate=1e-4, boost=3))
+    assert recipe.general_replay == 100
+    assert (recipe.epochs, recipe.learning_rate, recipe.boost) == (2.0, 1e-4, 3)
     assert any("bfcl" in reason for reason in recipe.reasons)
-    assert any("loop" in reason and "context_overflow" in reason for reason in recipe.reasons)
+    assert next_recipe(decision(["bfcl"]), recipe).general_replay == 200  # asked again if it still fails
+
+
+def test_looping_is_reported_but_does_not_change_the_boost():
+    round_4 = decision(["non_target"], current={"loop": 0.08}, candidate={"loop": 0.40, "context_overflow": 0.25})
+    recipe = next_recipe(round_4, Recipe(boost=3))
+    assert recipe.boost == 3
+    assert any("loop" in reason and "no recipe change" in reason for reason in recipe.reasons)
 
 
 def test_a_serving_failure_is_not_a_recipe_problem():
-    recipe = next_recipe(decision(["valid_runs"]), Recipe(epochs=2.0, learning_rate=1e-4, boost=3))
-    assert (recipe.epochs, recipe.learning_rate, recipe.boost) == (2.0, 1e-4, 3)
+    recipe = next_recipe(decision(["valid_runs"]), Recipe(epochs=2.0, learning_rate=1e-4, boost=3, general_replay=100))
+    assert (recipe.epochs, recipe.learning_rate, recipe.boost, recipe.general_replay) == (2.0, 1e-4, 3, 100)
     assert "no recipe rule" in recipe.reasons[0]
-
-
-def test_epochs_never_go_below_one():
-    assert next_recipe(decision(["bfcl"]), Recipe(epochs=1.0)).epochs == 1.0
