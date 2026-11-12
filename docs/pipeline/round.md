@@ -11,7 +11,11 @@ to `runs/round-N.json` (run dir, exit code, estimate, actual cost, `cost_basis`:
 | `data` | laptop | `build_sft.py` from the teacher passes, pushed to the HF dataset repo | 0 | 0 |
 | `train` | HF Job, L40S, 1h | LoRA with AgentTune (`--launch` to submit); an L4 was too tight for 185 examples | $1.00 | $1.80 |
 | `ceiling` | Cloud Run job | side stage, any time: the teacher on the 20 held-out tasks, 3 trials (evaluation only) | $0.50 | $1.00 |
+| `smoke` | Cloud Run job | side stage: 5 train tasks, 1 trial, on the options you pass; run it after any change to the user model or provider | $0.10 | $0.30 |
 | `gate` | HF Job, A10G large, 90 min | base vs the adapter, 20 held-out tasks, k=3, HF router user simulator (`--launch` to submit) | $2.30 | $3.00 |
+
+The user simulator and judge default to gpt-oss-120b on the HF router (DeepInfra, `--user-model` overrides it), the same
+one the gate uses; parallelism defaults to 10. Run `smoke` first after changing either.
 
 ```sh
 ARGS="--round 2 --user-model vertex/openai/gpt-oss-120b-maas --teacher-model vertex/deepseek-ai/deepseek-v4.1-flash-maas"

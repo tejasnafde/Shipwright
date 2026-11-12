@@ -187,3 +187,18 @@ def test_other_costs_count_as_metered_spend(tmp_path, monkeypatch):
                 "other_costs": [{"what": "failed train attempt", "usd": 0.12, "basis": "hf job runtime x price"}]}
     run_round.save_manifest(manifest, 9)
     assert manifest["spent_metered_usd"] == 1.12 and manifest["spent_usd"] == 1.12
+
+
+def test_smoke_runs_five_train_tasks_on_the_chosen_user_model_with_a_cap():
+    arguments, fetched, output_dir = run_round.cloud_stage_arguments("smoke", make_options(user_model="the-model"))
+    assert arguments[arguments.index("--num-tasks") + 1] == "5" and arguments[arguments.index("--task-split") + 1] == "train"
+    assert arguments[arguments.index("--user-model") + 1] == "the-model"
+    assert arguments[arguments.index("--max-cost-usd") + 1] == str(run_round.BUDGETS["smoke"].cap_usd)
+    assert fetched == [] and output_dir == "r2-smoke"
+
+
+def test_the_round_driver_defaults_to_the_router_user_model_and_more_parallelism(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["run_round.py", "plan", "--round", "4", "--teacher-model", "t"])
+    options = run_round.parse_options()
+    assert options.user_model == run_round.ROUTER_USER_MODEL and options.max_concurrency == 10
+    assert run_round.GATE_USER_MODEL == run_round.ROUTER_USER_MODEL

@@ -225,8 +225,8 @@ def test_estimate_per_role_and_provider():
     out = costs.estimate(meter.rows, {}, {"agent": "teacher"})
     assert out["teacher"] == pytest.approx(0.5 * 0.30 + 0.5 * 0.03)
     assert out["user"] == pytest.approx(0.09 + 0.36)
-    assert out["judge"] == pytest.approx(0.09 + 0.25)
-    assert out["total"] == pytest.approx(0.165 + 0.45 + 0.34)
+    assert out["judge"] == pytest.approx(0.09 + 0.35)  # the cerebras input price on the HF router (2026-11-12)
+    assert out["total"] == pytest.approx(0.165 + 0.45 + 0.44)
     teacher = out["by_role"]["teacher"]["models"][0]
     assert teacher["provider"] == "vertex" and teacher["cache_hit_rate"] == 0.5
     providers = {m["model"]: m["provider"] for m in out["by_role"]["judge"]["models"]}
@@ -387,3 +387,23 @@ def test_call_with_refresh_retries_400_only_when_asked():
     with pytest.raises(BadRequestError):  # the agent and teacher get no 400 retry
         vertex.call_with_refresh(always, kwargs, tokens, sleep=waits.append)
     assert waits == []
+
+
+def test_router_gpt_oss_gets_the_settings_a_vertex_gpt_oss_call_gets():
+    from shipwright.llm.patches import router_gpt_oss_defaults
+
+    routed = router_gpt_oss_defaults({"model": vertex.ROUTER_USER_MODEL, "max_tokens": 300, "messages": []})
+    assert routed["reasoning_effort"] == "low" and routed["timeout"] == 60.0 and routed["max_tokens"] == 1024
+    explicit = router_gpt_oss_defaults({"model": vertex.ROUTER_USER_MODEL, "reasoning_effort": "high", "timeout": 5})
+    assert explicit["reasoning_effort"] == "high" and explicit["timeout"] == 5
+    tiny_aya = {"model": "openai/CohereLabs/tiny-aya-global:cohere", "max_tokens": 700}
+    assert router_gpt_oss_defaults(tiny_aya) == tiny_aya  # only gpt-oss is touched
+    vertex_call = {"model": vertex.USER_MODEL, "max_tokens": 300}
+    assert router_gpt_oss_defaults(vertex_call) == vertex_call  # vertex.route_kwargs does that one
+
+
+def test_router_user_model_has_a_known_price():
+    from shipwright.llm import costs
+
+    price, assumed = costs.price_for(vertex.ROUTER_USER_MODEL, "hf_router")
+    assert price == (0.037, 0.037, 0.17) and assumed is False

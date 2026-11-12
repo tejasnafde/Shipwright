@@ -61,6 +61,11 @@ DEFAULT_REQUEST_TIMEOUT_S = 180.0
 TEACHER_MODEL = "vertex/deepseek-ai/deepseek-v4.1-flash-maas"
 USER_MODEL = "vertex/openai/gpt-oss-120b-maas"
 JUDGE_MODEL = USER_MODEL
+# The same gpt-oss-120b on the HF router (2026-11-12): no Vertex rate limit, and DeepInfra is the cheapest provider
+# ($0.037 in, $0.17 out per 1M tokens; Vertex $0.09 / $0.36, Cerebras $0.35 / $0.75). The default user simulator and
+# judge of the round driver and the gate; the Vertex ids above stay for the Vertex smoke check, the classifier and
+# the tool-fix proposer.
+ROUTER_USER_MODEL = "openai/openai/gpt-oss-120b:deepinfra"
 
 
 def is_vertex_model(model: str | None) -> bool:

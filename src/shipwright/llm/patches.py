@@ -127,6 +127,21 @@ def is_transient_error(error: BaseException) -> bool:
     return False
 
 
+def router_gpt_oss_defaults(call_kwargs: dict) -> dict:
+    """The settings a Vertex gpt-oss call already gets, for gpt-oss on the HF router: low reasoning effort, a 60 s
+    timeout (a hung call is retried, not waited for) and a reply budget that leaves room after its reasoning."""
+    model = str(call_kwargs.get("model", ""))
+    if vertex.is_vertex_model(model) or "gpt-oss" not in model:
+        return call_kwargs
+    call_kwargs = dict(call_kwargs)
+    call_kwargs.setdefault("reasoning_effort", "low")
+    call_kwargs.setdefault("timeout", 60.0)
+    max_tokens = call_kwargs.get("max_tokens")
+    if isinstance(max_tokens, int) and max_tokens < 1024:
+        call_kwargs["max_tokens"] = 1024
+    return call_kwargs
+
+
 def call_with_transient_retries(call: Callable[..., Any], call_kwargs: dict,
                                 sleep: Callable[[float], None] = time.sleep) -> Any:
     """Run ``call(**call_kwargs)``; on a transient error wait and retry (TRANSIENT_ERROR_WAITS)."""
@@ -266,7 +281,7 @@ def install(
                 if vertex.is_vertex_model(model):
                     return vertex.call_with_refresh(counted_completion, call_kwargs,
                                                     bad_request_waits=bad_request_waits)
-                return call_with_transient_retries(counted_completion, call_kwargs)
+                return call_with_transient_retries(counted_completion, router_gpt_oss_defaults(call_kwargs))
 
             def ask_model(call_kwargs: dict) -> Any:
                 model_response = instrument.llm_call(role, model, call_kwargs, lambda: make_call_with(call_kwargs),

@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from shipwright.control_room import gcs_runs  # noqa: E402
+from shipwright.llm.vertex import ROUTER_USER_MODEL  # noqa: E402
 from shipwright.observability import log  # noqa: E402
 
 logger = log.get_logger("run_round")
@@ -42,7 +43,7 @@ REGION = "asia-south1"
 IMAGE = "asia-south1-docker.pkg.dev/lexsi-hackathon/shipwright/harness"
 STAGE_ORDER = ["baseline", "classify", "teacher", "data", "train", "gate"]
 # Runs on its own, any time: the teacher on the held-out tasks, so the gate result can be read against it.
-SIDE_STAGES = ["ceiling"]
+SIDE_STAGES = ["ceiling", "smoke"]
 # A stage that finished with more infra errors than this share of its runs, or a dataset of fewer
 # examples than this, stops the round before the next stage (override with --force).
 MAX_INFRA_ERROR_RATE = 0.25
@@ -69,7 +70,7 @@ GATE_FLAVOR = "a10g-large"
 # The gate's user simulator is an HF router model: a Vertex token minted at launch lasts about 1 hour
 # with no refresh (AGENTS.md traps), and the gate (120 tau2 runs, BFCL, model load) can run longer, which
 # would turn runs into infra errors and reject for "too few valid runs". Both systems use the same simulator.
-GATE_USER_MODEL = "openai/openai/gpt-oss-120b:cerebras"
+GATE_USER_MODEL = ROUTER_USER_MODEL
 BUDGETS = {
     "baseline": StageBudget(estimate_usd=1.5, cap_usd=2.0),
     "classify": StageBudget(estimate_usd=0.05, cap_usd=0.30),
@@ -77,6 +78,7 @@ BUDGETS = {
     "data": StageBudget(estimate_usd=0.0, cap_usd=0.0),
     "train": StageBudget(estimate_usd=1.0, cap_usd=1.8),
     "ceiling": StageBudget(estimate_usd=0.5, cap_usd=1.0),
+    "smoke": StageBudget(estimate_usd=0.1, cap_usd=0.3),
     "gate": StageBudget(estimate_usd=2.3, cap_usd=3.0),  # A10G $1.50/h x 1.5h = $2.25 cap, plus about $0.60 of simulator
 }
 DESCRIPTIONS = {
@@ -86,6 +88,7 @@ DESCRIPTIONS = {
     "data": "build the SFT dataset from the teacher passes and push it to the HF dataset repo",
     "train": "LoRA on Tiny Aya Global with AgentTune (HF Job, L40S, 1h limit)",
     "ceiling": "the teacher on the 20 held-out tasks, 3 trials: the pass rate the student is compared with (evaluation only)",
+    "smoke": "5 train tasks, 1 trial, on the options you pass: run it after any change to the user model or provider",
     "gate": "base vs the new adapter on the 20 held-out tasks, k=3, 8 checks (HF Job, A10G, 90 min limit)",
 }
 
@@ -94,11 +97,13 @@ def parse_options() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("stage", choices=["plan", *STAGE_ORDER, *SIDE_STAGES])
     parser.add_argument("--round", type=int, required=True)
-    parser.add_argument("--user-model", required=True, help="user simulator and judge, e.g. vertex/openai/gpt-oss-120b-maas")
+    parser.add_argument("--user-model", default=ROUTER_USER_MODEL,
+                        help="user simulator and judge (default: gpt-oss-120b on the HF router via DeepInfra, the same one the"
+                        " gate uses; vertex/openai/gpt-oss-120b-maas is the Vertex alternative)")
     parser.add_argument("--teacher-model", required=True, help="e.g. vertex/deepseek-ai/deepseek-v4.1-flash-maas")
     parser.add_argument("--owner", default="ishank", help="whose Cloud Run job runs the cloud stages")
     parser.add_argument("--round-budget-usd", type=float, default=8.0, help="no stage starts if its cap passes this total")
-    parser.add_argument("--max-concurrency", type=int, default=8)
+    parser.add_argument("--max-concurrency", type=int, default=10)
     parser.add_argument("--skip-unsolved-from", nargs="*", default=[], metavar="RUN_DIR_NAME",
                         help="teacher: earlier teacher run dirs (e.g. r2-teacher); leave out the tasks they never solved")
     parser.add_argument("--extra-teacher-runs", nargs="*", default=[], metavar="RUN_DIR_NAME",
@@ -343,6 +348,16 @@ def cloud_stage_arguments(stage: str, options: argparse.Namespace) -> tuple[list
         if options.dry_run:
             arguments.append("--no-llm")
         return arguments, [qualified_run_name(options.owner, baseline_name)], baseline_name
+    if stage == "smoke":
+        smoke_name = f"r{options.round}-smoke"
+        arguments = [
+            "baseline.py", "--task-split", "train", "--num-tasks", "5", "--trials", "1",
+            "--user-model", options.user_model, "--max-concurrency", str(options.max_concurrency),
+            "--max-cost-usd", cap, "--output-dir", f"runs/{smoke_name}",
+        ]
+        if options.dry_run:
+            arguments.append("--dry-run")
+        return arguments, [], smoke_name
     if stage == "ceiling":
         ceiling_name = f"r{options.round}-ceiling"
         arguments = [
@@ -540,7 +555,7 @@ def main() -> int:
         check_previous_stage_is_healthy(manifest, stage, previous_stage)
     check_budget(manifest, stage)
 
-    if stage in ("baseline", "classify", "teacher", "ceiling"):
+    if stage in ("baseline", "classify", "teacher", "ceiling", "smoke"):
         entry = run_cloud_stage(stage, options)
     elif stage == "data":
         entry = run_data_stage(options)

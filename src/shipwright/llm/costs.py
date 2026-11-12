@@ -16,8 +16,9 @@ VERTEX_PRICES = {  # Vertex AI MaaS list prices, checked 2026-11-09
     "deepseek-ai/deepseek-v4.1-flash-maas": (0.30, 0.03, 1.20),
     "openai/gpt-oss-120b-maas": (0.09, 0.09, 0.36),  # no implicit caching listed for it
 }
-HF_PRICES = {
-    "openai/openai/gpt-oss-120b:cerebras": (0.25, 0.25, 0.69),
+HF_PRICES = {  # HF router provider list prices (router.huggingface.co/v1/models), checked 2026-11-12
+    "openai/openai/gpt-oss-120b:deepinfra": (0.037, 0.037, 0.17),
+    "openai/openai/gpt-oss-120b:cerebras": (0.35, 0.35, 0.75),
 }
 TINY_AYA_GUESS = (0.50, 0.50, 1.50)  # cohere provider: price not published, conservative guess
 UNKNOWN_GUESS = (1.00, 1.00, 3.00)  # any other model: an assumed price, flagged in the output
