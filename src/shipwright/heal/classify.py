@@ -38,7 +38,13 @@ RULE_LAYERS = {
     "invented_id": "model",
     "loop": "model",
     "tool_error_ignored": "model",
+    # A transfer to a human before any attempt to authenticate the customer. The label is the
+    # judge's (JUDGE_LABELS); since 2026-11-12 a rule finds it too: it was the most common round 1
+    # failure (37 of 59 valid runs transferred, 18 as the very first tool call) and no rule saw it.
+    "premature_transfer": "model",
 }
+TRANSFER_TOOL = "transfer_to_human_agents"
+AUTHENTICATION_TOOL_PREFIX = "find_user_id"
 
 READ_PREFIXES = ("get_", "find_", "list_", "calculate", "search_")
 _ID_LIKE = re.compile(r"^(#?[A-Za-z]*\d[\w#-]*|[a-z]+(_[a-z0-9]+)+)$")
@@ -160,6 +166,23 @@ def rule_labels(trace: dict, example_values: set[str] | None = None) -> list[dic
                 "turn": next_call["index"],
                 "detail": f"{previous_call['name']} failed, then {next_call['name']}",
             })
+
+    # premature_transfer: a transfer before the agent tried to authenticate the customer.
+    for call in calls:
+        if call["name"] == TRANSFER_TOOL:
+            tried_to_authenticate = False
+            for earlier_call in calls:
+                if earlier_call["index"] >= call["index"]:
+                    break
+                if (earlier_call["name"] or "").startswith(AUTHENTICATION_TOOL_PREFIX):
+                    tried_to_authenticate = True
+            if not tried_to_authenticate:
+                hits.append({
+                    "label": "premature_transfer",
+                    "turn": call["index"],
+                    "detail": "transfer before any attempt to authenticate the customer",
+                })
+            break
 
     # invented_id: an id-like argument that never appeared earlier in the conversation.
     for call in calls:

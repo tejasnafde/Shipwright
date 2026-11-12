@@ -10,6 +10,7 @@ One YAML file per system (see ``configs/systems/``):
     tool_patches:                  # optional (tool fix)
       ledger: patches/ledger.jsonl
       ids: applied                 # or an explicit list of patch ids
+    tool_guards: true              # optional (tool fix): policy checks before a tool call runs
     route: tool_fix                # none | tool_fix | weight_fix (for the record)
     targets: [tool_example_copied] # failure labels this candidate should lower
 
@@ -50,6 +51,7 @@ def validate_system(system_config: dict, root: Path | None = None) -> dict:
         "model": model,
         "adapter": None,
         "tool_patches": None,
+        "tool_guards": bool(system_config.get("tool_guards", False)),
         "route": system_config.get("route", "none"),
         "targets": list(system_config.get("targets") or []),
     }
@@ -110,11 +112,14 @@ def resolve_patch_ids(system: dict, ledger_rows: list[dict]) -> list[str]:
 
 
 def baseline_args(system: dict, patch_ids: list[str], root: Path) -> list[str]:
-    """Extra ``scripts/baseline.py`` arguments for this system's tool patches."""
+    """Extra ``scripts/baseline.py`` arguments for this system's tool patches and guards."""
+    extra_arguments = []
     tool_patches = system.get("tool_patches")
-    if not tool_patches:
-        return []
-    return ["--tool-patches", str(root / tool_patches["ledger"]), "--tool-patch-ids", *patch_ids]
+    if tool_patches:
+        extra_arguments += ["--tool-patches", str(root / tool_patches["ledger"]), "--tool-patch-ids", *patch_ids]
+    if system.get("tool_guards"):
+        extra_arguments.append("--tool-guards")
+    return extra_arguments
 
 
 def serve_plan(systems: list[dict], mode: str = "lora") -> list[dict]:

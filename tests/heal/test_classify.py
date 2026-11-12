@@ -139,3 +139,20 @@ def test_summary_counts():
     assert s["num_failed"] == 3 and s["num_runs"] == 4
     assert sum(s["per_route"].values()) == 3
     assert s["per_label"]["loop"] >= 2
+
+
+def test_premature_transfer_rule_needs_an_authentication_attempt_first():
+    from shipwright.heal.classify import rule_labels
+
+    def trace_with(calls):
+        turns = []
+        for index, (name, error) in enumerate(calls):
+            turns.append({"message_index": index * 2 + 1,
+                          "parsed_tool_calls": [{"id": f"c{index}", "name": name, "arguments": {}}],
+                          "tool_results": [{"id": f"c{index}", "error": error}]})
+        return {"agent_turns": turns, "messages": []}
+
+    early = rule_labels(trace_with([("transfer_to_human_agents", False)]))
+    assert "premature_transfer" in {hit["label"] for hit in early}
+    after_attempt = rule_labels(trace_with([("find_user_id_by_email", True), ("transfer_to_human_agents", False)]))
+    assert "premature_transfer" not in {hit["label"] for hit in after_attempt}

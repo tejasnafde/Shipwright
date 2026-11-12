@@ -19,7 +19,9 @@ REPLY_TOKENS = 700
 PER_MESSAGE_TOKENS = 8  # chat template overhead per turn
 CHARS_PER_TOKEN = 3.5
 ESTIMATE_MARGIN = 400  # extra safety when we only estimate
-TOKENIZER_MARGIN = 100
+# 100 was too small: a round 1 request was rejected 18 tokens over 8192 (chat template tokens we do
+# not count). 2026-11-12.
+TOKENIZER_MARGIN = 250
 OMITTED_NOTE = "[earlier turns omitted]"
 
 _lock = threading.Lock()

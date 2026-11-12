@@ -1,0 +1,11 @@
+# Round 1 tool-fix candidate, second half of the design's "edit spec or add validation": the round 1
+# tool patches plus policy checks on each tool call before it runs (src/shipwright/llm/guards.py).
+# Targets: the round 1 failures the guards address on teacher-solvable tasks (scripts/check_guards.py).
+name: r1-guards
+model: CohereLabs/tiny-aya-global
+tool_patches:
+  ledger: patches/ledger.jsonl
+  ids: applied
+tool_guards: true
+route: tool_fix
+targets: [invented_id, loop, premature_transfer, tool_error_ignored]

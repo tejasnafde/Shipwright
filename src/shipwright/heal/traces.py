@@ -150,6 +150,8 @@ def _build_agent_turn(
         "tool_results": tool_results,
         "errors": errors,
         "text_tool_call": is_text_tool_call,
+        "guard_rejections": shipwright_fields.get("guard_rejections") or [],
+        "guard_allowed_after_retries": shipwright_fields.get("guard_allowed_after_retries"),
         "finish_reason": _finish_reason(message),
         "usage": _usage(message),
     }
@@ -237,6 +239,8 @@ def summarize(traces: list[dict]) -> dict:
     tool_call_count = malformed_count = unknown_count = tool_error_count = 0
     text_call_count = parse_failed_count = trimmed_count = agent_turn_count = 0
     unknown_tool_names: Counter = Counter()
+    guard_rejections_by_rule: Counter = Counter()
+    guard_allowed_by_rule: Counter = Counter()
 
     for trace in traces:
         for message in trace["messages"]:
@@ -248,6 +252,10 @@ def summarize(traces: list[dict]) -> dict:
             text_call_count += int(turn["text_tool_call"])
             parse_failed_count += int(turn.get("tool_call_parse") == "parse_failed")
             trimmed_count += int(bool(turn.get("context_trimmed")))
+            for rejection in turn.get("guard_rejections") or []:
+                guard_rejections_by_rule[rejection["rule"]] += 1
+            if turn.get("guard_allowed_after_retries"):
+                guard_allowed_by_rule[turn["guard_allowed_after_retries"]] += 1
             for tool_call in turn["parsed_tool_calls"]:
                 tool_call_count += 1
                 malformed_count += int(tool_call["malformed_arguments"])
@@ -288,6 +296,8 @@ def summarize(traces: list[dict]) -> dict:
         "tool_calls_in_text": text_call_count,
         "tool_call_parse_failures": parse_failed_count,
         "context_trimmed_turns": trimmed_count,
+        "guard_rejections_by_rule": dict(guard_rejections_by_rule),
+        "guard_allowed_after_retries_by_rule": dict(guard_allowed_by_rule),
         "avg_agent_turns": _average(agent_turn_count, run_count),
         "avg_messages": _average(sum(trace["num_messages"] for trace in traces), run_count),
         "termination_reasons": dict(Counter(trace["termination_reason"] for trace in traces)),

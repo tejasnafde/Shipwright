@@ -71,6 +71,10 @@ def test_resolve_patch_ids_and_baseline_args():
     args = systems.baseline_args(s, ids, ROOT)
     assert args[0] == "--tool-patches" and args[2] == "--tool-patch-ids" and args[3:] == ids
     assert systems.baseline_args(systems.validate_system(dict(BASE)), [], ROOT) == []
+    guarded = systems.validate_system({**BASE, "tool_guards": True})
+    assert systems.baseline_args(guarded, [], ROOT) == ["--tool-guards"]
+    repo_candidate = systems.load_system(ROOT / "configs" / "systems" / "r1-guards.yaml", ROOT)
+    assert repo_candidate["tool_guards"] and repo_candidate["route"] == "tool_fix"
 
 
 def test_serve_plan_lora_and_merged():
