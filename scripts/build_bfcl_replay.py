@@ -135,4 +135,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(log.run_script(main, step="sft"))
+    sys.exit(log.run_script(main, step="sft", meta=True))

@@ -213,6 +213,15 @@ def collect(
     return records
 
 
+def load_general_replay(path: Path, max_tokens: int) -> tuple[list[dict], dict]:
+    """The general function-calling examples with the token counts the data statistics and the length filter need."""
+    records = read_json_lines(path)
+    for record in records:
+        record["tokens"] = sft_data.count_messages(record["messages"])
+        record["reply_tokens_max"] = sft_data.longest_reply_tokens(record["messages"])
+    return sft_data.filter_records(records, max_tokens)
+
+
 def failed_task_ids(candidate_run: Path) -> list[str]:
     """Task ids of the failed runs in a classified run (failures.jsonl), the ones with a fix (not no_fix)."""
     task_ids: list[str] = []
@@ -310,9 +319,11 @@ def main(argv: list[str] | None = None) -> int:
 
     general_replay_count = 0
     if build_options.general_replay:
-        general_records = read_json_lines(build_options.general_replay)
+        general_records, general_dropped = load_general_replay(build_options.general_replay, build_options.max_tokens)
         kept_records = kept_records + general_records
         general_replay_count = len(general_records)
+        for reason, count in general_dropped.items():
+            dropped_counts[reason] = dropped_counts.get(reason, 0) + count
         notes.append(f"general replay: {general_replay_count} examples from {build_options.general_replay}")
 
     with open(output_directory / "sft.jsonl", "w") as sft_file:
