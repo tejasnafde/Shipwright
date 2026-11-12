@@ -161,6 +161,47 @@ def test_vertex_classifier_routes_with_a_fresh_token(monkeypatch, tmp_path):
     assert "tok" not in repr(clf.__dict__)  # the token is not stored on the classifier
 
 
+def test_vertex_classifier_waits_and_retries_a_429_and_caps_concurrency(monkeypatch, tmp_path):
+    import asyncio
+
+    from shipwright.llm import vertex
+
+    class RateLimited(Exception):
+        status_code = 429
+
+    monkeypatch.setattr(vertex, "_provider", vertex.TokenProvider(fetch=lambda: "tok"))
+    import agenttune.decide.closed_loop.failure_classifier as fc
+
+    real_sleep = asyncio.sleep
+    waits = []
+    running = 0
+    most_running = 0
+    attempts_by_call = {}
+
+    async def no_wait(seconds):
+        waits.append(seconds)
+
+    async def acompletion(**kwargs):
+        nonlocal running, most_running
+        running += 1
+        most_running = max(most_running, running)
+        await real_sleep(0)  # let the other classifications start
+        running -= 1
+        key = kwargs["messages"][-1]["content"]
+        attempts_by_call[key] = attempts_by_call.get(key, 0) + 1
+        if attempts_by_call[key] == 1:
+            raise RateLimited("429")  # every classification is rate limited once
+        reply = {"root_cause": "wrong_tool", "confidence": 0.7, "analysis": "w"}
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(reply)))])
+
+    monkeypatch.setattr(fc.litellm, "acompletion", acompletion)
+    monkeypatch.setattr(ab.asyncio, "sleep", no_wait)
+    traces = [synthetic([("search_products", {"page": number}, False)]) for number in range(10)]
+    rows = ab.classify_traces(traces, tmp_path, classifier=ab.make_classifier(vertex.JUDGE_MODEL))
+    assert all(row["agenttune_root_cause"] == "wrong_tool" for row in rows)  # nothing fell back to rules
+    assert len(waits) == 10 and most_running <= ab.CLASSIFIER_CONCURRENCY
+
+
 def test_vertex_classifier_error_is_recorded_not_raised(monkeypatch, tmp_path):
     from shipwright.llm import vertex
 

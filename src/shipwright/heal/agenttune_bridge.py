@@ -22,10 +22,12 @@ ig/main (Ishank): src/shipwright/self_heal/classifier.py, gate.py, loop.py.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import importlib.util
 import json
 import os
+import random
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -144,6 +146,12 @@ def _failure_classifier_cls():
     return FailureClassifier
 
 
+# AgentTune's classify_batch sends every failure at once. Vertex gpt-oss answers 429 at that rate: in round 3, 30 of 73
+# classifications failed and fell back to rules. So at most this many calls run at a time, and a 429 or a timeout waits
+# and tries again (``vertex.RATE_LIMIT_WAITS``).
+CLASSIFIER_CONCURRENCY = 4
+
+
 def make_classifier(model_name: str, api_base: str | None = None):
     """AgentTune ``FailureClassifier`` with our prompt context.
 
@@ -181,6 +189,23 @@ def make_classifier(model_name: str, api_base: str | None = None):
             messages[-1] = {"role": "user", "content": user_message[:CLASSIFIER_CONTEXT_CHARS]}
             return messages
 
+        async def _ask_vertex(self, litellm, request_options: dict, token_provider, call_record: dict):
+            """One classifier request: a new token after a 401, a wait and another try after a 429 or a timeout."""
+            rate_limit_waits = list(vertex.RATE_LIMIT_WAITS)
+            auth_already_refreshed = False
+            while True:
+                try:
+                    return await litellm.acompletion(**vertex.route_kwargs(request_options, token_provider))
+                except Exception as call_error:  # noqa: BLE001
+                    if vertex.is_auth_error(call_error) and not auth_already_refreshed:
+                        token_provider.invalidate()
+                        auth_already_refreshed = True
+                    elif (vertex.is_rate_limit(call_error) or vertex.is_timeout(call_error)) and rate_limit_waits:
+                        await asyncio.sleep(rate_limit_waits.pop(0) * (1 + random.random() / 2))
+                    else:
+                        raise
+                    call_record["retries"] += 1
+
         async def _classify_single(self, failure: Failure) -> ClassifiedFailure:
             """A non-vertex id runs AgentTune's own method. A ``vertex/`` id needs a bearer
             token per call (AgentTune's method passes no api_key), so this does the same
@@ -196,19 +221,15 @@ def make_classifier(model_name: str, api_base: str | None = None):
                 "model": self.model_name,
                 "messages": self._build_prompt(failure),
                 "response_format": {"type": "json_object"},
+                "num_retries": 0,  # litellm's own retries would stack on ours
             }
             token_provider = vertex.provider()
+            request_slots = self.__dict__.setdefault("_request_slots", asyncio.Semaphore(CLASSIFIER_CONCURRENCY))
             try:
                 with instrument.external("llm_classifier", self.model_name, role="classifier") as call_record:
                     call_record["retries"] = 0
-                    try:
-                        response = await litellm.acompletion(**vertex.route_kwargs(request_options, token_provider))
-                    except Exception as call_error:  # noqa: BLE001
-                        if not vertex.is_auth_error(call_error):
-                            raise
-                        token_provider.invalidate()
-                        call_record["retries"] = 1
-                        response = await litellm.acompletion(**vertex.route_kwargs(request_options, token_provider))
+                    async with request_slots:
+                        response = await self._ask_vertex(litellm, request_options, token_provider, call_record)
                     call_record.update(instrument.usage_fields(response))
                 parsed_reply = json.loads(response.choices[0].message.content)
                 root_cause = parsed_reply.get("root_cause", "")
