@@ -18,15 +18,26 @@ ARGS="--round 2 --user-model vertex/openai/gpt-oss-120b-maas --teacher-model ver
 .venv/bin/python scripts/run_round.py baseline $ARGS      # then classify, teacher, data, train, gate
 ```
 
-Round 3 and later: add `--skip-unsolved-from r2-teacher` to the `teacher` stage, so the tasks the teacher
-failed in every decided trial last round are not replayed. A new prompt means a fresh `baseline`.
+Round 3 and later: a new prompt means a fresh `baseline`, but the teacher's passing traces from earlier rounds
+stay valid training data (the SFT builder re-renders them with the current student prompt). Pool them instead of
+paying for them again:
+
+```sh
+POOL="r1-teacher-t1 r1-teacher-all-t2 r1-teacher-ds-a r1-teacher-ds-b r1-teacher-ds-c r2-teacher bake-dsv41flash"
+.venv/bin/python scripts/run_round.py teacher $ARGS --skip-solved-from $POOL --skip-unsolved-from $POOL   # only new tasks
+.venv/bin/python scripts/run_round.py data $ARGS --extra-teacher-runs $POOL   # this round's passes + the pool
+```
+
+`--only-model` (set by the driver to the round's teacher) drops pooled runs written by another teacher, because
+we have not checked the license of the others. On the existing runs the DeepSeek pool is 140 SFT examples from 47
+tasks, against 21 from 13 in round 2 alone.
 
 ## Checks the driver makes for you
 
 - Before a cloud stage: the tree is clean, HEAD is pushed, and the job runs the image of HEAD. Right after a
   push it waits (`--wait-for-image-minutes`, default 20) for the Cloud Build to tag the image and repoint the job.
-- Before a stage: the previous stage finished with exit code 0, had at most 25% infra errors, and (for `data`)
-  the teacher kept at least 10 traces. `--force` skips these two health checks.
+- Before a stage: the previous stage finished with exit code 0, had at most 25% infra errors, and (for `train`)
+  the SFT data has at least 40 examples before `train`. `--force` skips these two health checks.
 - `runs/_meta/` holds the logs of the driver, `train_job.py`, `gate_job.py` and `pull_runs.py`: they launch
   and move runs and have no run output of their own, so they stay out of `runs/`.
 

@@ -38,6 +38,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Where the training examples come from.
     parser.add_argument("--teacher", type=Path, action="append", default=[], help="teacher run dir")
     parser.add_argument("--replay", type=Path, action="append", default=[], help="Tiny Aya run dir")
+    parser.add_argument(
+        "--only-model", default=None,
+        help="use only teacher run dirs whose agent_model is exactly this (pooling runs of other teachers,"
+        " whose licenses we have not checked, would put their outputs in the training data)",
+    )
     parser.add_argument("--max-replay", type=int, default=None, help="cap on replay examples")
     parser.add_argument("--allow-split", action="store_true", help="accept runs not on the train split")
 
@@ -145,11 +150,14 @@ def collect(
     records: list[dict] = []
     rebuilt_prompt = None
     for run_directory in run_directories:
-        traces, prompts_by_sha = load_run(run_directory, build_options.allow_split)
         run_config_path = run_directory / "run_config.json"
         writer_model = None
         if run_config_path.exists():
             writer_model = json.loads(run_config_path.read_text()).get("agent_model")
+        if build_options.only_model and writer_model != build_options.only_model:
+            notes.append(f"{run_directory.name}: skipped, written by {writer_model}, not {build_options.only_model}")
+            continue
+        traces, prompts_by_sha = load_run(run_directory, build_options.allow_split)
         for trace in traces:
             prompt = prompt_for(trace, prompts_by_sha, None)
             if prompt is None:

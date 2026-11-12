@@ -17,6 +17,10 @@ Task ids (train split only):
   --skip-unsolved-from TEACHER_RUN_DIR ...
                        leave out the tasks that those earlier teacher runs failed in every
                        decided trial (at least --min-failed-trials of them, no pass)
+  --skip-solved-from TEACHER_RUN_DIR ...
+                       leave out the tasks that those earlier teacher runs already solved: their
+                       passing traces go into the SFT data (build_sft.py --teacher), so replaying
+                       them again only pays for the same examples
   --task-ids 1 2 3     explicit ids
   --all-train          every task of the train split
 
@@ -61,6 +65,18 @@ def failed_task_ids(run_directory: Path, routes: tuple[str, ...] = DEFAULT_ROUTE
     return task_ids
 
 
+def solved_task_ids(teacher_run_directories: list[Path]) -> set[str]:
+    """Tasks with at least one passing trace in the earlier teacher runs."""
+    solved: set[str] = set()
+    for run_directory in teacher_run_directories:
+        with open(run_directory / "traces.jsonl") as traces_file:
+            for line in traces_file:
+                trace = json.loads(line)
+                if trace.get("passed"):
+                    solved.add(str(trace["task_id"]))
+    return solved
+
+
 def unsolved_task_ids(teacher_run_directories: list[Path], min_failed_trials: int = MIN_FAILED_TRIALS) -> set[str]:
     """Tasks the earlier teacher runs failed in at least ``min_failed_trials`` decided trials and never passed."""
     failed_trials: dict[str, int] = {}
@@ -96,6 +112,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--routes", default=",".join(DEFAULT_ROUTES), help="with --from-run: the failure routes to replay"
     )
     parser.add_argument("--skip-unsolved-from", type=Path, nargs="*", default=[], help="earlier teacher run dirs")
+    parser.add_argument("--skip-solved-from", type=Path, nargs="*", default=[], help="earlier teacher run dirs")
     parser.add_argument("--min-failed-trials", type=int, default=MIN_FAILED_TRIALS)
     parser.add_argument("--trials", type=int, default=3)
 
@@ -154,6 +171,11 @@ def resolve_task_ids(teacher_options: argparse.Namespace) -> list[str] | None:
         skipped = [task_id for task_id in task_ids if task_id in unsolved]
         task_ids = [task_id for task_id in task_ids if task_id not in unsolved]
         print(f"Skipping {len(skipped)} tasks the teacher never solved before: {' '.join(skipped)}")
+    if teacher_options.skip_solved_from:
+        solved = solved_task_ids(teacher_options.skip_solved_from)
+        skipped = [task_id for task_id in task_ids if task_id in solved]
+        task_ids = [task_id for task_id in task_ids if task_id not in solved]
+        print(f"Skipping {len(skipped)} tasks the teacher already solved: {' '.join(skipped)}")
     if not task_ids:
         raise SystemExit("No task ids: pass --task-ids, --from-run or --all-train.")
     return task_ids

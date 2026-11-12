@@ -41,10 +41,10 @@ logger = log.get_logger("run_round")
 REGION = "asia-south1"
 IMAGE = "asia-south1-docker.pkg.dev/lexsi-hackathon/shipwright/harness"
 STAGE_ORDER = ["baseline", "classify", "teacher", "data", "train", "gate"]
-# A stage that finished with more infra errors than this share of its runs, or a teacher that kept fewer
-# traces than this, stops the round before the next stage (override with --force).
+# A stage that finished with more infra errors than this share of its runs, or a dataset of fewer
+# examples than this, stops the round before the next stage (override with --force).
 MAX_INFRA_ERROR_RATE = 0.25
-MIN_KEPT_TRACES = 10
+MIN_SFT_EXAMPLES = 40
 IMAGE_POLL_SECONDS = 30
 
 
@@ -95,6 +95,12 @@ def parse_options() -> argparse.Namespace:
     parser.add_argument("--max-concurrency", type=int, default=8)
     parser.add_argument("--skip-unsolved-from", nargs="*", default=[], metavar="RUN_DIR_NAME",
                         help="teacher: earlier teacher run dirs (e.g. r2-teacher); leave out the tasks they never solved")
+    parser.add_argument("--extra-teacher-runs", nargs="*", default=[], metavar="RUN_DIR_NAME",
+                        help="data: earlier teacher run dirs of the same teacher model (e.g. r1-teacher-t1 r1-teacher-all-t2)"
+                        " whose passing traces join this round's in the SFT data")
+    parser.add_argument("--skip-solved-from", nargs="*", default=[], metavar="RUN_DIR_NAME",
+                        help="teacher: earlier teacher run dirs; leave out the tasks they already solved (use the same"
+                        " list as --extra-teacher-runs)")
     parser.add_argument("--wait-for-image-minutes", type=int, default=20,
                         help="cloud stages: how long to wait for the Cloud Build to finish and the job to be repointed")
     parser.add_argument("--force", action="store_true", help="skip the health checks on the previous stage")
@@ -209,9 +215,8 @@ def check_cloud_job_runs_this_commit(owner: str, wait_minutes: int) -> None:
         time.sleep(IMAGE_POLL_SECONDS)
 
 
-def check_previous_stage_is_healthy(manifest: dict, stage: str) -> None:
+def check_previous_stage_is_healthy(manifest: dict, stage: str, previous_stage: str) -> None:
     """Stop the round when the stage before this one finished but its output is not worth building on."""
-    previous_stage = STAGE_ORDER[STAGE_ORDER.index(stage) - 1]
     previous_entry = manifest["stages"][previous_stage]
     runs = previous_entry.get("num_runs") or 0
     infra_errors = previous_entry.get("num_infra_errors") or 0
@@ -220,9 +225,12 @@ def check_previous_stage_is_healthy(manifest: dict, stage: str) -> None:
             f"{previous_stage}: {infra_errors} of {runs} runs were infra errors "
             f"(over {MAX_INFRA_ERROR_RATE:.0%}): fix the cause, or pass --force"
         )
-    kept = previous_entry.get("kept_traces")
-    if previous_stage == "teacher" and kept is not None and kept < MIN_KEPT_TRACES:
-        raise SystemExit(f"teacher kept {kept} traces (under {MIN_KEPT_TRACES}): too little to train on, or pass --force")
+    examples = previous_entry.get("examples")
+    if previous_stage == "data" and examples is not None and examples < MIN_SFT_EXAMPLES:
+        raise SystemExit(
+            f"the SFT data has {examples} examples (under {MIN_SFT_EXAMPLES}): too little to train on. "
+            f"Add earlier teacher runs with --extra-teacher-runs at the data stage, or pass --force"
+        )
 
 
 def check_budget(manifest: dict, stage: str) -> None:
@@ -292,9 +300,13 @@ def cloud_stage_arguments(stage: str, options: argparse.Namespace) -> tuple[list
     ]
     if skipped_run_names:
         arguments += ["--skip-unsolved-from", *[f"runs/{name}" for name in skipped_run_names]]
+    solved_run_names = list(options.skip_solved_from)
+    if solved_run_names:
+        arguments += ["--skip-solved-from", *[f"runs/{name}" for name in solved_run_names]]
     if options.dry_run:
         arguments.append("--dry-run")
-    return arguments, [baseline_name, *skipped_run_names], teacher_name
+    fetch_run_dirs = list(dict.fromkeys([baseline_name, *skipped_run_names, *solved_run_names]))
+    return arguments, fetch_run_dirs, teacher_name
 
 
 def run_cloud_stage(stage: str, options: argparse.Namespace) -> dict:
@@ -336,10 +348,15 @@ def run_cloud_stage(stage: str, options: argparse.Namespace) -> dict:
 def run_data_stage(options: argparse.Namespace) -> dict:
     teacher_dir = ROOT / "runs" / teacher_dir_name(options.round)
     output_dir = ROOT / "runs" / sft_dir_name(options.round)
-    command = [
-        sys.executable, str(ROOT / "scripts" / "build_sft.py"), "--teacher", str(teacher_dir),
+    command = [sys.executable, str(ROOT / "scripts" / "build_sft.py")]
+    if teacher_dir.exists():  # a round that only pools earlier teacher runs has no teacher run of its own
+        command += ["--teacher", str(teacher_dir)]
+    command += [
         "--output-dir", str(output_dir), "--push", "--revision", f"round-{options.round}",
+        "--only-model", options.teacher_model,
     ]
+    for extra_name in options.extra_teacher_runs:
+        command += ["--teacher", str(ROOT / "runs" / extra_name)]
     exit_code = subprocess.run(command).returncode
     stats_path = output_dir / "sft_stats.json"
     stats = json.loads(stats_path.read_text()) if stats_path.exists() else {}
@@ -400,10 +417,13 @@ def main() -> int:
 
     stage = options.stage
     previous_stage = STAGE_ORDER[STAGE_ORDER.index(stage) - 1] if stage != STAGE_ORDER[0] else None
+    pooled_data_only = stage == "data" and options.extra_teacher_runs and previous_stage == "teacher"
+    if pooled_data_only and "teacher" not in manifest["stages"]:
+        previous_stage = "classify"  # no teacher stage this round: the earlier teacher runs are the data
     if previous_stage and manifest["stages"].get(previous_stage, {}).get("exit_code") != 0:
         raise SystemExit(f"run {previous_stage} first: it has no finished entry in {manifest_path(options.round).name}")
     if previous_stage and not options.force:
-        check_previous_stage_is_healthy(manifest, stage)
+        check_previous_stage_is_healthy(manifest, stage, previous_stage)
     check_budget(manifest, stage)
 
     if stage in ("baseline", "classify", "teacher"):

@@ -15,7 +15,7 @@ specification.loader.exec_module(run_round)
 
 def make_options(**overrides) -> argparse.Namespace:
     values = dict(round=2, owner="ishank", user_model="u", teacher_model="t", max_concurrency=4, dry_run=False,
-                  skip_unsolved_from=[], force=False)
+                  skip_unsolved_from=[], skip_solved_from=[], extra_teacher_runs=[], force=False)
     values.update(overrides)
     return argparse.Namespace(**values)
 
@@ -60,6 +60,13 @@ def test_teacher_can_skip_the_tasks_earlier_teacher_runs_never_solved():
     assert fetched == ["r2-baseline", "r2-teacher"]
 
 
+def test_teacher_skips_solved_tasks_and_fetches_their_run_dirs():
+    options = make_options(skip_unsolved_from=["r2-teacher"], skip_solved_from=["r1-teacher-t1", "r2-teacher"])
+    arguments, fetched, _ = run_round.cloud_stage_arguments("teacher", options)
+    assert arguments[arguments.index("--skip-solved-from") + 1:][:2] == ["runs/r1-teacher-t1", "runs/r2-teacher"]
+    assert fetched == ["r2-baseline", "r2-teacher", "r1-teacher-t1"]
+
+
 def test_manifest_splits_metered_and_estimated_spend(tmp_path, monkeypatch):
     monkeypatch.setattr(run_round, "ROOT", tmp_path)
     (tmp_path / "runs").mkdir()
@@ -79,12 +86,13 @@ def test_health_check_stops_a_round_after_too_many_infra_errors_or_too_few_kept_
 
     flaky = {"stages": {"baseline": {"num_runs": 74, "num_infra_errors": 30}}}
     with pytest.raises(SystemExit, match="infra errors"):
-        run_round.check_previous_stage_is_healthy(flaky, "classify")
+        run_round.check_previous_stage_is_healthy(flaky, "classify", "baseline")
     healthy = {"stages": {"baseline": {"num_runs": 74, "num_infra_errors": 9}}}
-    run_round.check_previous_stage_is_healthy(healthy, "classify")
-    small = {"stages": {"teacher": {"num_runs": 72, "num_infra_errors": 11, "kept_traces": 4}}}
-    with pytest.raises(SystemExit, match="kept 4"):
-        run_round.check_previous_stage_is_healthy(small, "data")
+    run_round.check_previous_stage_is_healthy(healthy, "classify", "baseline")
+    small = {"stages": {"data": {"examples": 21}}}
+    with pytest.raises(SystemExit, match="21 examples"):
+        run_round.check_previous_stage_is_healthy(small, "train", "data")
+    run_round.check_previous_stage_is_healthy({"stages": {"data": {"examples": 140}}}, "train", "data")
 
 
 def test_image_check_waits_for_the_job_to_be_repointed(monkeypatch):
