@@ -140,6 +140,27 @@ def load_manifest(options: argparse.Namespace) -> dict:
     }
 
 
+# Which AgentTune and AuditKIT parts each stage runs (docs/pipeline/baseline.md has the full table). Written into
+# the manifest with the installed versions, so a reader of runs/round-N.json can see where the libraries are used.
+LIBRARY_USE_BY_STAGE = {
+    "classify": ["agenttune FailureDetector", "agenttune FailureClassifier"],
+    "train": ["agenttune RetrainingTrigger (the pre-train decision)", "agenttune create_distill_trainer (in the HF Job)"],
+    "gate": ["auditkit AgentEvalRunner (pass^1, pass^k, diagnostics)", "auditkit BFCL", "agenttune DeploymentGate"],
+}
+
+
+def library_versions() -> dict:
+    from importlib import metadata
+
+    versions = {}
+    for library in ("agenttune", "auditkit"):
+        try:
+            versions[library] = metadata.version(library)
+        except metadata.PackageNotFoundError:
+            versions[library] = "not installed here (the cloud image and HF jobs have it)"
+    return versions
+
+
 def save_manifest(manifest: dict, round_number: int) -> None:
     """Write the manifest with its spend split in two: metered (the stage measured its own cost) and
     estimated (a GPU job or an unmetered stage: its estimate, until you read the real bill)."""
@@ -155,6 +176,7 @@ def save_manifest(manifest: dict, round_number: int) -> None:
     manifest["spent_metered_usd"] = round(metered, 4)
     manifest["spent_estimated_usd"] = round(estimated, 4)
     manifest["spent_usd"] = round(metered + estimated, 4)
+    manifest["libraries"] = {"versions": library_versions(), "used_by_stage": LIBRARY_USE_BY_STAGE}
     manifest_path(round_number).write_text(json.dumps(manifest, indent=2))
 
 
@@ -421,9 +443,34 @@ def current_system_path() -> str:
     return "configs/systems/base.yaml"
 
 
+def check_retraining_trigger(options: argparse.Namespace) -> dict:
+    """AgentTune's RetrainingTrigger (scripts/round_status.py, offline) decides whether this round trains.
+
+    The weight_fix failures of the baseline go through its buffer; a failure has a correction when the SFT data holds
+    a teacher example for the same task. A "no" stops the round before any GPU spend (``--force`` overrides)."""
+    baseline_directory = ROOT / "runs" / baseline_dir_name(options.round)
+    command = [sys.executable, str(ROOT / "scripts" / "round_status.py"), str(baseline_directory),
+               "--sft", str(ROOT / "runs" / sft_dir_name(options.round) / "sft.jsonl")]
+    earlier_baseline = ROOT / "runs" / baseline_dir_name(options.round - 1)
+    if earlier_baseline.exists():
+        command += ["--reward-baseline", str(earlier_baseline)]
+    subprocess.run(command, capture_output=True, text=True)
+    status_path = baseline_directory / "round_status.json"
+    if not status_path.exists():
+        raise SystemExit("the AgentTune retraining trigger wrote no round_status.json: run scripts/round_status.py by hand")
+    round_status = json.loads(status_path.read_text())
+    trigger = {key: round_status.get(key) for key in
+               ("should_train", "reason", "num_weight_fix_failures", "num_with_correction")}
+    if not trigger["should_train"] and not options.force:
+        raise SystemExit(f"AgentTune's RetrainingTrigger says do not train yet ({trigger['reason']}): pass --force to train anyway")
+    return trigger
+
+
 def run_gpu_stage(stage: str, options: argparse.Namespace) -> dict:
     revision = f"round-{options.round}"
+    retrain_trigger = None
     if stage == "train":
+        retrain_trigger = check_retraining_trigger(options)
         command = [sys.executable, str(ROOT / "scripts" / "train_job.py"),
                    "--dataset-revision", revision, "--revision", revision,
                    "--flavor", TRAIN_FLAVOR, "--timeout", TRAIN_TIMEOUT]
@@ -438,7 +485,10 @@ def run_gpu_stage(stage: str, options: argparse.Namespace) -> dict:
     exit_code = subprocess.run(command).returncode
     status = "launched" if options.launch else "planned"
     # A GPU job's cost is billed by Hugging Face while it runs: actual_usd stays empty until you read it there.
-    return {"exit_code": exit_code, "status": status, "actual_usd": None}
+    entry = {"exit_code": exit_code, "status": status, "actual_usd": None}
+    if retrain_trigger is not None:
+        entry["retrain_trigger"] = retrain_trigger
+    return entry
 
 
 # ---------------------------------------------------------------- main

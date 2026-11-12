@@ -146,3 +146,35 @@ def test_pool_names_can_belong_to_another_owner():
     arguments, fetched, _ = run_round.cloud_stage_arguments("teacher", options)
     assert fetched == ["ishank/r2-baseline", "tejas/r1-teacher-t1", "ishank/r2-teacher"]
     assert arguments[arguments.index("--only-solved-from") + 1:][:2] == ["runs/r1-teacher-t1", "runs/r2-teacher"]
+
+
+def test_training_stops_when_agenttunes_retraining_trigger_says_no(tmp_path, monkeypatch):
+    import json
+    import pytest
+
+    monkeypatch.setattr(run_round, "ROOT", tmp_path)
+    baseline_directory = tmp_path / "runs" / "r5-baseline"
+    baseline_directory.mkdir(parents=True)
+    monkeypatch.setattr(run_round.subprocess, "run", lambda *args, **kwargs: None)  # round_status.py is not run here
+
+    def write_status(should_train: bool) -> None:
+        (baseline_directory / "round_status.json").write_text(json.dumps({
+            "should_train": should_train, "reason": "buffer_too_small", "num_weight_fix_failures": 3,
+            "num_with_correction": 1}))
+
+    options = make_options(round=5)
+    write_status(True)
+    assert run_round.check_retraining_trigger(options)["should_train"] is True
+    write_status(False)
+    with pytest.raises(SystemExit, match="RetrainingTrigger says do not train"):
+        run_round.check_retraining_trigger(options)
+    assert run_round.check_retraining_trigger(make_options(round=5, force=True))["reason"] == "buffer_too_small"
+
+
+def test_manifest_names_the_library_parts_each_stage_uses(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_round, "ROOT", tmp_path)
+    (tmp_path / "runs").mkdir()
+    manifest = {"stages": {}}
+    run_round.save_manifest(manifest, 9)
+    assert set(manifest["libraries"]["versions"]) == {"agenttune", "auditkit"}
+    assert "agenttune RetrainingTrigger" in manifest["libraries"]["used_by_stage"]["train"][0]
