@@ -40,7 +40,8 @@ Call one tool at a time. You will get the result in the next message.
 If you do not need a tool, reply to the user in plain text.
 
 Only use values the customer or an earlier tool result gave you. Never make up an id.
-If you do not have a value yet, ask the customer or look it up first.
+If you do not have a value yet, ask the customer or look it up first. If the customer gave no order id,
+find them (an order id starts with #W) with find_user_id_by_email or find_user_id_by_name_zip, then get_user_details lists their orders.
 
 Example (angle brackets stand for a real value from the conversation, not text to copy):
 User: Where is my order <order id the customer wrote>?
@@ -89,6 +90,19 @@ def recorded_prompts() -> dict[str, dict]:
 _TYPES = {"string": "str", "integer": "int", "number": "float", "boolean": "bool", "object": "dict"}
 _CHOICE = re.compile(r"either ('[^']*') or ('[^']*')")
 _EXAMPLE = re.compile(r"such as (\'[^\']*\'|\"[^\"]*\")")
+
+
+# An example that holds a run of digits (an id, a zip, a street number) or "example." (an email) looks like
+# a real value, and the student copied them (round 2: "#W0000000" was 43 of 85 "Order not found" calls).
+_REAL_LOOKING_EXAMPLE = re.compile(r"\d{3,}|example\.")
+NOT_AN_EXAMPLE_HINT = "(real value only, from the customer or a tool)"
+
+
+def example_hint(example_text: str) -> str:
+    """The text that follows an argument in the tool list: its example, unless the example looks real."""
+    if _REAL_LOOKING_EXAMPLE.search(example_text):
+        return NOT_AN_EXAMPLE_HINT
+    return f"e.g. {example_text}"
 
 
 def _type_name(schema: dict) -> str:
@@ -149,7 +163,7 @@ def compact_tool_line(tool: dict) -> str:
         elif choice_match:
             argument_text += f" one of {choice_match.group(1)}|{choice_match.group(2)}"
         elif example_match:
-            argument_text += f" e.g. {example_match.group(1)}"
+            argument_text += f" {example_hint(example_match.group(1))}"
         argument_texts.append(argument_text)
 
     description = function.get("description", "")
