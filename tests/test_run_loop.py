@@ -124,3 +124,11 @@ def test_the_bfcl_screen_applies_the_gates_own_rule():
     assert not run_loop.bfcl_screen_passes(40.99, 43.0, 2.0)
     assert not run_loop.bfcl_screen_passes(33.67, 43.0, 2.0)  # round 4
     assert run_loop.bfcl_screen_passes(50.0, 43.0, 2.0)  # better than the live system
+
+
+def test_a_round_with_the_failures_given_does_not_pay_for_the_steps_it_skips():
+    options = argparse.Namespace(failures_run="r4-cand-train", screen_bfcl=True)
+    assert run_loop.planned_steps(options) == ["data", "train", "bfcl_screen", "gate"]
+    assert run_loop.cost_of_a_full_round(None, run_loop.planned_steps(options)) == pytest.approx(2.35)
+    plain = argparse.Namespace(failures_run=None, screen_bfcl=False)
+    assert run_loop.planned_steps(plain) == ["candidate_train", "classify", "data", "train", "gate"]

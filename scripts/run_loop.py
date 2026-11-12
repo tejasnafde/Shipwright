@@ -194,9 +194,20 @@ def check_fits_in_budget(manifest: dict, step: str, budget_usd: float, spent_in_
         raise SystemExit(f"{step}: its estimate ${estimate:.2f} on top of ${spent:.2f} spent passes the budget ${budget_usd:.2f}")
 
 
-def cost_of_a_full_round(last_round_cost: float | None) -> float:
-    """What the next round needs before it starts: all its steps, or 10% more than the last round really cost."""
-    estimate = sum(STEP_ESTIMATES.values())
+def planned_steps(options: argparse.Namespace) -> list[str]:
+    """The steps this round runs: not the candidate_train and classify steps when the failures are given, and the BFCL
+    screen only when asked for."""
+    skipped = set()
+    if options.failures_run:
+        skipped |= {"candidate_train", "classify"}
+    if not options.screen_bfcl:
+        skipped.add("bfcl_screen")
+    return [step for step in STEPS if step not in skipped]
+
+
+def cost_of_a_full_round(last_round_cost: float | None, steps: list[str] | None = None) -> float:
+    """What the next round needs before it starts: its steps, or 10% more than the last round really cost."""
+    estimate = sum(STEP_ESTIMATES[step] for step in (steps or STEPS))
     if last_round_cost is None:
         return estimate
     return max(estimate, last_round_cost * 1.1)
@@ -400,18 +411,12 @@ def print_plan(options: argparse.Namespace, previous_decision: dict, chosen: rec
           f"general function-calling examples {chosen.general_replay} per category")
     for reason in chosen.reasons:
         print(f"    - {reason}")
-    skipped = set()
     if options.failures_run:
-        skipped |= {"candidate_train", "classify"}
         print(f"  failed tasks taken from {options.failures_run} (candidate_train and classify are skipped)")
     else:
         print(f"  the candidate runs on {len(task_ids)} train tasks the teacher can solve")
-    if not options.screen_bfcl:
-        skipped.add("bfcl_screen")
     total = 0.0
-    for step in STEPS:
-        if step in skipped:
-            continue
+    for step in planned_steps(options):
         total += STEP_ESTIMATES[step]
         print(f"  {step:16} est ${STEP_ESTIMATES[step]:.2f}")
     print(f"  total est ${total:.2f} of the ${options.budget_usd:.2f} budget")
@@ -435,15 +440,9 @@ def run_one_round(options: argparse.Namespace, spent_in_earlier_rounds: float) -
         "bfcl_screen": lambda: step_bfcl_screen(options),
         "gate": lambda: step_gate(options),
     }
-    skipped = set()
     if options.failures_run:
-        skipped |= {"candidate_train", "classify"}
         manifest["failures_run"] = options.failures_run
-    if not options.screen_bfcl:
-        skipped.add("bfcl_screen")
-    for step in STEPS:
-        if step in skipped:
-            continue
+    for step in planned_steps(options):
         if step_is_done(manifest, step, options):
             print(f"{step}: already done")
             continue
@@ -480,10 +479,10 @@ def main() -> int:
         round_options.from_round = options.from_round + round_index
         if round_index > 0:
             round_options.failures_run = None  # a later round takes the failures of the adapter before it
-        if options.launch and cost_of_a_full_round(last_round_cost) + spent > options.budget_usd:
-            print(f"\nStopping before round {round_options.round}: a round needs about "
-                  f"${cost_of_a_full_round(last_round_cost):.2f} and ${options.budget_usd - spent:.2f} is left of "
-                  f"${options.budget_usd:.2f}.")
+        needed = cost_of_a_full_round(last_round_cost, planned_steps(round_options))
+        if options.launch and needed + spent > options.budget_usd:
+            print(f"\nStopping before round {round_options.round}: a round needs about ${needed:.2f} and "
+                  f"${options.budget_usd - spent:.2f} is left of ${options.budget_usd:.2f}.")
             break
         outcome, round_cost = run_one_round(round_options, spent)
         spent += round_cost
