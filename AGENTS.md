@@ -24,7 +24,7 @@ and gate redeployment on measured accuracy."
   Organizers check for real use. CuratorKIT is optional.
 - **Public artifacts:** models, adapters, logs, datasets and benchmarks go to HF, in two ungated
   collections (models, data).
-- **Deadline:** Nov 14, 2026, end of day AoE. Demo Day shortlist Nov 16, Demo Day Nov 22.
+- **Deadline:** the official due time is Nov 15, 2026, 11:59 PM AoE (hackathon.lexsi.ai/structure, checked 2026-11-12); we plan to finish by Nov 14 AoE to keep a day spare. Shortlist (up to 20 teams) is told by Nov 16; shortlisted teams get until Nov 22, 11:59 PM AoE for a video or slides and $200 more HF credits. Judging on Nov 15 to 16 uses what is submitted by the deadline.
 - **License:** Tiny Aya is CC-BY-NC. Make no commercial claims in the write-up.
 
 ## Submission and judging
@@ -34,6 +34,7 @@ and gate redeployment on measured accuracy."
   teams. Rubric: write-up clarity /10, practical usefulness /10, code/notebook quality /10,
   overall review /100. An internal team first checks validity (public artifacts, write-up,
   checklist, no duplicates), then tags each submission to a track.
+- Rules page (checked 2026-11-12): before-and-after metrics on more than one metric; the write-up says which metrics and why, the approach and why these datasets, tasks and models, and how the model is meaningfully better; an HF article; an HF Space if relevant; an optional but preferred ROI comparison (closed-model token billing vs self-hosting: sample volume, GPU hours, GPU price per hour, tokens/sec). Track 3 is exempt from the 2-repos rule. Late or incomplete submissions may not be considered.
 - HF article checklist: (1) problem statement and approach, (2) hackathon repos used and for
   what, (3) models used and their licenses, (4) datasets/benchmarks used and their licenses,
   (5) model artifacts as a public HF collection, (6) data artifacts as a public HF collection,
