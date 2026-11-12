@@ -223,3 +223,26 @@ def test_a_harness_only_remedy_runs_only_the_gate():
     with_corrections = recipe.Recipe(general_replay=100, tool_guards=True, corrections=True)
     steps = run_loop.planned_steps(argparse.Namespace(failures_run="r4-cand-train", screen_bfcl=True), with_corrections, guards_on)
     assert steps == ["corrections", "data", "train", "bfcl_screen", "gate"]
+
+
+def test_a_real_litellm_reply_can_be_turned_into_the_fallback_text():
+    """patches.ask_again_until_policy_ok edits the reply in place: check it on litellm's own classes, not a stand-in."""
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message, ModelResponse
+
+    from shipwright.llm import guards, patches
+
+    message = Message(content=None, tool_calls=[ChatCompletionMessageToolCall(
+        id="x", type="function", function=Function(name="get_order_details", arguments='{"order_id": "#W1"}'))])
+    response = ModelResponse(choices=[{"index": 0, "finish_reason": "tool_calls", "message": message}], model="m")
+    earlier = [
+        {"role": "user", "content": "email a@b.c, order #W1"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "a", "type": "function", "function": {
+            "name": "find_user_id_by_email", "arguments": '{"email": "a@b.c"}'}}]},
+        {"role": "tool", "tool_call_id": "a", "content": "u_1"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "b", "type": "function", "function": {
+            "name": "get_order_details", "arguments": '{"order_id": "#W1"}'}}]},
+        {"role": "tool", "tool_call_id": "b", "content": '{"order_id": "#W1", "status": "pending", "items": []}'}]
+    patched = patches.ask_again_until_policy_ok(earlier, {"messages": []}, response, lambda request: response)
+    final_message = patched.choices[0].message
+    assert final_message.tool_calls is None and "already looked that up" in final_message.content
+    assert guards.GUARDS  # the rule list is the one the loop's doctor checks

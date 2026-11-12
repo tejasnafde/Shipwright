@@ -16,8 +16,8 @@ Round N learns from what round N-1's candidate did wrong, instead of training th
   6. gate         the new candidate against the deployed system on the held-out tasks (HF Job)
   7. promote      only on a gate "promote": scripts/promote.py, with rollback
 
---failures-run NAME reuses a classified candidate-on-train run (steps 2 and 3 are skipped), so a round can change one
-thing in the data and nothing else.
+--failures-run NAME reuses a classified candidate-on-train run in every round (steps 2 and 3 are skipped), so a round can
+change one thing in the data and nothing else, and a budget that cannot pay for a new candidate-on-train run still goes on.
 
 With --max-rounds (default 3) it goes round after round, each started from the gate decision of the one before, until one
 is promoted, the budget cannot cover another round, or a step fails. Every step is written to runs/round-N.json as it finishes and is skipped on a rerun, so a failure midway is resumed
@@ -636,8 +636,6 @@ def main() -> int:
         round_options = argparse.Namespace(**vars(options))
         round_options.round = options.round + round_index
         round_options.from_round = options.from_round + round_index
-        if round_index > 0:
-            round_options.failures_run = None  # a later round takes the failures of the adapter before it
         outcome, round_cost, summary = run_one_round(round_options, spent, last_round_cost)
         rounds.append(summary)
         spent += round_cost

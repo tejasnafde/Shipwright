@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from shipwright.heal.sft_data import trace_to_openai  # noqa: E402
 from shipwright.llm import costs, guards, vertex  # noqa: E402
 from shipwright.llm.context import CONTEXT_LIMIT, count_messages  # noqa: E402
-from shipwright.llm.prompted_tools import convert_messages, parse_tool_call  # noqa: E402
+from shipwright.llm.prompted_tools import convert_messages, format_tool_call, parse_tool_call  # noqa: E402
 from shipwright.observability import log  # noqa: E402
 
 TEACHER_REPLY_TOKENS = 4096
@@ -75,7 +75,17 @@ def reply_is_acceptable(conversation_before: list[dict], reply_text: str) -> boo
     return guards.first_violation(conversation_before, guards.ToolCall(name=parsed[0], arguments=parsed[1])) is None
 
 
+def canonical_reply(reply_text: str) -> str:
+    """A tool call as exactly one ```json block (the protocol: "reply with exactly one block and nothing else"): the teacher
+    sometimes writes a sentence before it. A text reply is kept as written."""
+    parsed = parse_tool_call(reply_text)
+    if parsed is None:
+        return reply_text.strip()
+    return format_tool_call(parsed[0], parsed[1])
+
+
 def correction_row(wrong_turn: WrongTurn, prompt: dict, reply_text: str, teacher_model: str) -> dict:
+    reply_text = canonical_reply(reply_text)
     student_view = convert_messages([{"role": "system", "content": prompt["system"]}, *wrong_turn.conversation_before],
                                     prompt["tools"])
     return {

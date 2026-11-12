@@ -72,3 +72,10 @@ def test_passed_and_infrastructure_error_runs_are_skipped():
     infra = {**looping_trace(), "termination_reason": "infrastructure_error"}
     rows, stats = corrections.build_corrections([passed, infra], lambda trace: PROMPT, lambda model, messages: ("x", {}), "m", 1.0)
     assert rows == [] and stats.wrong_turns_found == {}
+
+
+def test_a_tool_call_with_a_sentence_before_it_becomes_exactly_one_block():
+    mixed = 'Let me look that up properly.\n\n```json\n{"name": "find_user_id_by_name_zip", "arguments": {"zip": "19122"}}\n```'
+    assert corrections.canonical_reply(mixed) == (
+        '```json\n{"name": "find_user_id_by_name_zip", "arguments": {"zip": "19122"}}\n```')
+    assert corrections.canonical_reply("  Anything else I can do?  ") == "Anything else I can do?"
