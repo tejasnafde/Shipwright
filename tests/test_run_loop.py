@@ -67,3 +67,21 @@ def test_the_candidate_config_of_the_next_round_points_at_its_own_adapter(tmp_pa
     assert "name: r4-weight" in written and "revision: round-4" in written and "# Round 4" in written
     commit = next(command for command in calls if "commit" in command)
     assert commit[-2:] == ["--", "configs/systems/r4-weight.yaml"]  # only its own file is committed
+
+
+def test_a_copied_run_dir_holds_real_files_not_links_into_a_cache(tmp_path):
+    cache = tmp_path / "cache" / "blobs"
+    cache.mkdir(parents=True)
+    (cache / "abc").write_text('{"task_id": 1}\n')
+    snapshot = tmp_path / "cache" / "snapshots" / "run"
+    snapshot.mkdir(parents=True)
+    (snapshot / "traces.jsonl").symlink_to(cache / "abc")
+    destination = tmp_path / "runs" / "r4-cand-train"
+    run_loop.copy_run_directory(snapshot, destination)
+    assert not (destination / "traces.jsonl").is_symlink()
+    assert (destination / "traces.jsonl").read_text() == '{"task_id": 1}\n'
+
+
+def test_other_costs_count_as_spent():
+    manifest = {"stages": {"gate": {"actual_usd": 0.5}}, "other_costs": [{"usd": 0.37}]}
+    assert run_loop.spent_so_far(manifest) == pytest.approx(0.87)

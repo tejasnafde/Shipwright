@@ -26,6 +26,7 @@ import argparse
 import importlib.util
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -126,6 +127,22 @@ def launched_job_id(command: list[str]) -> str:
     return match.group(1)
 
 
+def copy_run_directory(source: Path, destination: Path) -> None:
+    """Copy a run dir with its real files. The Hub download is full of links into its cache: copying those as links
+    leaves a folder of dangling links (round 4, 2026-11-12)."""
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.copytree(source, destination, symlinks=False)
+
+
+def results_are_on_the_hub(round_number: int, source: str) -> bool:
+    """True when an earlier launch of this step already pushed its traces, so the job need not run again."""
+    from huggingface_hub import HfApi
+
+    return HfApi().file_exists(
+        RUNS_REPO, f"gate/round-{round_number}/{source}-train/{source}/traces.jsonl", repo_type="dataset")
+
+
 def wait_for_job(job_id: str) -> tuple[str, float]:
     """Block until an HF job ends. Returns (final stage, cost in USD from its runtime and flavor price)."""
     from huggingface_hub import HfApi
@@ -153,7 +170,8 @@ def load_loop_manifest(options: argparse.Namespace) -> dict:
 
 
 def spent_so_far(manifest: dict) -> float:
-    return sum(stage.get("actual_usd") or 0.0 for stage in manifest["stages"].values())
+    stages = sum(stage.get("actual_usd") or 0.0 for stage in manifest["stages"].values())
+    return stages + sum(other["usd"] for other in manifest.get("other_costs", []))
 
 
 def check_fits_in_budget(manifest: dict, step: str, budget_usd: float, spent_in_earlier_rounds: float = 0.0) -> None:
@@ -193,9 +211,13 @@ def step_candidate_train(options: argparse.Namespace, task_ids: list[str]) -> di
         "--user-model", options.user_model, "--train-eval", "--trials", "1", "--task-ids", *task_ids,
         "--flavor", CANDIDATE_TRAIN_FLAVOR, "--timeout", CANDIDATE_TRAIN_TIMEOUT, "--launch",
     ]
-    stage, cost = wait_for_job(launched_job_id(command))
-    if stage != "COMPLETED":
-        return {"exit_code": 1, "actual_usd": cost, "note": f"the HF job ended as {stage}"}
+    if results_are_on_the_hub(options.round, source):
+        print("the candidate's train run is already on the Hub: not launching it again")
+        cost = 0.0
+    else:
+        stage, cost = wait_for_job(launched_job_id(command))
+        if stage != "COMPLETED":
+            return {"exit_code": 1, "actual_usd": cost, "note": f"the HF job ended as {stage}"}
 
     from huggingface_hub import snapshot_download
 
@@ -203,10 +225,7 @@ def step_candidate_train(options: argparse.Namespace, task_ids: list[str]) -> di
     downloaded = Path(snapshot_download(
         RUNS_REPO, repo_type="dataset", allow_patterns=[f"gate/round-{options.round}/{source}-train/{source}/*"]))
     run_directory = ROOT / "runs" / local_name
-    if run_directory.exists():
-        subprocess.run(["rm", "-rf", str(run_directory)], check=True)
-    subprocess.run(["cp", "-R", str(downloaded / "gate" / f"round-{options.round}" / f"{source}-train" / source),
-                    str(run_directory)], check=True)
+    copy_run_directory(downloaded / "gate" / f"round-{options.round}" / f"{source}-train" / source, run_directory)
     gcs_runs.push_run(options.owner, run_directory)
     summary = run_round.read_summary(run_directory)
     return {"exit_code": 0, "actual_usd": cost, "run_dir": f"runs/{local_name}", "num_runs": summary.get("num_runs"),
