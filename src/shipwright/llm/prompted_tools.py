@@ -43,8 +43,8 @@ Call one tool at a time. You will get the result in the next message.
 If you do not need a tool, reply to the user in plain text.
 
 Only use values the customer or an earlier tool result gave you. Never make up an id.
-If you do not have a value yet, ask the customer or look it up first. If the customer gave no order id,
-find them (an order id starts with #W) with find_user_id_by_email or find_user_id_by_name_zip, then get_user_details lists their orders.
+If you do not have a value yet, ask the customer or look it up first. An order id starts with #W;
+find_user_id_by_email or find_user_id_by_name_zip, then get_user_details, lists a customer's orders.
 
 How to handle a request:
 1. Identify the customer first: ask for their email, or their name and zip code, and look up their user id. Do this even if they give you a user id.
