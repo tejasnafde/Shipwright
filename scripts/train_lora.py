@@ -95,6 +95,15 @@ def split_example(messages: list[dict]) -> tuple[str, list[tuple[str, str]]]:
     return system_prompt, events
 
 
+def mask_all_but_last_assistant(messages: list[dict], loss_mask: list[bool]) -> list[bool]:
+    """A correction row holds the student's own (wrong) earlier turns as context: only the teacher's final reply is trained.
+
+    ``loss_mask[i]`` is True when message i is masked (not trained)."""
+    last_assistant = max((index for index, message in enumerate(messages) if message["role"] == "assistant"), default=-1)
+    return [is_masked or (message["role"] == "assistant" and index != last_assistant)
+            for index, (message, is_masked) in enumerate(zip(messages, loss_mask))]
+
+
 def target_char_spans(render, messages: list[dict], loss_mask: list[bool]) -> list[tuple[int, int]]:
     """Char spans of the trained (unmasked) messages in render(messages).
 
@@ -293,10 +302,13 @@ class MaskedSFTFactory:
         self.dropped_template = 0
         self.rows_trained = 0
         self.longest_row_tokens = 0
+        self.last_only: list[bool] = []  # per row of the dataset: train only its final assistant turn (corrections)
 
-    def tokenize(self, row: dict) -> dict | None:
+    def tokenize(self, row: dict, last_only: bool = False) -> dict | None:
         """Token ids and labels of one SFT row, or None if it is dropped (template error, too long)."""
         tokenizer = self.tokenizer
+        if last_only:
+            row = {**row, "loss_mask": mask_all_but_last_assistant(row["messages"], row["loss_mask"])}
 
         def render(messages: list[dict], add_generation_prompt: bool) -> str:
             if not messages:
@@ -334,8 +346,8 @@ class MaskedSFTFactory:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
         tokenized_rows = []
-        for row in train_dataset:
-            tokenized_row = self.tokenize(row)
+        for row_index, row in enumerate(train_dataset):
+            tokenized_row = self.tokenize(row, last_only=bool(self.last_only and self.last_only[row_index]))
             if tokenized_row is not None:
                 tokenized_rows.append(tokenized_row)
         self.rows_trained = len(tokenized_rows)
@@ -455,6 +467,7 @@ def main(argv: list[str] | None = None) -> int:
     eventlog_class = make_eventlog_class()
     event_logs = [to_eventlog(eventlog_class, record["messages"]) for record in records]
     trainer_factory = MaskedSFTFactory(training_options)
+    trainer_factory.last_only = [bool(record.get("train_last_only")) for record in records]
     trainer = create_distill_trainer(
         training_options.student,
         trajectories=event_logs,

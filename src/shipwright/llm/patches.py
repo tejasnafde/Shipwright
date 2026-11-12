@@ -206,8 +206,14 @@ def ask_again_until_policy_ok(conversation: list[dict], request_kwargs: dict, re
         final_violation = guards.first_violation(conversation, final_call) if final_call else None
         fields = dict(trace_fields(response))
         fields["guard_rejections"] = rejections
-        fields["guard_allowed_after_retries"] = final_violation.rule if final_violation else None
         message = response.choices[0].message
+        if final_violation is not None and final_violation.fallback_reply:
+            # Still the same bad call after being asked again: say the fallback to the customer instead of running it.
+            message.content = final_violation.fallback_reply
+            message.tool_calls = None
+            fields["guard_replaced_with_text"] = final_violation.rule
+            final_violation = None
+        fields["guard_allowed_after_retries"] = final_violation.rule if final_violation else None
         provider_fields = dict(getattr(message, "provider_specific_fields", None) or {})
         provider_fields[TRACE_FIELD] = fields
         message.provider_specific_fields = provider_fields

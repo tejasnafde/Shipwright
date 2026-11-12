@@ -199,3 +199,58 @@ def test_order_status_must_fit_the_tool():
     exchange = call("exchange_delivered_order_items", order_id="#W2378156", item_ids=[], new_item_ids=[],
                     payment_method_id="")
     assert guards.check_order_status_fits_tool(looked_up, exchange) is None
+
+
+# ---- the guards added after rounds 3 to 5 ----
+
+ORDER_RESULT = json.dumps({"order_id": "#W1", "status": "delivered", "items": [
+    {"name": "Bookshelf", "product_id": "P-SHELF", "item_id": "I-SHELF", "price": 100.0}]})
+PRODUCT_RESULT = json.dumps({"name": "Digital Camera", "product_id": "P-CAMERA", "variants": {
+    "I-CAM": {"item_id": "I-CAM", "available": True}}})
+LOOKED_UP = AUTHENTICATED + [
+    agent_call("get_order_details", {"order_id": "#W1"}, "c2"), tool_result("c2", ORDER_RESULT),
+    agent_call("get_product_details", {"product_id": "P-CAMERA"}, "c3"), tool_result("c3", PRODUCT_RESULT),
+    agent_text("I can exchange it. Shall I go ahead?"), customer("yes please")]
+
+
+def test_an_exchange_to_another_product_type_is_rejected_with_a_text_fallback():
+    exchange = call("exchange_delivered_order_items", order_id="#W1", item_ids=["I-SHELF"], new_item_ids=["I-CAM"])
+    violation = guards.first_violation(LOOKED_UP, exchange)
+    assert violation.rule == "exchange_other_product_type" and "Bookshelf" in violation.message
+    assert "isn't possible" in violation.fallback_reply
+    same_product = ORDER_RESULT.replace("P-SHELF", "P-CAMERA")  # the same product in another option is allowed
+    allowed = LOOKED_UP[:-6] + [agent_call("get_order_details", {"order_id": "#W1"}, "c2"), tool_result("c2", same_product),
+                                agent_call("get_product_details", {"product_id": "P-CAMERA"}, "c3"),
+                                tool_result("c3", PRODUCT_RESULT), agent_text("Go ahead?"), customer("yes")]
+    assert guards.first_violation(allowed, exchange) is None
+    unknown = call("exchange_delivered_order_items", order_id="#W1", item_ids=["I-SHELF"], new_item_ids=["I-NEVER-SEEN"])
+    assert guards.check_same_product_type(LOOKED_UP, unknown) is None  # an unknown item is the made-up-id guard's job
+
+
+def test_one_change_per_order():
+    first = LOOKED_UP + [agent_call("exchange_delivered_order_items", {"order_id": "#W1", "item_ids": ["I-SHELF"],
+                         "new_item_ids": ["I-OTHER"]}, "c4"), tool_result("c4", '{"status": "exchange requested"}')]
+    second = call("exchange_delivered_order_items", order_id="#W1", item_ids=["I-SHELF"], new_item_ids=["I-OTHER"])
+    assert guards.check_one_change_per_order(first, second).rule == "second_change_to_one_order"
+    assert guards.check_one_change_per_order(LOOKED_UP, second) is None
+
+
+def test_a_repeated_lookup_is_rejected_unless_the_data_changed_in_between():
+    repeat = call("get_order_details", order_id="#W1")
+    assert guards.check_repeated_call(LOOKED_UP, repeat).rule == "repeated_call"
+    after_a_change = LOOKED_UP + [agent_call("cancel_pending_order", {"order_id": "#W1", "reason": "x"}, "c5"),
+                                  tool_result("c5", "{}")]
+    assert guards.check_repeated_call(after_a_change, repeat) is None  # checking the result of a change is fine
+    assert guards.check_repeated_call(LOOKED_UP, call("get_order_details", order_id="#W2")) is None
+
+
+def test_a_stubborn_repeat_is_replaced_by_the_fallback_text_instead_of_running():
+    stubborn = reply("again", "get_order_details", {"order_id": "#W1"})
+    asked = []
+    final = patches.ask_again_until_policy_ok(LOOKED_UP, {"messages": []}, stubborn,
+                                              lambda request: asked.append(request) or stubborn)
+    message = final.choices[0].message
+    assert len(asked) == guards.MAX_GUARD_RETRIES
+    assert message.tool_calls is None and "already looked that up" in message.content
+    fields = message.provider_specific_fields[TRACE_FIELD]
+    assert fields["guard_replaced_with_text"] == "repeated_call" and fields["guard_allowed_after_retries"] is None

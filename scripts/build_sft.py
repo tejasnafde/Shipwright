@@ -54,6 +54,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="a jsonl of general function-calling examples (scripts/build_bfcl_replay.py) added to the data as they are:"
         " they keep the adapter from answering in words where a function should be called (BFCL fell 43 to 34 without them)",
     )
+    parser.add_argument(
+        "--corrections", type=Path, default=None,
+        help="a jsonl of corrective examples (scripts/build_corrections.py): the candidate's conversation up to a wrong "
+        "turn, and the teacher's reply. Only that reply is trained (train_last_only)",
+    )
     parser.add_argument("--max-replay", type=int, default=None, help="cap on replay examples")
     parser.add_argument("--allow-split", action="store_true", help="accept runs not on the train split")
     parser.add_argument(
@@ -326,6 +331,15 @@ def main(argv: list[str] | None = None) -> int:
             dropped_counts[reason] = dropped_counts.get(reason, 0) + count
         notes.append(f"general replay: {general_replay_count} examples from {build_options.general_replay}")
 
+    corrections_count = 0
+    if build_options.corrections:
+        correction_records, correction_dropped = load_general_replay(build_options.corrections, build_options.max_tokens)
+        kept_records = kept_records + correction_records
+        corrections_count = len(correction_records)
+        for reason, count in correction_dropped.items():
+            dropped_counts[reason] = dropped_counts.get(reason, 0) + count
+        notes.append(f"corrections: {corrections_count} examples from {build_options.corrections}")
+
     with open(output_directory / "sft.jsonl", "w") as sft_file:
         for record in kept_records:
             sft_file.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -344,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
             "boosted_tasks": boosted_task_ids,
             "examples_before_boost": examples_before_boost,
             "general_replay": general_replay_count,
+            "corrections": corrections_count,
         },
     )
     (output_directory / "sft_stats.json").write_text(json.dumps(statistics, indent=2))

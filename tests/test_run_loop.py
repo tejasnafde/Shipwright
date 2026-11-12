@@ -55,23 +55,62 @@ def test_the_chosen_recipe_is_kept_in_the_manifest_so_a_rerun_uses_the_same_one(
     assert again.general_replay == 100 and again.reasons == first.reasons
 
 
-def test_the_candidate_config_of_the_next_round_points_at_its_own_adapter(tmp_path, monkeypatch):
+SOURCE_CONFIG = """name: r3-weight
+model: CohereLabs/tiny-aya-global
+adapter:
+  repo: x/y
+  revision: round-3
+route: weight_fix
+targets: [invented_id, loop]
+"""
+
+
+def write_source_config(tmp_path):
     configs = tmp_path / "configs" / "systems"
     configs.mkdir(parents=True)
-    (configs / "r3-weight.yaml").write_text(
-        "# Round 3 weight-fix candidate\nname: r3-weight\nadapter:\n  repo: x/y\n  revision: round-3\nroute: weight_fix\n")
-    calls = []
-    monkeypatch.setattr(run_loop, "ROOT", tmp_path)
+    (configs / "r3-weight.yaml").write_text(SOURCE_CONFIG)
+    return configs
+
+
+def fake_git(calls, staged_changes=True):
     def fake_run(command, **keyword_arguments):
         calls.append(command)
-        return argparse.Namespace(returncode=1)  # `git diff --cached --quiet` says: the file changed
+        return argparse.Namespace(returncode=1 if staged_changes else 0)  # `git diff --cached --quiet`: 1 = changed
 
-    monkeypatch.setattr(run_loop.subprocess, "run", fake_run)
-    run_loop.write_candidate_config(argparse.Namespace(round=4, from_round=3))
+    return fake_run
+
+
+def test_a_trained_round_points_its_config_at_its_own_adapter(tmp_path, monkeypatch):
+    configs = write_source_config(tmp_path)
+    calls = []
+    monkeypatch.setattr(run_loop, "ROOT", tmp_path)
+    monkeypatch.setattr(run_loop.subprocess, "run", fake_git(calls))
+    chosen = run_loop.recipe_module.Recipe(tool_guards=False)
+    run_loop.write_candidate_config(argparse.Namespace(round=4, from_round=3), chosen, retrain=True)
     written = (configs / "r4-weight.yaml").read_text()
-    assert "name: r4-weight" in written and "revision: round-4" in written and "# Round 4" in written
+    assert "name: r4-weight" in written and "revision: round-4" in written and "Round 4 candidate" in written
+    assert "tool_guards: false" in written
     commit = next(command for command in calls if "commit" in command)
     assert commit[-2:] == ["--", "configs/systems/r4-weight.yaml"]  # only its own file is committed
+
+
+def test_a_guards_only_round_keeps_the_adapter_and_turns_the_guards_on(tmp_path, monkeypatch):
+    configs = write_source_config(tmp_path)
+    monkeypatch.setattr(run_loop, "ROOT", tmp_path)
+    monkeypatch.setattr(run_loop.subprocess, "run", fake_git([]))
+    chosen = run_loop.recipe_module.Recipe(tool_guards=True, reasons=["loops: guards on"])
+    run_loop.write_candidate_config(argparse.Namespace(round=6, from_round=3), chosen, retrain=False)
+    written = (configs / "r6-weight.yaml").read_text()
+    assert "revision: round-3" in written and "tool_guards: true" in written and "the same as the round before" in written
+
+
+def test_rerunning_the_gate_step_does_not_commit_an_unchanged_config(tmp_path, monkeypatch):
+    write_source_config(tmp_path)
+    calls = []
+    monkeypatch.setattr(run_loop, "ROOT", tmp_path)
+    monkeypatch.setattr(run_loop.subprocess, "run", fake_git(calls, staged_changes=False))
+    run_loop.write_candidate_config(argparse.Namespace(round=4, from_round=3), run_loop.recipe_module.Recipe(), True)
+    assert not any("commit" in command for command in calls) and not any("push" in command for command in calls)
 
 
 def test_a_copied_run_dir_holds_real_files_not_links_into_a_cache(tmp_path):
@@ -103,22 +142,6 @@ def test_every_command_the_loop_builds_parses_in_the_script_it_calls():
     assert training_arguments == ["--epochs", "2", "--lr", "0.0001"]  # handed to train_lora.py, not parsed here
 
 
-def test_rerunning_the_gate_step_does_not_commit_an_unchanged_config(tmp_path, monkeypatch):
-    configs = tmp_path / "configs" / "systems"
-    configs.mkdir(parents=True)
-    (configs / "r3-weight.yaml").write_text("name: r3-weight\nadapter:\n  revision: round-3\n")
-    calls = []
-
-    def fake_run(command, **keyword_arguments):
-        calls.append(command)
-        return argparse.Namespace(returncode=0)  # nothing staged: already committed
-
-    monkeypatch.setattr(run_loop, "ROOT", tmp_path)
-    monkeypatch.setattr(run_loop.subprocess, "run", fake_run)
-    run_loop.write_candidate_config(argparse.Namespace(round=4, from_round=3))
-    assert not any("commit" in command for command in calls) and not any("push" in command for command in calls)
-
-
 def test_the_bfcl_screen_applies_the_gates_own_rule():
     assert run_loop.bfcl_screen_passes(41.0, 43.0, 2.0)  # exactly 2 points below is allowed
     assert not run_loop.bfcl_screen_passes(40.99, 43.0, 2.0)
@@ -132,3 +155,71 @@ def test_a_round_with_the_failures_given_does_not_pay_for_the_steps_it_skips():
     assert run_loop.cost_of_a_full_round(None, run_loop.planned_steps(options)) == pytest.approx(2.35)
     plain = argparse.Namespace(failures_run=None, screen_bfcl=False)
     assert run_loop.planned_steps(plain) == ["candidate_train", "classify", "data", "train", "gate"]
+
+
+class FakeJobs:
+    """A fake Hub client: each job id walks through the stages given for it."""
+
+    def __init__(self, stages_by_job):
+        self.stages = {job: list(stages) for job, stages in stages_by_job.items()}
+        self.cancelled = []
+
+    def inspect_job(self, job_id):
+        stage = self.stages[job_id][0] if len(self.stages[job_id]) == 1 else self.stages[job_id].pop(0)
+        return argparse.Namespace(status=argparse.Namespace(stage=stage), flavor="l40sx1",
+                                  durations=argparse.Namespace(running_secs=1800))
+
+    def cancel_job(self, job_id):
+        self.cancelled.append(job_id)
+
+
+def test_a_job_stuck_in_the_queue_is_cancelled_and_costs_nothing():
+    jobs = FakeJobs({"j1": ["SCHEDULING"]})
+    now = [0.0]
+    stage, cost = run_loop.wait_for_job("j1", queue_limit_seconds=600, hf_api=jobs,
+                                        sleep=lambda seconds: now.__setitem__(0, now[0] + 400), clock=lambda: now[0])
+    assert (stage, cost) == ("QUEUE_TIMEOUT", 0.0) and jobs.cancelled == ["j1"]
+
+
+def test_a_job_that_runs_is_priced_by_its_running_seconds():
+    jobs = FakeJobs({"j2": ["SCHEDULING", "RUNNING", "COMPLETED"]})
+    stage, cost = run_loop.wait_for_job("j2", queue_limit_seconds=600, hf_api=jobs, sleep=lambda seconds: None)
+    assert stage == "COMPLETED" and cost == pytest.approx(0.5 * 1.80)  # 1800 s on an l40sx1
+
+
+def test_the_second_gpu_type_is_tried_when_the_first_waits_too_long():
+    launched = []
+
+    def launch(command):
+        launched.append(command)
+        return f"job-{len(launched)}"
+
+    def wait(job_id, queue_limit_seconds):
+        return ("QUEUE_TIMEOUT", 0.0) if job_id == "job-1" else ("COMPLETED", 0.8)
+
+    result = run_loop.run_hf_job(lambda flavor: ["launch", flavor], ["a10g-large", "l40sx1"], 12, launch=launch, wait=wait)
+    assert launched == [["launch", "a10g-large"], ["launch", "l40sx1"]]
+    assert result["flavor"] == "l40sx1" and result["stage"] == "COMPLETED" and result["cost"] == 0.8
+    assert [attempt["stage"] for attempt in result["tried"]] == ["QUEUE_TIMEOUT", "COMPLETED"]
+
+
+def test_the_last_gpu_type_waits_as_long_as_it_takes_and_a_failure_is_not_retried():
+    limits = []
+
+    def wait(job_id, queue_limit_seconds):
+        limits.append(queue_limit_seconds)
+        return "ERROR", 0.1
+
+    result = run_loop.run_hf_job(lambda flavor: [flavor], ["l40sx1"], 12, launch=lambda command: "j", wait=wait)
+    assert limits == [None] and result["stage"] == "ERROR" and len(result["tried"]) == 1
+
+
+def test_a_harness_only_remedy_runs_only_the_gate():
+    recipe = run_loop.recipe_module
+    previous = recipe.Recipe(general_replay=100)
+    guards_on = recipe.Recipe(general_replay=100, tool_guards=True)
+    options = argparse.Namespace(failures_run=None, screen_bfcl=True)
+    assert run_loop.planned_steps(options, guards_on, previous) == ["gate"]
+    with_corrections = recipe.Recipe(general_replay=100, tool_guards=True, corrections=True)
+    steps = run_loop.planned_steps(argparse.Namespace(failures_run="r4-cand-train", screen_bfcl=True), with_corrections, guards_on)
+    assert steps == ["corrections", "data", "train", "bfcl_screen", "gate"]

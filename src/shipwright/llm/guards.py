@@ -55,6 +55,10 @@ class ToolCall:
 class GuardViolation:
     rule: str
     message: str
+    # What the agent says to the customer instead, if it still makes the call after being asked again. Only for rules
+    # where running the call is worse than moving the conversation on (a repeated lookup loops; a forbidden exchange
+    # breaks the policy). The other rules let the call run, so a wrong guard slows the agent but never blocks it.
+    fallback_reply: str | None = None
 
 
 def is_write_tool(tool_name: str) -> bool:
@@ -270,12 +274,109 @@ def check_order_status_fits_tool(messages: list[dict], call: ToolCall) -> GuardV
     )
 
 
+# ---- guards added after rounds 3 to 5: the adapter over-acts and loops (docs/pipeline/gate.md, AGENTS.md) ----
+
+CHANGE_TOOLS = ("exchange_delivered_order_items", "modify_pending_order_items")
+
+
+def result_json(result: str) -> dict | None:
+    try:
+        parsed = json.loads(result)
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def product_of_items(messages: list[dict]) -> dict[str, tuple[str, str]]:
+    """item id -> (product id, product name), from the order details and product details the agent has looked at."""
+    product_by_item: dict[str, tuple[str, str]] = {}
+    for earlier in earlier_calls(messages):
+        result = result_json(earlier.result)
+        if not result:
+            continue
+        for item in result.get("items") or []:  # an order: its items carry their product
+            if isinstance(item, dict) and item.get("item_id") and item.get("product_id"):
+                product_by_item[str(item["item_id"])] = (str(item["product_id"]), str(item.get("name") or ""))
+        for item_id in (result.get("variants") or {}):  # a product: its variants are item ids
+            if result.get("product_id"):
+                product_by_item[str(item_id)] = (str(result["product_id"]), str(result.get("name") or ""))
+    return product_by_item
+
+
+def check_same_product_type(messages: list[dict], call: ToolCall) -> GuardViolation | None:
+    """Policy: "each item can be exchanged to an available new item of the same product but of different product
+    option. There cannot be any change of product types, e.g. modify shirt to shoe." """
+    if call.name not in CHANGE_TOOLS:
+        return None
+    old_ids, new_ids = call.arguments.get("item_ids"), call.arguments.get("new_item_ids")
+    if not isinstance(old_ids, list) or not isinstance(new_ids, list):
+        return None
+    product_by_item = product_of_items(messages)
+    for old_id, new_id in zip(old_ids, new_ids):
+        old_product, new_product = product_by_item.get(str(old_id)), product_by_item.get(str(new_id))
+        if old_product and new_product and old_product[0] != new_product[0]:
+            return GuardViolation(
+                rule="exchange_other_product_type",
+                message=(f"Item {old_id} is a {old_product[1] or 'different product'} and item {new_id} is a "
+                         f"{new_product[1] or 'different product'}: the policy only allows changing an item to the "
+                         f"same product in another option (a keyboard for a keyboard), never to another product "
+                         f"type. Tell the customer this is not possible and offer an alternative of the same product."),
+                fallback_reply=("I'm sorry, but that change isn't possible: an item can only be exchanged for the same "
+                                "product in a different option, not for a different kind of product. Is there "
+                                "something else I can help you with?"),
+            )
+    return None
+
+
+def check_one_change_per_order(messages: list[dict], call: ToolCall) -> GuardViolation | None:
+    """Policy: "Exchange or modify order tools can only be called once per order." """
+    if call.name not in CHANGE_TOOLS:
+        return None
+    order_id = str(call.arguments.get("order_id") or "").lstrip("#")
+    for earlier in earlier_calls(messages):
+        same_order = str(earlier.call.arguments.get("order_id") or "").lstrip("#") == order_id
+        if earlier.call.name in CHANGE_TOOLS and same_order and not earlier.result.startswith("Error"):
+            return GuardViolation(
+                rule="second_change_to_one_order",
+                message=(f"A change to order {call.arguments.get('order_id')} was already submitted, and the policy "
+                         f"allows it only once per order. Tell the customer what was submitted instead of making "
+                         f"another change."),
+                fallback_reply=("That order already has a change submitted, and the policy only allows one per "
+                                "order. Is there anything else I can help you with?"),
+            )
+    return None
+
+
+def check_repeated_call(messages: list[dict], call: ToolCall) -> GuardViolation | None:
+    """The same lookup again, with nothing changed since, only returns the same answer (round 5: the adapter repeated
+    one order lookup 8 times and ran out of room). A repeat after a change to the data is a legitimate check."""
+    calls = earlier_calls(messages)
+    for position in range(len(calls) - 1, -1, -1):
+        earlier = calls[position]
+        if earlier.call.name == call.name and earlier.call.arguments == call.arguments and not earlier.result.startswith("Error"):
+            changed_since = any(is_write_tool(later.call.name) for later in calls[position + 1:])
+            if not changed_since:
+                return GuardViolation(
+                    rule="repeated_call",
+                    message=(f"You already made this exact call ({call.name}) and its result is in the conversation "
+                             f"above. Do not call it again. Use that result: tell the customer what you found and "
+                             f"what you can do, or take the next step."),
+                    fallback_reply=("I have already looked that up and have the details. How would you like me to "
+                                    "proceed?"),
+                )
+            return None
+    return None
+
+
 GUARDS = [
     check_early_transfer,
     check_authentication_first,
     check_repeated_failure,
+    check_repeated_call,
     check_made_up_ids,
     check_order_status_fits_tool,
+    check_same_product_type,
+    check_one_change_per_order,
     check_confirmation_before_change,
 ]
 
