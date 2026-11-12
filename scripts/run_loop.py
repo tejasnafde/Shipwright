@@ -74,6 +74,8 @@ def parse_options() -> argparse.Namespace:
     parser.add_argument("--teacher-model", default=TEACHER_MODEL)
     parser.add_argument("--pool", nargs="*", default=DEFAULT_POOL, help="teacher run dirs whose passes make the data")
     parser.add_argument("--redo", nargs="*", default=[], choices=STEPS, help="run these steps again")
+    parser.add_argument("--gate-flavor", default=GATE_FLAVOR,
+                        help="GPU of the gate job: a busy pool can leave an A10G waiting for an hour, an l40sx1 costs $0.30/h more")
     parser.add_argument("--launch", action="store_true", help="run the steps (spends credits); without it, plan only")
     options = parser.parse_args()
     # What run_round's cloud stage reads from its options.
@@ -306,7 +308,7 @@ def step_gate(options: argparse.Namespace) -> dict:
     command = [sys.executable, str(ROOT / "scripts" / "gate_job.py"), "--round", str(options.round),
                "--current", run_round.current_system_path(),
                "--candidate", f"configs/systems/{candidate_name(options.round)}.yaml",
-               "--user-model", run_round.GATE_USER_MODEL, "--flavor", GATE_FLAVOR, "--timeout", GATE_TIMEOUT, "--launch"]
+               "--user-model", run_round.GATE_USER_MODEL, "--flavor", options.gate_flavor, "--timeout", GATE_TIMEOUT, "--launch"]
     job_id = launched_job_id(command)
     stage, cost = wait_for_job(job_id)
     if stage != "COMPLETED":
