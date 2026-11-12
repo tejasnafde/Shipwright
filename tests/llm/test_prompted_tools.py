@@ -122,3 +122,19 @@ def test_example_hint_hides_real_looking_examples_only():
 def test_minify_content():
     assert pt.minify_content('{\n  "a": [1, 2]\n}') == '{"a":[1,2]}'
     assert pt.minify_content("not json") == "not json"
+
+
+def test_convert_messages_drops_the_opening_greeting_so_roles_alternate():
+    history = [
+        {"role": "system", "content": "policy"},
+        {"role": "assistant", "content": "Hi! How can I help you today?"},
+        {"role": "user", "content": "cancel my order"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "1", "type": "function", "function": {
+            "name": "find_user_id_by_email", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "1", "content": "u_1"},
+        {"role": "assistant", "content": "Found you."},
+    ]
+    converted = pt.convert_messages(history, [])
+    roles = [message["role"] for message in converted]
+    assert roles == ["system", "user", "assistant", "user", "assistant"]
+    assert "Hi! How can I help you today?" not in json.dumps(converted)

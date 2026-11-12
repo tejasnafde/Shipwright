@@ -43,16 +43,16 @@ def test_rendered_example_equals_student_prompt_at_every_turn():
     trace = tau2_trace()
     [rec] = sd.trace_records(trace, PROMPT, "teacher")
     msgs = rec["messages"]
-    assert [m["role"] for m in msgs] == ["system", "assistant", "user", "assistant", "user", "assistant"]
+    # tau2's opening greeting is dropped: Tiny Aya's chat template wants a user turn after the system message.
+    assert [m["role"] for m in msgs] == ["system", "user", "assistant", "user", "assistant"]
     # What Tiny Aya is sent before each assistant turn (llm_patch -> prepare_request).
     history = sd.trace_to_openai(trace["messages"])
     full = [{"role": "system", "content": PROMPT["system"]}, *history]
-    for idx in (3, 5):  # assistant turns after a user turn and after a tool result
-        # Here the converted index equals the raw index: no user turns are merged.
-        req, _ = pt.prepare_request({"model": MODEL, "messages": full[:idx], "tools": TOOLS})
-        assert req["messages"] == msgs[:idx]
-    assert pt.parse_tool_call(msgs[3]["content"]) == ("get_order_details", {"order_id": "#W1"})
-    assert msgs[4]["content"] == 'Tool result for get_order_details: {"status":"pending"}'
+    for raw_idx, converted_idx in ((3, 2), (5, 4)):  # assistant turns after a user turn and after a tool result
+        req, _ = pt.prepare_request({"model": MODEL, "messages": full[:raw_idx], "tools": TOOLS})
+        assert req["messages"] == msgs[:converted_idx]
+    assert pt.parse_tool_call(msgs[2]["content"]) == ("get_order_details", {"order_id": "#W1"})
+    assert msgs[3]["content"] == 'Tool result for get_order_details: {"status":"pending"}'
     assert msgs[0]["content"] == f"{PROMPT['system']}\n\n{pt.render_tools_prompt(TOOLS)}"
 
 

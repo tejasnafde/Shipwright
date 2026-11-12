@@ -206,8 +206,29 @@ def format_tool_call(name: str, arguments: Any) -> str:
     return "```json\n" + json.dumps({"name": name, "arguments": arguments}) + "\n```"
 
 
+def without_opening_greeting(messages: list[dict]) -> list[dict]:
+    """The history without the plain assistant turns that come before the customer's first message.
+
+    tau2 opens every conversation with a fixed agent greeting ("Hi! How can I help you today?"). Tiny Aya's chat
+    template wants a user turn right after the system message ("roles must alternate": a training job and vLLM
+    both raise on system, assistant, user), and the greeting teaches nothing. Dropped here, one place, so the
+    student's prompt and the training rows keep the same view. An assistant turn with a tool call is kept."""
+    kept_messages: list[dict] = []
+    customer_has_spoken = False
+    for message in messages:
+        role = message.get("role")
+        if role in ("user", "tool"):
+            customer_has_spoken = True
+        is_plain_assistant_turn = role == "assistant" and not message.get("tool_calls")
+        if is_plain_assistant_turn and not customer_has_spoken:
+            continue
+        kept_messages.append(message)
+    return kept_messages
+
+
 def convert_messages(messages: list[dict], tools: list[dict]) -> list[dict]:
     """Rewrite an OpenAI-style history into system/user/assistant turns only."""
+    messages = without_opening_greeting(messages)
     tool_prompt = render_tools_prompt(tools)
     tool_name_by_call_id: dict[str, str] = {}
     converted_messages: list[dict] = []
