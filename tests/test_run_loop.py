@@ -85,3 +85,14 @@ def test_a_copied_run_dir_holds_real_files_not_links_into_a_cache(tmp_path):
 def test_other_costs_count_as_spent():
     manifest = {"stages": {"gate": {"actual_usd": 0.5}}, "other_costs": [{"usd": 0.37}]}
     assert run_loop.spent_so_far(manifest) == pytest.approx(0.87)
+
+
+def test_every_command_the_loop_builds_parses_in_the_script_it_calls():
+    import train_job
+
+    options = argparse.Namespace(round=5)
+    chosen = run_loop.recipe_module.Recipe(epochs=2.0, learning_rate=1e-4, boost=3)
+    launch_options, training_arguments = train_job.parse_args(run_loop.train_command(options, chosen)[2:])
+    assert launch_options.dataset_revision == "round-5" and launch_options.flavor == run_loop.TRAIN_FLAVOR
+    assert launch_options.launch is True
+    assert training_arguments == ["--epochs", "2", "--lr", "0.0001"]  # handed to train_lora.py, not parsed here

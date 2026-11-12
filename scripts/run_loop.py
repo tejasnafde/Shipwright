@@ -253,6 +253,14 @@ def step_data(options: argparse.Namespace, chosen: recipe_module.Recipe) -> dict
             "boosted_tasks": len(statistics.get("boosted_tasks") or []), "boost": statistics.get("boost")}
 
 
+def train_command(options: argparse.Namespace, chosen: recipe_module.Recipe) -> list[str]:
+    """train_job.py's own options first, then `--` and the options it hands to train_lora.py."""
+    revision = f"round-{options.round}"
+    return [sys.executable, str(ROOT / "scripts" / "train_job.py"), "--dataset-revision", revision,
+            "--revision", revision, "--flavor", TRAIN_FLAVOR, "--timeout", TRAIN_TIMEOUT, "--launch",
+            "--", "--epochs", f"{chosen.epochs:g}", "--lr", f"{chosen.learning_rate:g}"]
+
+
 def step_train(options: argparse.Namespace, chosen: recipe_module.Recipe) -> dict:
     """AgentTune's RetrainingTrigger, then the LoRA job. A trigger that says no stops the loop here."""
     status = subprocess.run(
@@ -267,11 +275,7 @@ def step_train(options: argparse.Namespace, chosen: recipe_module.Recipe) -> dic
     if not trigger.get("should_train"):
         return {"exit_code": 1, "actual_usd": 0.0, "retrain_trigger": summary, "note": "AgentTune says do not train"}
 
-    revision = f"round-{options.round}"
-    command = [sys.executable, str(ROOT / "scripts" / "train_job.py"), "--dataset-revision", revision,
-               "--revision", revision, "--flavor", TRAIN_FLAVOR, "--timeout", TRAIN_TIMEOUT,
-               "--epochs", f"{chosen.epochs:g}", "--lr", f"{chosen.learning_rate:g}", "--launch"]
-    job_id = launched_job_id(command)
+    job_id = launched_job_id(train_command(options, chosen))
     stage, cost = wait_for_job(job_id)
     return {"exit_code": 0 if stage == "COMPLETED" else 1, "actual_usd": cost, "retrain_trigger": summary,
             "job": job_id, "note": None if stage == "COMPLETED" else f"the HF job ended as {stage}"}
@@ -344,7 +348,6 @@ def run_one_round(options: argparse.Namespace, spent_in_earlier_rounds: float) -
     if not options.launch:
         return "planned", 0.0
 
-    run_round.check_cloud_job_runs_this_commit(options.owner, 30)
     steps = {
         "candidate_train": lambda: step_candidate_train(options, task_ids),
         "classify": lambda: step_classify(options),
