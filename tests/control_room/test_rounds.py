@@ -67,3 +67,10 @@ def test_tasks_are_compared_by_how_often_they_pass_and_infra_errors_do_not_count
     assert changes["3"].change == "better"
     assert changes["4"].change == "same" and changes["4"].before_trials == 1
     assert [change.change for change in rounds.compare_tasks(before, after)][:2] == ["fixed", "broke"]  # changes first
+
+
+def test_a_round_that_reuses_an_earlier_train_run_takes_it_as_its_before_run(tmp_path):
+    write(tmp_path / "round-5.json", {"failures_run": "r4-cand-train", "stages": {"train": {"exit_code": 0}}})
+    (tmp_path / "r4-cand-train").mkdir()
+    [entry] = rounds.discover_rounds(tmp_path)
+    assert entry.before == "r4-cand-train" and entry.outcome == "unfinished"

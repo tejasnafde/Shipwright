@@ -73,8 +73,10 @@ def discover_rounds(runs_directory: Path) -> list[RoundEntry]:
         manifest = _read_json(manifest_path) or {}
         stages = manifest.get("stages") or {}
 
-        is_loop_round = "candidate_train" in stages
-        before = _existing(runs_directory, f"r{number}-cand-train" if is_loop_round else f"r{number}-baseline")
+        failures_run = manifest.get("failures_run")  # a round that reuses an earlier candidate-on-train run
+        is_loop_round = "candidate_train" in stages or bool(failures_run)
+        before_name = failures_run or (f"r{number}-cand-train" if is_loop_round else f"r{number}-baseline")
+        before = _existing(runs_directory, before_name)
         if before is None:
             continue
         teacher = _existing(runs_directory, f"r{number}-teacher") or _existing(runs_directory, f"r{number}-sft")
