@@ -106,7 +106,7 @@ def parse_options() -> argparse.Namespace:
                         help="teacher: earlier teacher run dirs; leave out the tasks they already solved (use the same"
                         " list as --extra-teacher-runs)")
     parser.add_argument("--only-solved-from", nargs="*", default=[], metavar="RUN_DIR_NAME",
-                        help="teacher (harvest): play only the tasks these earlier teacher runs solved, more trials each")
+                        help="teacher (harvest): a bare name is one of --owner's run dirs, owner/dir another owner's; play only the tasks these earlier teacher runs solved, more trials each")
     parser.add_argument("--min-teacher-rate", type=float, default=0.0,
                         help="teacher (harvest): only tasks whose pooled teacher pass rate is at least this; 0.5 = the gap tasks")
     parser.add_argument("--teacher-trials", type=int, default=3, help="teacher: trials per task (5 for a harvest)")
@@ -258,7 +258,7 @@ def run_cloud_job(owner: str, script_arguments: list[str], fetch_run_dirs: list[
     """Run `scripts/<script> args` on the owner's Cloud Run job and wait. Returns gcloud's exit code."""
     job_arguments = []
     for run_dir in fetch_run_dirs:
-        job_arguments.append(f"--fetch={owner}/{run_dir}")  # gcloud --args rejects a repeated "--fetch"
+        job_arguments.append(f"--fetch={run_dir}")  # gcloud --args rejects a repeated "--fetch"
     job_arguments += script_arguments
     repeated_values = sorted({value for value in job_arguments if job_arguments.count(value) > 1})
     if repeated_values:
@@ -285,8 +285,20 @@ def read_summary(run_dir: Path) -> dict:
     return {}
 
 
+def qualified_run_name(owner: str, run_name: str) -> str:
+    """"owner/dir" for a run dir in the bucket: a bare name belongs to ``owner``, "tejas/dir" names another owner."""
+    if "/" in run_name:
+        return run_name
+    return f"{owner}/{run_name}"
+
+
+def local_run_name(run_name: str) -> str:
+    """The directory name under runs/ (a cloud job fetches "owner/dir" into runs/dir)."""
+    return run_name.rsplit("/", 1)[-1]
+
+
 def cloud_stage_arguments(stage: str, options: argparse.Namespace) -> tuple[list[str], list[str], str]:
-    """(script arguments, run dirs to fetch first, run dir this stage writes)."""
+    """(script arguments, run dirs to fetch first as "owner/dir", run dir this stage writes)."""
     cap = str(BUDGETS[stage].cap_usd)
     baseline_name = baseline_dir_name(options.round)
     if stage == "baseline":
@@ -302,7 +314,7 @@ def cloud_stage_arguments(stage: str, options: argparse.Namespace) -> tuple[list
         arguments = ["classify.py", f"runs/{baseline_name}"]
         if options.dry_run:
             arguments.append("--no-llm")
-        return arguments, [baseline_name], baseline_name
+        return arguments, [qualified_run_name(options.owner, baseline_name)], baseline_name
     if stage == "ceiling":
         ceiling_name = f"r{options.round}-ceiling"
         arguments = [
@@ -321,17 +333,20 @@ def cloud_stage_arguments(stage: str, options: argparse.Namespace) -> tuple[list
         "--max-cost-usd", cap, "--output-dir", f"runs/{teacher_name}",
     ]
     if skipped_run_names:
-        arguments += ["--skip-unsolved-from", *[f"runs/{name}" for name in skipped_run_names]]
+        arguments += ["--skip-unsolved-from", *[f"runs/{local_run_name(name)}" for name in skipped_run_names]]
     harvest_run_names = list(options.only_solved_from)
     if harvest_run_names:
-        arguments += ["--only-solved-from", *[f"runs/{name}" for name in harvest_run_names]]
+        arguments += ["--only-solved-from", *[f"runs/{local_run_name(name)}" for name in harvest_run_names]]
         arguments += ["--min-teacher-rate", str(options.min_teacher_rate)]
     solved_run_names = list(options.skip_solved_from)
     if solved_run_names:
-        arguments += ["--skip-solved-from", *[f"runs/{name}" for name in solved_run_names]]
+        arguments += ["--skip-solved-from", *[f"runs/{local_run_name(name)}" for name in solved_run_names]]
     if options.dry_run:
         arguments.append("--dry-run")
-    fetch_run_dirs = list(dict.fromkeys([baseline_name, *skipped_run_names, *harvest_run_names, *solved_run_names]))
+    fetch_run_dirs = list(dict.fromkeys(
+        qualified_run_name(options.owner, name)
+        for name in [baseline_name, *skipped_run_names, *harvest_run_names, *solved_run_names]
+    ))
     return arguments, fetch_run_dirs, teacher_name
 
 
@@ -384,7 +399,7 @@ def run_data_stage(options: argparse.Namespace) -> dict:
         "--only-model", options.teacher_model,
     ]
     for extra_name in options.extra_teacher_runs:
-        command += ["--teacher", str(ROOT / "runs" / extra_name)]
+        command += ["--teacher", str(ROOT / "runs" / local_run_name(extra_name))]
     exit_code = subprocess.run(command).returncode
     stats_path = output_dir / "sft_stats.json"
     stats = json.loads(stats_path.read_text()) if stats_path.exists() else {}

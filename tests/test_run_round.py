@@ -33,7 +33,7 @@ def test_teacher_reads_the_baseline_failures_and_is_capped():
     assert arguments[arguments.index("--from-run") + 1] == "runs/r2-baseline"
     assert "--trials=3" in arguments
     assert "--max-cost-usd" in arguments
-    assert fetched == ["r2-baseline"] and output_dir == "r2-teacher"
+    assert fetched == ["ishank/r2-baseline"] and output_dir == "r2-teacher"
 
 
 def test_every_paid_stage_has_a_cap_above_its_estimate():
@@ -57,14 +57,14 @@ def test_teacher_can_skip_the_tasks_earlier_teacher_runs_never_solved():
     options = make_options(skip_unsolved_from=["r2-teacher"])
     arguments, fetched, _ = run_round.cloud_stage_arguments("teacher", options)
     assert arguments[arguments.index("--skip-unsolved-from") + 1] == "runs/r2-teacher"
-    assert fetched == ["r2-baseline", "r2-teacher"]
+    assert fetched == ["ishank/r2-baseline", "ishank/r2-teacher"]
 
 
 def test_teacher_skips_solved_tasks_and_fetches_their_run_dirs():
     options = make_options(skip_unsolved_from=["r2-teacher"], skip_solved_from=["r1-teacher-t1", "r2-teacher"])
     arguments, fetched, _ = run_round.cloud_stage_arguments("teacher", options)
     assert arguments[arguments.index("--skip-solved-from") + 1:][:2] == ["runs/r1-teacher-t1", "runs/r2-teacher"]
-    assert fetched == ["r2-baseline", "r2-teacher", "r1-teacher-t1"]
+    assert fetched == ["ishank/r2-baseline", "ishank/r2-teacher", "ishank/r1-teacher-t1"]
 
 
 def test_manifest_splits_metered_and_estimated_spend(tmp_path, monkeypatch):
@@ -116,7 +116,7 @@ def test_harvest_plays_only_solved_tasks_with_more_trials():
     options = make_options(only_solved_from=["r1-teacher-t1"], teacher_trials=5)
     arguments, fetched, _ = run_round.cloud_stage_arguments("teacher", options)
     assert arguments[arguments.index("--only-solved-from") + 1] == "runs/r1-teacher-t1"
-    assert "--trials=5" in arguments and "r1-teacher-t1" in fetched
+    assert "--trials=5" in arguments and "ishank/r1-teacher-t1" in fetched
 
 
 def test_ceiling_runs_the_teacher_on_the_heldout_tasks_with_a_cap():
@@ -137,5 +137,12 @@ def test_no_cloud_stage_repeats_a_value_in_its_job_arguments():
                            only_solved_from=["r1-teacher-t1", "r1-teacher-ds-a"], min_teacher_rate=0.5, teacher_trials=5)
     for stage in ("baseline", "classify", "teacher", "ceiling"):
         arguments, fetched, _ = run_round.cloud_stage_arguments(stage, options)
-        job_arguments = [f"--fetch=ishank/{name}" for name in fetched] + arguments
+        job_arguments = [f"--fetch={name}" for name in fetched] + arguments
         assert len(job_arguments) == len(set(job_arguments)), stage
+
+
+def test_pool_names_can_belong_to_another_owner():
+    options = make_options(only_solved_from=["tejas/r1-teacher-t1", "r2-teacher"], min_teacher_rate=0.5)
+    arguments, fetched, _ = run_round.cloud_stage_arguments("teacher", options)
+    assert fetched == ["ishank/r2-baseline", "tejas/r1-teacher-t1", "ishank/r2-teacher"]
+    assert arguments[arguments.index("--only-solved-from") + 1:][:2] == ["runs/r1-teacher-t1", "runs/r2-teacher"]
