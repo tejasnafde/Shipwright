@@ -95,6 +95,8 @@ def main() -> int:
 
     hf_api = HfApi()
     since = datetime.fromisoformat(options.since)
+    if since > datetime.now(timezone.utc):
+        raise SystemExit(f"--since {options.since} is in the future: no job would be counted and the cap would never trigger")
     started = time.monotonic()
     options.log.parent.mkdir(parents=True, exist_ok=True)
     write_log(options.log, f"watching: cap ${options.cap_usd:.2f}, jobs created after {options.since}, rounds {options.rounds}")
