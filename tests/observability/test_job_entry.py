@@ -98,6 +98,7 @@ def test_crash_still_uploads_report_and_job_index(tmp_path, monkeypatch):
 def test_split_fetch():
     assert job_entry.split_fetch(["--fetch", "tejas/b1", "--fetch", "gs://x/y/", "classify.py", "runs/b1"]) == (
         ["tejas/b1", "x/y"], ["classify.py", "runs/b1"])
+    assert job_entry.split_fetch(["--fetch=tejas/a", "--fetch=tejas/b", "x.py"]) == (["tejas/a", "tejas/b"], ["x.py"])
     assert job_entry.split_fetch(["baseline.py", "--fetch", "a"]) == ([], ["baseline.py", "--fetch", "a"])
 
 

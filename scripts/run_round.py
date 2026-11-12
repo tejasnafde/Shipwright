@@ -258,8 +258,11 @@ def run_cloud_job(owner: str, script_arguments: list[str], fetch_run_dirs: list[
     """Run `scripts/<script> args` on the owner's Cloud Run job and wait. Returns gcloud's exit code."""
     job_arguments = []
     for run_dir in fetch_run_dirs:
-        job_arguments += ["--fetch", f"{owner}/{run_dir}"]
+        job_arguments.append(f"--fetch={owner}/{run_dir}")  # gcloud --args rejects a repeated "--fetch"
     job_arguments += script_arguments
+    repeated_values = sorted({value for value in job_arguments if job_arguments.count(value) > 1})
+    if repeated_values:
+        raise SystemExit(f"gcloud --args rejects a repeated value {repeated_values}: write it as --flag=value, or pass it once")
     delimiter_and_arguments = "^|^" + "|".join(job_arguments)
     command = gcloud_command(
         "run", "jobs", "execute", f"shipwright-{owner}", f"--region={REGION}", "--wait",

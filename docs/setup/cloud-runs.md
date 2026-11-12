@@ -135,3 +135,5 @@ done
 `scripts/pull_runs.py --owner tejas|ishank|mitushi|main|all [--run NAME]` copies the run dirs a cloud job
 uploaded from `gs://lexsi-hackathon-runs/<owner>/` into `runs/` (the control room reads them from there).
 It uses the `lexsi` gcloud config, or `SHIPWRIGHT_GCLOUD_CONFIG`.
+
+Several run dirs: write each as `--fetch=<owner>/<dir>` (gcloud `--args` rejects a repeated value, so two `--fetch X` fail). `scripts/run_round.py` does this and refuses a job whose arguments repeat a value.

@@ -440,6 +440,7 @@ def text_run_config(
         seed=run_options.seed,
         save_to=str(run_directory / "tau2"),  # absolute path: tau2 saves here, not under its data dir
         max_retries=0,
+        auto_resume=True,  # a rerun into the same dir skips decided runs and redoes infra errors
     )
 
 

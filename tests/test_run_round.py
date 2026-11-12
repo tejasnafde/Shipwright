@@ -130,3 +130,12 @@ def test_harvest_passes_the_gap_threshold():
     options = make_options(only_solved_from=["r1-teacher-t1"], min_teacher_rate=0.5)
     arguments, _, _ = run_round.cloud_stage_arguments("teacher", options)
     assert arguments[arguments.index("--min-teacher-rate") + 1] == "0.5"
+
+
+def test_no_cloud_stage_repeats_a_value_in_its_job_arguments():
+    options = make_options(user_model="vertex/openai/gpt-oss-120b-maas", teacher_model="vertex/deepseek-ai/deepseek-v4.1-flash-maas",
+                           only_solved_from=["r1-teacher-t1", "r1-teacher-ds-a"], min_teacher_rate=0.5, teacher_trials=5)
+    for stage in ("baseline", "classify", "teacher", "ceiling"):
+        arguments, fetched, _ = run_round.cloud_stage_arguments(stage, options)
+        job_arguments = [f"--fetch=ishank/{name}" for name in fetched] + arguments
+        assert len(job_arguments) == len(set(job_arguments)), stage

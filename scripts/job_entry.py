@@ -90,11 +90,19 @@ def upload(http_client: httpx.Client, bucket: str, object_name: str, data: bytes
 
 
 def split_fetch(argv: list[str]) -> tuple[list[str], list[str]]:
-    """(['owner/run-dir', ...], the rest of argv) from leading ``--fetch X`` pairs."""
+    """(['owner/run-dir', ...], the rest of argv) from leading ``--fetch X`` or ``--fetch=X``.
+
+    ``--fetch=X`` exists because gcloud ``--args`` rejects the same value twice (two ``--fetch``).
+    """
     fetch_prefixes = []
-    while len(argv) >= 2 and argv[0] == "--fetch":
-        fetch_prefixes.append(argv[1].strip("/").removeprefix("gs://"))
-        argv = argv[2:]
+    while argv:
+        if len(argv) >= 2 and argv[0] == "--fetch":
+            fetch_value, argv = argv[1], argv[2:]
+        elif argv[0].startswith("--fetch="):
+            fetch_value, argv = argv[0].removeprefix("--fetch="), argv[1:]
+        else:
+            break
+        fetch_prefixes.append(fetch_value.strip("/").removeprefix("gs://"))
     return fetch_prefixes, argv
 
 
