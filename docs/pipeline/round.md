@@ -10,6 +10,7 @@ to `runs/round-N.json` (run dir, exit code, estimate, actual cost, `cost_basis`:
 | `teacher` | Cloud Run job | teacher replays the tool-fix and weight-fix failures, 3 trials; passes kept | $1.60 | $2.00 |
 | `data` | laptop | `build_sft.py` from the teacher passes, pushed to the HF dataset repo | 0 | 0 |
 | `train` | HF Job, L4, 1h | LoRA with AgentTune (`--launch` to submit) | $0.40 | $0.80 |
+| `ceiling` | Cloud Run job | side stage, any time: the teacher on the 20 held-out tasks, 3 trials (evaluation only) | $0.50 | $1.00 |
 | `gate` | HF Job, A10G large, 90 min | base vs the adapter, 20 held-out tasks, k=3, HF router user simulator (`--launch` to submit) | $2.30 | $3.00 |
 
 ```sh
@@ -25,7 +26,7 @@ replaying solved tasks is the cheapest way to more passing traces.
 
 ```sh
 POOL="r1-teacher-t1 r1-teacher-all-t2 r1-teacher-ds-a r1-teacher-ds-b r1-teacher-ds-c r2-teacher bake-dsv41flash"
-.venv/bin/python scripts/run_round.py teacher $ARGS --only-solved-from $POOL --teacher-trials 5   # harvest: ~80 more passes, ~$2
+.venv/bin/python scripts/run_round.py teacher $ARGS --only-solved-from $POOL --teacher-trials 5 --min-teacher-rate 0.5   # harvest the gap tasks first
 .venv/bin/python scripts/run_round.py data $ARGS --extra-teacher-runs $POOL   # this round's passes + the pool
 ```
 
@@ -35,6 +36,28 @@ drops tasks it failed 3 decided trials in a row. The harvest is the main one for
 `--only-model` (set by the driver to the round's teacher) drops pooled runs written by another teacher, because
 we have not checked the license of the others. On the existing runs the DeepSeek pool is 140 SFT examples from 47
 tasks, against 21 from 13 in round 2 alone.
+
+`--min-teacher-rate 0.5` keeps the gap tasks (the teacher mostly passes, the student fails: 22 of them on the
+round 2 data) and plays the best first, so the cost cap cuts the weakest. Drop it for the wider harvest.
+
+The `ceiling` stage runs the teacher on the held-out tasks once. Its pass rate is the ceiling the student is read
+against (student pass^1 as a share of the teacher's). It is evaluation only: `build_sft.py` refuses a test-split run.
+
+## After the gate: promote or roll back
+
+```sh
+.venv/bin/python scripts/promote.py promote runs/<gate dir>/gate_decision.json   # only a "promote" decision with an adapter
+.venv/bin/python scripts/promote.py rollback                                       # one step back, rows are never deleted
+.venv/bin/python scripts/promote.py show
+```
+
+`promotions/ledger.jsonl` is the record; `configs/systems/current.yaml` is written from it and becomes the `--current`
+of the next round's gate, so every round has to beat the adapter that is deployed. The gate also prints pass^1 per
+task slice (`0-1 writes`, `2+ writes`, from the task's expected actions, `heal/slices.py`) next to the decision:
+context for where the weights helped, never part of the decision.
+
+Not built yet: a baseline of the deployed adapter on the train tasks. The HF router cannot serve an adapter, so it
+needs a GPU job (vLLM, like the gate). Until then round N+1 takes its failures from the base model's baseline.
 
 ## Checks the driver makes for you
 

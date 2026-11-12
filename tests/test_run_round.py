@@ -15,7 +15,7 @@ specification.loader.exec_module(run_round)
 
 def make_options(**overrides) -> argparse.Namespace:
     values = dict(round=2, owner="ishank", user_model="u", teacher_model="t", max_concurrency=4, dry_run=False,
-                  skip_unsolved_from=[], skip_solved_from=[], only_solved_from=[], teacher_trials=3, extra_teacher_runs=[], force=False)
+                  skip_unsolved_from=[], skip_solved_from=[], only_solved_from=[], min_teacher_rate=0.0, teacher_trials=3, extra_teacher_runs=[], force=False)
     values.update(overrides)
     return argparse.Namespace(**values)
 
@@ -117,3 +117,16 @@ def test_harvest_plays_only_solved_tasks_with_more_trials():
     arguments, fetched, _ = run_round.cloud_stage_arguments("teacher", options)
     assert arguments[arguments.index("--only-solved-from") + 1] == "runs/r1-teacher-t1"
     assert "--trials=5" in arguments and "r1-teacher-t1" in fetched
+
+
+def test_ceiling_runs_the_teacher_on_the_heldout_tasks_with_a_cap():
+    arguments, fetched, output_dir = run_round.cloud_stage_arguments("ceiling", make_options())
+    assert "--ceiling" in arguments and "--trials=3" in arguments
+    assert arguments[arguments.index("--max-cost-usd") + 1] == str(run_round.BUDGETS["ceiling"].cap_usd)
+    assert fetched == [] and output_dir == "r2-ceiling"
+
+
+def test_harvest_passes_the_gap_threshold():
+    options = make_options(only_solved_from=["r1-teacher-t1"], min_teacher_rate=0.5)
+    arguments, _, _ = run_round.cloud_stage_arguments("teacher", options)
+    assert arguments[arguments.index("--min-teacher-rate") + 1] == "0.5"

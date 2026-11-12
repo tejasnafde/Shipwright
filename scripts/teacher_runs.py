@@ -22,12 +22,18 @@ Task ids (train split only):
                        again (use --trials 5). A task that has passed once passes again about 48% of the time
                        (all teacher runs so far: 34%), so each trial is worth more and the passes add new
                        conversations on tasks the SFT data already covers
+  --min-teacher-rate R with --only-solved-from: keep only tasks whose pooled teacher pass rate is at least R
+                       (0.5 = the gap tasks: the teacher mostly passes, the student fails) and play the
+                       highest-rate tasks first, so a cost cap cuts the weakest ones
   --skip-solved-from TEACHER_RUN_DIR ...
                        leave out the tasks that those earlier teacher runs already solved: their
                        passing traces go into the SFT data (build_sft.py --teacher), so replaying
                        them again only pays for the same examples
   --task-ids 1 2 3     explicit ids
   --all-train          every task of the train split
+  --ceiling            the teacher on the 20 held-out tasks (test split): its pass rate is the ceiling the
+                       student is compared with. Evaluation only: no kept.jsonl, and build_sft.py refuses
+                       a test-split run
 
 Writes the normal baseline outputs (traces.jsonl, summary.json, prompts.json, ...) plus
   kept.jsonl           the traces with reward == 1 (the only ones used for training)
@@ -70,16 +76,26 @@ def failed_task_ids(run_directory: Path, routes: tuple[str, ...] = DEFAULT_ROUTE
     return task_ids
 
 
-def solved_task_ids(teacher_run_directories: list[Path]) -> set[str]:
-    """Tasks with at least one passing trace in the earlier teacher runs."""
-    solved: set[str] = set()
+def teacher_pass_rates(teacher_run_directories: list[Path]) -> dict[str, float]:
+    """Task id -> share of decided (not infra error) trials that passed, pooled over the earlier teacher runs."""
+    decided_trials: dict[str, int] = {}
+    passed_trials: dict[str, int] = {}
     for run_directory in teacher_run_directories:
         with open(run_directory / "traces.jsonl") as traces_file:
             for line in traces_file:
                 trace = json.loads(line)
+                if trace.get("termination_reason") == "infrastructure_error":
+                    continue
+                task_id = str(trace["task_id"])
+                decided_trials[task_id] = decided_trials.get(task_id, 0) + 1
                 if trace.get("passed"):
-                    solved.add(str(trace["task_id"]))
-    return solved
+                    passed_trials[task_id] = passed_trials.get(task_id, 0) + 1
+    return {task_id: passed_trials.get(task_id, 0) / count for task_id, count in decided_trials.items()}
+
+
+def solved_task_ids(teacher_run_directories: list[Path]) -> set[str]:
+    """Tasks with at least one passing trace in the earlier teacher runs."""
+    return {task_id for task_id, rate in teacher_pass_rates(teacher_run_directories).items() if rate > 0}
 
 
 def unsolved_task_ids(teacher_run_directories: list[Path], min_failed_trials: int = MIN_FAILED_TRIALS) -> set[str]:
@@ -117,6 +133,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--routes", default=",".join(DEFAULT_ROUTES), help="with --from-run: the failure routes to replay"
     )
     parser.add_argument("--skip-unsolved-from", type=Path, nargs="*", default=[], help="earlier teacher run dirs")
+    parser.add_argument("--ceiling", action="store_true", help="the teacher on the held-out tasks (evaluation only)")
+    parser.add_argument("--min-teacher-rate", type=float, default=0.0, help="with --only-solved-from")
     parser.add_argument("--only-solved-from", type=Path, nargs="*", default=[], help="earlier teacher run dirs")
     parser.add_argument("--skip-solved-from", type=Path, nargs="*", default=[], help="earlier teacher run dirs")
     parser.add_argument("--min-failed-trials", type=int, default=MIN_FAILED_TRIALS)
@@ -155,6 +173,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def resolve_task_ids(teacher_options: argparse.Namespace) -> list[str] | None:
     """Explicit ids plus the failed ids of the routes (minus the unsolved ones); None means the whole train split."""
+    if teacher_options.ceiling:
+        from shipwright.heal import splits
+
+        return splits.heldout_ids()
     if teacher_options.all_train:
         return None
 
@@ -178,9 +200,11 @@ def resolve_task_ids(teacher_options: argparse.Namespace) -> list[str] | None:
         task_ids = [task_id for task_id in task_ids if task_id not in unsolved]
         print(f"Skipping {len(skipped)} tasks the teacher never solved before: {' '.join(skipped)}")
     if teacher_options.only_solved_from:
-        solved = solved_task_ids(teacher_options.only_solved_from)
-        task_ids = [task_id for task_id in task_ids if task_id in solved]
-        print(f"Harvest: {len(task_ids)} tasks the teacher has solved before")
+        pass_rates = teacher_pass_rates(teacher_options.only_solved_from)
+        minimum_rate = max(teacher_options.min_teacher_rate, 1e-9)  # at least one pass
+        task_ids = [task_id for task_id in task_ids if pass_rates.get(task_id, 0.0) >= minimum_rate]
+        task_ids.sort(key=lambda task_id: -pass_rates[task_id])  # stable: file order among equal rates
+        print(f"Harvest: {len(task_ids)} tasks with a teacher pass rate of at least {minimum_rate:.2f}, best first")
     if teacher_options.skip_solved_from:
         solved = solved_task_ids(teacher_options.skip_solved_from)
         skipped = [task_id for task_id in task_ids if task_id in solved]
@@ -194,7 +218,7 @@ def resolve_task_ids(teacher_options: argparse.Namespace) -> list[str] | None:
 def build_baseline_argv(teacher_options: argparse.Namespace, task_ids: list[str] | None) -> list[str]:
     """The baseline.py command line for a teacher run (always the train split)."""
     baseline_argv = [
-        "--task-split", "train",  # never the held-out or hidden split
+        "--task-split", "test" if teacher_options.ceiling else "train",  # train, except the held-out ceiling run
         "--trials", str(teacher_options.trials),
         "--agent-model", teacher_options.teacher_model,
         "--user-model", teacher_options.user_model,
@@ -245,6 +269,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     from shipwright.heal.traces import write_jsonl
+
+    if teacher_options.ceiling:
+        print(f"Teacher ceiling on the held-out tasks: pass rate {result.summary.get('pass_rate')}")
+        print(f"\nWrote {result.run_directory}")
+        return 0
 
     kept_traces = keep_successful(result.traces)
     write_jsonl(result.run_directory / "kept.jsonl", kept_traces)

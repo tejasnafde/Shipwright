@@ -41,6 +41,8 @@ logger = log.get_logger("run_round")
 REGION = "asia-south1"
 IMAGE = "asia-south1-docker.pkg.dev/lexsi-hackathon/shipwright/harness"
 STAGE_ORDER = ["baseline", "classify", "teacher", "data", "train", "gate"]
+# Runs on its own, any time: the teacher on the held-out tasks, so the gate result can be read against it.
+SIDE_STAGES = ["ceiling"]
 # A stage that finished with more infra errors than this share of its runs, or a dataset of fewer
 # examples than this, stops the round before the next stage (override with --force).
 MAX_INFRA_ERROR_RATE = 0.25
@@ -72,6 +74,7 @@ BUDGETS = {
     "teacher": StageBudget(estimate_usd=1.6, cap_usd=2.0),
     "data": StageBudget(estimate_usd=0.0, cap_usd=0.0),
     "train": StageBudget(estimate_usd=0.4, cap_usd=0.8),
+    "ceiling": StageBudget(estimate_usd=0.5, cap_usd=1.0),
     "gate": StageBudget(estimate_usd=2.3, cap_usd=3.0),  # A10G $1.50/h x 1.5h = $2.25 cap, plus about $0.60 of simulator
 }
 DESCRIPTIONS = {
@@ -80,13 +83,14 @@ DESCRIPTIONS = {
     "teacher": "the teacher replays the tool-fix and weight-fix failures (minus tasks it never solved), 3 trials each; passes are kept",
     "data": "build the SFT dataset from the teacher passes and push it to the HF dataset repo",
     "train": "LoRA on Tiny Aya Global with AgentTune (HF Job, L4, 1h limit)",
+    "ceiling": "the teacher on the 20 held-out tasks, 3 trials: the pass rate the student is compared with (evaluation only)",
     "gate": "base vs the new adapter on the 20 held-out tasks, k=3, 8 checks (HF Job, A10G, 90 min limit)",
 }
 
 
 def parse_options() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("stage", choices=["plan", *STAGE_ORDER])
+    parser.add_argument("stage", choices=["plan", *STAGE_ORDER, *SIDE_STAGES])
     parser.add_argument("--round", type=int, required=True)
     parser.add_argument("--user-model", required=True, help="user simulator and judge, e.g. vertex/openai/gpt-oss-120b-maas")
     parser.add_argument("--teacher-model", required=True, help="e.g. vertex/deepseek-ai/deepseek-v4.1-flash-maas")
@@ -103,6 +107,8 @@ def parse_options() -> argparse.Namespace:
                         " list as --extra-teacher-runs)")
     parser.add_argument("--only-solved-from", nargs="*", default=[], metavar="RUN_DIR_NAME",
                         help="teacher (harvest): play only the tasks these earlier teacher runs solved, more trials each")
+    parser.add_argument("--min-teacher-rate", type=float, default=0.0,
+                        help="teacher (harvest): only tasks whose pooled teacher pass rate is at least this; 0.5 = the gap tasks")
     parser.add_argument("--teacher-trials", type=int, default=3, help="teacher: trials per task (5 for a harvest)")
     parser.add_argument("--wait-for-image-minutes", type=int, default=20,
                         help="cloud stages: how long to wait for the Cloud Build to finish and the job to be repointed")
@@ -294,6 +300,16 @@ def cloud_stage_arguments(stage: str, options: argparse.Namespace) -> tuple[list
         if options.dry_run:
             arguments.append("--no-llm")
         return arguments, [baseline_name], baseline_name
+    if stage == "ceiling":
+        ceiling_name = f"r{options.round}-ceiling"
+        arguments = [
+            "teacher_runs.py", "--ceiling", "--teacher-model", options.teacher_model, "--user-model", options.user_model,
+            "--trials=3", "--max-concurrency", str(options.max_concurrency),
+            "--max-cost-usd", cap, "--output-dir", f"runs/{ceiling_name}",
+        ]
+        if options.dry_run:
+            arguments.append("--dry-run")
+        return arguments, [], ceiling_name
     teacher_name = teacher_dir_name(options.round)
     skipped_run_names = list(options.skip_unsolved_from)
     arguments = [
@@ -306,6 +322,7 @@ def cloud_stage_arguments(stage: str, options: argparse.Namespace) -> tuple[list
     harvest_run_names = list(options.only_solved_from)
     if harvest_run_names:
         arguments += ["--only-solved-from", *[f"runs/{name}" for name in harvest_run_names]]
+        arguments += ["--min-teacher-rate", str(options.min_teacher_rate)]
     solved_run_names = list(options.skip_solved_from)
     if solved_run_names:
         arguments += ["--skip-solved-from", *[f"runs/{name}" for name in solved_run_names]]
@@ -333,6 +350,8 @@ def run_cloud_stage(stage: str, options: argparse.Namespace) -> dict:
         "num_infra_errors": summary.get("num_infra_errors"),
         "cost_cap_hit": summary.get("cost_cap_hit"),
     }
+    if stage == "ceiling":
+        entry["teacher_pass_rate"] = summary.get("pass_rate_excluding_infra_errors")
     if entry["num_runs"]:
         entry["infra_error_rate"] = round((entry["num_infra_errors"] or 0) / entry["num_runs"], 3)
     if stage == "classify":
@@ -375,6 +394,13 @@ def run_data_stage(options: argparse.Namespace) -> dict:
     }
 
 
+def current_system_path() -> str:
+    """The deployed system (scripts/promote.py writes it after a promotion), else the base model."""
+    if (ROOT / "configs" / "systems" / "current.yaml").exists():
+        return "configs/systems/current.yaml"
+    return "configs/systems/base.yaml"
+
+
 def run_gpu_stage(stage: str, options: argparse.Namespace) -> dict:
     revision = f"round-{options.round}"
     if stage == "train":
@@ -383,7 +409,7 @@ def run_gpu_stage(stage: str, options: argparse.Namespace) -> dict:
                    "--flavor", TRAIN_FLAVOR, "--timeout", TRAIN_TIMEOUT]
     else:
         command = [sys.executable, str(ROOT / "scripts" / "gate_job.py"), "--round", str(options.round),
-                   "--current", "configs/systems/base.yaml",
+                   "--current", current_system_path(),
                    "--candidate", f"configs/systems/r{options.round}-weight.yaml",
                    "--user-model", GATE_USER_MODEL,
                    "--flavor", GATE_FLAVOR, "--timeout", GATE_TIMEOUT]
@@ -408,6 +434,11 @@ def print_plan(options: argparse.Namespace, manifest: dict) -> None:
         done = manifest["stages"].get(stage)
         mark = "done" if done and done.get("exit_code") == 0 else "todo"
         print(f"  {mark}  {stage:9} est ${budget.estimate_usd:5.2f}  cap ${budget.cap_usd:5.2f}  {DESCRIPTIONS[stage]}")
+    for side_stage in SIDE_STAGES:
+        budget = BUDGETS[side_stage]
+        done = manifest["stages"].get(side_stage)
+        mark = "done" if done and done.get("exit_code") == 0 else "todo"
+        print(f"  {mark}  {side_stage:9} est ${budget.estimate_usd:5.2f}  cap ${budget.cap_usd:5.2f}  (any time) {DESCRIPTIONS[side_stage]}")
     print(f"\n  total   est ${total_estimate:.2f}   cap ${total_cap:.2f}   spent so far ${manifest.get('spent_usd') or 0:.2f}"
           f" (metered ${manifest.get('spent_metered_usd') or 0:.2f}, estimated ${manifest.get('spent_estimated_usd') or 0:.2f})")
     print("\n  Tiny Aya's price on the HF router is an assumption ($0.50 in, $1.50 out per 1M tokens):")
@@ -422,7 +453,10 @@ def main() -> int:
         return 0
 
     stage = options.stage
-    previous_stage = STAGE_ORDER[STAGE_ORDER.index(stage) - 1] if stage != STAGE_ORDER[0] else None
+    if stage in SIDE_STAGES:
+        previous_stage = None
+    else:
+        previous_stage = STAGE_ORDER[STAGE_ORDER.index(stage) - 1] if stage != STAGE_ORDER[0] else None
     pooled_data_only = stage == "data" and options.extra_teacher_runs and previous_stage == "teacher"
     if pooled_data_only and "teacher" not in manifest["stages"]:
         previous_stage = "classify"  # no teacher stage this round: the earlier teacher runs are the data
@@ -432,7 +466,7 @@ def main() -> int:
         check_previous_stage_is_healthy(manifest, stage, previous_stage)
     check_budget(manifest, stage)
 
-    if stage in ("baseline", "classify", "teacher"):
+    if stage in ("baseline", "classify", "teacher", "ceiling"):
         entry = run_cloud_stage(stage, options)
     elif stage == "data":
         entry = run_data_stage(options)

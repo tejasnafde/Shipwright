@@ -352,6 +352,17 @@ def _ratio(numerator: float, denominator: float) -> float | None:
     return None
 
 
+def slice_metrics(run_config: dict, per_task: dict) -> dict | None:
+    """pass^1 and pass^k per task slice (``shipwright.heal.slices``); None when tau2 is not installed."""
+    from shipwright.heal import slices
+
+    try:
+        slice_by_task = slices.write_slice_by_task(run_config.get("domain") or "retail", run_config.get("task_split") or "test")
+    except ImportError:
+        return None
+    return slices.slice_pass_metrics(per_task, slice_by_task)
+
+
 def compute_metrics(run: dict, k: int, system: str | None = None) -> dict:
     """The gate's metric dict for one run (see module docstring)."""
     traces = run["traces"]
@@ -372,6 +383,7 @@ def compute_metrics(run: dict, k: int, system: str | None = None) -> dict:
     return {
         "system": system,
         "run_dir": run.get("run_dir"),
+        "slices": slice_metrics(run_config, pass_scores["per_task"]),
         "agent_model": run_config.get("agent_model"),
         "task_split": run_config.get("task_split"),
         "active_tool_patches": run_config.get("active_tool_patches") or [],

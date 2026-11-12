@@ -293,7 +293,17 @@ def decide_and_write(
         print(f"  [{check_label}] {check['name']}: {check['detail']}")
     for warning in decision["warnings"]:
         print(f"  warning: {warning}")
+    print_slices(metrics_by_role)
     return decision
+
+
+def print_slices(metrics_by_role: dict[str, dict]) -> None:
+    """Pass rates per task slice (heal/slices.py): context for the decision, never part of it."""
+    for role in ("current", "candidate"):
+        for slice_name, slice_result in (metrics_by_role[role].get("slices") or {}).items():
+            pass_1 = slice_result["pass_1"]
+            pass_1_text = "n/a" if pass_1 is None else f"{pass_1:.3f}"
+            print(f"  slice {slice_name:10} {role:9} tasks={slice_result['num_tasks']:2} pass^1={pass_1_text}")
 
 
 def load_inputs(gate_options: argparse.Namespace) -> tuple[dict, dict, dict, dict]:
