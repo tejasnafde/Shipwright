@@ -28,6 +28,9 @@ from typing import Any
 from shipwright.llm.context import REPLY_TOKENS, fit_messages
 
 TRACE_FIELD = "shipwright"
+# The format of the tool list the student sees. 1: examples as written in tau2's descriptions ("e.g. '#W0000000'").
+# 2 (2026-11-12): real-looking examples hidden (example_hint). Runs record it in run_config.json.
+TOOL_LIST_VERSION = 2
 
 INSTRUCTION = """You can use these tools (name(arguments) - what it does; ? marks an optional argument):
 {tools}

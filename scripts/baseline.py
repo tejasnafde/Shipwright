@@ -336,6 +336,9 @@ def write_run_config(
             run_config[option_name] = option_value
     run_config["output_dir"] = str(run_directory)
     run_config["active_tool_patches"] = active_patches
+    from shipwright.llm import prompted_tools
+
+    run_config["tool_list_version"] = prompted_tools.TOOL_LIST_VERSION
     (run_directory / "run_config.json").write_text(json.dumps(run_config, indent=2))
 
 

@@ -15,7 +15,7 @@ specification.loader.exec_module(run_round)
 
 def make_options(**overrides) -> argparse.Namespace:
     values = dict(round=2, owner="ishank", user_model="u", teacher_model="t", max_concurrency=4, dry_run=False,
-                  skip_unsolved_from=[], skip_solved_from=[], extra_teacher_runs=[], force=False)
+                  skip_unsolved_from=[], skip_solved_from=[], only_solved_from=[], teacher_trials=3, extra_teacher_runs=[], force=False)
     values.update(overrides)
     return argparse.Namespace(**values)
 
@@ -110,3 +110,10 @@ def test_image_check_waits_for_the_job_to_be_repointed(monkeypatch):
     monkeypatch.setattr(run_round.time, "sleep", sleeps.append)
     run_round.check_cloud_job_runs_this_commit("ishank", wait_minutes=20)
     assert len(sleeps) == 2  # two polls saw the old image, the third saw the new one
+
+
+def test_harvest_plays_only_solved_tasks_with_more_trials():
+    options = make_options(only_solved_from=["r1-teacher-t1"], teacher_trials=5)
+    arguments, fetched, _ = run_round.cloud_stage_arguments("teacher", options)
+    assert arguments[arguments.index("--only-solved-from") + 1] == "runs/r1-teacher-t1"
+    assert "--trials=5" in arguments and "r1-teacher-t1" in fetched

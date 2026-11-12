@@ -19,14 +19,18 @@ ARGS="--round 2 --user-model vertex/openai/gpt-oss-120b-maas --teacher-model ver
 ```
 
 Round 3 and later: a new prompt means a fresh `baseline`, but the teacher's passing traces from earlier rounds
-stay valid training data (the SFT builder re-renders them with the current student prompt). Pool them instead of
-paying for them again:
+stay valid training data (the SFT builder re-renders them with the current student prompt). Pool them, then
+harvest more: a task the teacher has solved once passes again about 48% of the time (34% over all tasks), so
+replaying solved tasks is the cheapest way to more passing traces.
 
 ```sh
 POOL="r1-teacher-t1 r1-teacher-all-t2 r1-teacher-ds-a r1-teacher-ds-b r1-teacher-ds-c r2-teacher bake-dsv41flash"
-.venv/bin/python scripts/run_round.py teacher $ARGS --skip-solved-from $POOL --skip-unsolved-from $POOL   # only new tasks
+.venv/bin/python scripts/run_round.py teacher $ARGS --only-solved-from $POOL --teacher-trials 5   # harvest: ~80 more passes, ~$2
 .venv/bin/python scripts/run_round.py data $ARGS --extra-teacher-runs $POOL   # this round's passes + the pool
 ```
+
+Other teacher modes: `--skip-solved-from $POOL` plays only tasks with no pass yet, `--skip-unsolved-from $POOL`
+drops tasks it failed 3 decided trials in a row. The harvest is the main one for more data.
 
 `--only-model` (set by the driver to the round's teacher) drops pooled runs written by another teacher, because
 we have not checked the license of the others. On the existing runs the DeepSeek pool is 140 SFT examples from 47

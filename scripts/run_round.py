@@ -101,6 +101,9 @@ def parse_options() -> argparse.Namespace:
     parser.add_argument("--skip-solved-from", nargs="*", default=[], metavar="RUN_DIR_NAME",
                         help="teacher: earlier teacher run dirs; leave out the tasks they already solved (use the same"
                         " list as --extra-teacher-runs)")
+    parser.add_argument("--only-solved-from", nargs="*", default=[], metavar="RUN_DIR_NAME",
+                        help="teacher (harvest): play only the tasks these earlier teacher runs solved, more trials each")
+    parser.add_argument("--teacher-trials", type=int, default=3, help="teacher: trials per task (5 for a harvest)")
     parser.add_argument("--wait-for-image-minutes", type=int, default=20,
                         help="cloud stages: how long to wait for the Cloud Build to finish and the job to be repointed")
     parser.add_argument("--force", action="store_true", help="skip the health checks on the previous stage")
@@ -295,17 +298,20 @@ def cloud_stage_arguments(stage: str, options: argparse.Namespace) -> tuple[list
     skipped_run_names = list(options.skip_unsolved_from)
     arguments = [
         "teacher_runs.py", "--teacher-model", options.teacher_model, "--user-model", options.user_model,
-        "--from-run", f"runs/{baseline_name}", "--trials=3", "--max-concurrency", str(options.max_concurrency),
+        "--from-run", f"runs/{baseline_name}", f"--trials={options.teacher_trials}", "--max-concurrency", str(options.max_concurrency),
         "--max-cost-usd", cap, "--output-dir", f"runs/{teacher_name}",
     ]
     if skipped_run_names:
         arguments += ["--skip-unsolved-from", *[f"runs/{name}" for name in skipped_run_names]]
+    harvest_run_names = list(options.only_solved_from)
+    if harvest_run_names:
+        arguments += ["--only-solved-from", *[f"runs/{name}" for name in harvest_run_names]]
     solved_run_names = list(options.skip_solved_from)
     if solved_run_names:
         arguments += ["--skip-solved-from", *[f"runs/{name}" for name in solved_run_names]]
     if options.dry_run:
         arguments.append("--dry-run")
-    fetch_run_dirs = list(dict.fromkeys([baseline_name, *skipped_run_names, *solved_run_names]))
+    fetch_run_dirs = list(dict.fromkeys([baseline_name, *skipped_run_names, *harvest_run_names, *solved_run_names]))
     return arguments, fetch_run_dirs, teacher_name
 
 

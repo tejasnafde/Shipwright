@@ -17,6 +17,11 @@ Task ids (train split only):
   --skip-unsolved-from TEACHER_RUN_DIR ...
                        leave out the tasks that those earlier teacher runs failed in every
                        decided trial (at least --min-failed-trials of them, no pass)
+  --only-solved-from TEACHER_RUN_DIR ...
+                       the harvest mode: keep only the tasks those earlier teacher runs solved, and play them
+                       again (use --trials 5). A task that has passed once passes again about 48% of the time
+                       (all teacher runs so far: 34%), so each trial is worth more and the passes add new
+                       conversations on tasks the SFT data already covers
   --skip-solved-from TEACHER_RUN_DIR ...
                        leave out the tasks that those earlier teacher runs already solved: their
                        passing traces go into the SFT data (build_sft.py --teacher), so replaying
@@ -112,6 +117,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--routes", default=",".join(DEFAULT_ROUTES), help="with --from-run: the failure routes to replay"
     )
     parser.add_argument("--skip-unsolved-from", type=Path, nargs="*", default=[], help="earlier teacher run dirs")
+    parser.add_argument("--only-solved-from", type=Path, nargs="*", default=[], help="earlier teacher run dirs")
     parser.add_argument("--skip-solved-from", type=Path, nargs="*", default=[], help="earlier teacher run dirs")
     parser.add_argument("--min-failed-trials", type=int, default=MIN_FAILED_TRIALS)
     parser.add_argument("--trials", type=int, default=3)
@@ -171,6 +177,10 @@ def resolve_task_ids(teacher_options: argparse.Namespace) -> list[str] | None:
         skipped = [task_id for task_id in task_ids if task_id in unsolved]
         task_ids = [task_id for task_id in task_ids if task_id not in unsolved]
         print(f"Skipping {len(skipped)} tasks the teacher never solved before: {' '.join(skipped)}")
+    if teacher_options.only_solved_from:
+        solved = solved_task_ids(teacher_options.only_solved_from)
+        task_ids = [task_id for task_id in task_ids if task_id in solved]
+        print(f"Harvest: {len(task_ids)} tasks the teacher has solved before")
     if teacher_options.skip_solved_from:
         solved = solved_task_ids(teacher_options.skip_solved_from)
         skipped = [task_id for task_id in task_ids if task_id in solved]

@@ -68,6 +68,29 @@ def load_tools(run_directory: Path) -> list[dict]:
     return [tool.openai_schema for tool in registry.get_env_constructor(domain)().get_tools()]
 
 
+def visible_example_values(run_directory: Path, example_values: set[str]) -> set[str]:
+    """The example values that the student's tool list actually showed in this run.
+
+    ``tool_example_copied`` is a tool fault (route tool_fix) only when the tool list held the example. From
+    tool list version 2 (2026-11-12) the prompt hides real-looking examples (``prompted_tools.example_hint``), so a
+    copied ``#W0000000`` is the model inventing an id (route weight_fix). A run without the version in its
+    ``run_config.json`` is version 1: every example was shown."""
+    from shipwright.llm import prompted_tools
+
+    run_config_path = run_directory / "run_config.json"
+    run_config = json.loads(run_config_path.read_text()) if run_config_path.exists() else {}
+    if run_config.get("tool_list_version", 1) < 2:
+        return example_values
+    prompts_path = run_directory / "prompts.json"
+    if not prompts_path.exists():
+        return example_values
+    shown_tool_lists = [
+        prompted_tools.render_tools_prompt(prompt.get("tools") or [])
+        for prompt in json.loads(prompts_path.read_text()).values()
+    ]
+    return {value for value in example_values if any(value in tool_list for tool_list in shown_tool_lists)}
+
+
 def make_chat(token: str | None, model: str):
     """A chat function for the judge or the patch proposer: HF router, or Vertex for vertex/ ids."""
     from shipwright.llm import vertex
@@ -151,7 +174,7 @@ def main() -> int:
             print(f"{token_error} Use --no-llm, or provide the token.", file=sys.stderr)
             return 2
 
-    tool_example_strings = tool_example_values(load_tools(options.run_dir))
+    tool_example_strings = visible_example_values(options.run_dir, tool_example_values(load_tools(options.run_dir)))
 
     classifier = None
     if not options.no_llm:
