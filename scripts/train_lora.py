@@ -182,6 +182,30 @@ def to_eventlog(eventlog_class, messages: list[dict]):
     return event_log
 
 
+def check_loss_against_the_models_own(model, inputs: dict, windowed_loss) -> None:
+    """Stop before any training step if the hand-computed loss is not the model's own labels= loss.
+
+    The first step only, in eval mode (no LoRA dropout) and without gradients, on the full logits once. Round 3
+    attempt 3 trained for minutes with an unshifted loss (155 instead of about 2): this makes that failure a
+    one-second error instead of a wasted GPU hour."""
+    import torch
+
+    was_training = model.training
+    model.eval()
+    with torch.no_grad():
+        models_own_loss = model(**inputs).loss
+        recomputed_windowed_loss = windowed_loss.detach()
+    if was_training:
+        model.train()
+    relative_gap = abs(float(recomputed_windowed_loss) - float(models_own_loss)) / max(float(models_own_loss), 1e-6)
+    print(f"loss check: windowed {float(recomputed_windowed_loss):.4f} vs the model's own {float(models_own_loss):.4f}", flush=True)
+    if relative_gap > 0.05:
+        raise RuntimeError(
+            f"the windowed loss ({float(recomputed_windowed_loss):.4f}) differs from the model's own loss "
+            f"({float(models_own_loss):.4f}): fix compute_loss before training"
+        )
+
+
 def windowed_sft_trainer():
     """A TRL ``SFTTrainer`` subclass that skips computing logits for the loss-masked
     prefix before the first trained token.
@@ -226,20 +250,31 @@ def windowed_sft_trainer():
                 return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
 
             first_trained_position = int(trained_positions[0].item())
-            positions_to_keep = label_row.shape[0] - first_trained_position
+            # The logits at position p predict the token at p + 1, so keep one position before the first trained
+            # token, and compare logits[:-1] with the labels from the first trained position on. Without this
+            # shift the loss asks every position to repeat its own token (round 3, attempt 3: loss 154).
+            window_start = max(first_trained_position - 1, 0)
+            positions_to_keep = label_row.shape[0] - window_start
             model_inputs = {name: value for name, value in inputs.items() if name != "labels"}
             try:
                 outputs = model(**model_inputs, logits_to_keep=positions_to_keep)
             except TypeError:
                 return super().compute_loss(model, inputs, return_outputs, num_items_in_batch)
 
-            logits = outputs.logits
-            target_labels = label_row[first_trained_position:].unsqueeze(0)
+            predicting_logits = outputs.logits[:, :-1]
+            target_labels = label_row[window_start + 1:].unsqueeze(0)
             loss = functional.cross_entropy(
-                logits.reshape(-1, logits.size(-1)).float(),
+                predicting_logits.reshape(-1, predicting_logits.size(-1)).float(),
                 target_labels.reshape(-1),
                 ignore_index=-100,
             )
+            if not getattr(self, "_loss_was_checked", False):
+                self._loss_was_checked = True
+                check_loss_against_the_models_own(model, inputs, loss)
+            if num_items_in_batch is not None:
+                # transformers does not divide by the accumulation steps when it passes num_items_in_batch (it expects
+                # a loss already normalised by it): without this the logged loss is steps times too high.
+                loss = loss / self.args.gradient_accumulation_steps
             if return_outputs:
                 return loss, outputs
             return loss
