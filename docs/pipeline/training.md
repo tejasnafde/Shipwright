@@ -1,6 +1,6 @@
 # Weight fix: teacher data and LoRA training
 
-The weight-fix path for failures that `scripts/classify.py` routes to `weight_fix`:
+The weight-fix path. Round 2 had no tool patches, so the teacher replays the failures routed to `tool_fix` too (`--routes`, default `tool_fix,weight_fix`); only `no_fix` is left out:
 
 1. **Teacher runs** (`scripts/teacher_runs.py`): a strong model plays the agent on train tasks.
 2. **SFT data** (`scripts/build_sft.py`, `src/shipwright/heal/sft_data.py`): its successful runs,
@@ -101,10 +101,11 @@ language guidance); this rebuild was checked equal to a recorded prompt on 2026-
 # 1a. Vertex access check (2 tiny calls, GCP billing)
 .venv/bin/python scripts/check_vertex.py
 
-# 1b. Teacher runs (Vertex: spends GCP budget). Default tasks: the weight_fix ids of the baseline run.
+# 1b. Teacher runs (Vertex: spends GCP budget). Default tasks: the tool_fix and weight_fix ids of the baseline run.
 #     Teammates: export SHIPWRIGHT_GCLOUD_CONFIG=lexsi first.
 .venv/bin/python scripts/teacher_runs.py --teacher-model vertex/deepseek-ai/deepseek-v4.1-flash-maas \
     --user-model vertex/openai/gpt-oss-120b-maas --trials 3 --from-run runs/baseline-20261108-214337
+#    add --skip-unsolved-from runs/<earlier teacher run> to leave out tasks it failed 3 decided trials in a row;
 #    add --all-train to also run every train task; outputs kept.jsonl and teacher_summary.json
 
 # 2. Build the SFT data (downloads only the Tiny Aya tokenizer; --estimate-tokens avoids that)

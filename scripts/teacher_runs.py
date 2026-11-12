@@ -10,8 +10,13 @@ because it reasons before it answers. So its trajectories are already in the stu
 format, and scripts/build_sft.py turns the successful ones into training data.
 
 Task ids (train split only):
-  --from-run RUN_DIR   the task ids routed to weight_fix in RUN_DIR/failures.jsonl (default
-                       when no other source is given: the baseline run)
+  --from-run RUN_DIR   the task ids of the failures in RUN_DIR/failures.jsonl whose route is in
+                       --routes (default: tool_fix and weight_fix; the round has no tool patches,
+                       so a task routed to tool_fix is only fixed by teaching the weights).
+                       Default when no other source is given: the baseline run
+  --skip-unsolved-from TEACHER_RUN_DIR ...
+                       leave out the tasks that those earlier teacher runs failed in every
+                       decided trial (at least --min-failed-trials of them, no pass)
   --task-ids 1 2 3     explicit ids
   --all-train          every task of the train split
 
@@ -38,16 +43,38 @@ DEFAULT_FROM_RUN = ROOT / "runs" / "baseline-20261108-214337"
 TEACHER_REPLY_TOKENS = 4096
 
 
-def weight_fix_task_ids(run_directory: Path) -> list[str]:
-    """Task ids of the failed runs that classify.py routed to weight_fix, in file order."""
+DEFAULT_ROUTES = ("tool_fix", "weight_fix")
+# A task the teacher failed this many decided (not infra error) trials in a row, with no pass, is
+# left out of the next round: round 2 spent 3 trials each on 11 of 24 tasks it never solved.
+MIN_FAILED_TRIALS = 3
+
+
+def failed_task_ids(run_directory: Path, routes: tuple[str, ...] = DEFAULT_ROUTES) -> list[str]:
+    """Task ids of the failed runs that classify.py routed to one of ``routes``, in file order."""
     task_ids: list[str] = []
     with open(run_directory / "failures.jsonl") as failures_file:
         for line in failures_file:
             failure = json.loads(line)
             task_id = str(failure["task_id"])
-            if failure.get("route") == "weight_fix" and task_id not in task_ids:
+            if failure.get("route") in routes and task_id not in task_ids:
                 task_ids.append(task_id)
     return task_ids
+
+
+def unsolved_task_ids(teacher_run_directories: list[Path], min_failed_trials: int = MIN_FAILED_TRIALS) -> set[str]:
+    """Tasks the earlier teacher runs failed in at least ``min_failed_trials`` decided trials and never passed."""
+    failed_trials: dict[str, int] = {}
+    solved: set[str] = set()
+    for run_directory in teacher_run_directories:
+        with open(run_directory / "traces.jsonl") as traces_file:
+            for line in traces_file:
+                trace = json.loads(line)
+                task_id = str(trace["task_id"])
+                if trace.get("passed"):
+                    solved.add(task_id)
+                elif trace.get("termination_reason") != "infrastructure_error":
+                    failed_trials[task_id] = failed_trials.get(task_id, 0) + 1
+    return {task_id for task_id, count in failed_trials.items() if count >= min_failed_trials and task_id not in solved}
 
 
 def keep_successful(traces: list[dict]) -> list[dict]:
@@ -65,6 +92,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--from-run", type=Path, default=None, help="run dir with failures.jsonl")
     parser.add_argument("--task-ids", nargs="*", default=None)
     parser.add_argument("--all-train", action="store_true", help="run every train task")
+    parser.add_argument(
+        "--routes", default=",".join(DEFAULT_ROUTES), help="with --from-run: the failure routes to replay"
+    )
+    parser.add_argument("--skip-unsolved-from", type=Path, nargs="*", default=[], help="earlier teacher run dirs")
+    parser.add_argument("--min-failed-trials", type=int, default=MIN_FAILED_TRIALS)
     parser.add_argument("--trials", type=int, default=3)
 
     # Which models play the teacher and the user.
@@ -99,7 +131,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def resolve_task_ids(teacher_options: argparse.Namespace) -> list[str] | None:
-    """Explicit ids plus weight_fix ids; None means the whole train split."""
+    """Explicit ids plus the failed ids of the routes (minus the unsolved ones); None means the whole train split."""
     if teacher_options.all_train:
         return None
 
@@ -113,9 +145,15 @@ def resolve_task_ids(teacher_options: argparse.Namespace) -> list[str] | None:
         from_run = DEFAULT_FROM_RUN
 
     if from_run:
-        for task_id in weight_fix_task_ids(from_run):
+        routes = tuple(route.strip() for route in teacher_options.routes.split(",") if route.strip())
+        for task_id in failed_task_ids(from_run, routes):
             if task_id not in task_ids:
                 task_ids.append(task_id)
+    if teacher_options.skip_unsolved_from:
+        unsolved = unsolved_task_ids(teacher_options.skip_unsolved_from, teacher_options.min_failed_trials)
+        skipped = [task_id for task_id in task_ids if task_id in unsolved]
+        task_ids = [task_id for task_id in task_ids if task_id not in unsolved]
+        print(f"Skipping {len(skipped)} tasks the teacher never solved before: {' '.join(skipped)}")
     if not task_ids:
         raise SystemExit("No task ids: pass --task-ids, --from-run or --all-train.")
     return task_ids
