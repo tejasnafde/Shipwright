@@ -77,6 +77,11 @@ def list_remote_runs(owner: str) -> list[str]:
     return run_names
 
 
+# Logs of scripts that launch or move other runs (they call log.run_script(meta=True) on a laptop). Pulled into
+# runs/_meta/, so they do not clutter the run list.
+ORCHESTRATOR_PREFIXES = ("run_round-", "train_job-", "gate_job-", "pull_runs-", "promote-")
+
+
 def pull_runs(
     owners: list[str],
     runs_directory: Path,
@@ -96,13 +101,18 @@ def pull_runs(
         for run_name in list_remote_runs(owner):
             if only_run_names and run_name not in only_run_names:
                 continue
-            if replace_existing and (runs_directory / run_name).exists():
-                shutil.rmtree(runs_directory / run_name)
-            if (runs_directory / run_name).exists():
+            if run_name.startswith(ORCHESTRATOR_PREFIXES):
+                destination_directory = runs_directory / "_meta"
+            else:
+                destination_directory = runs_directory
+            destination_directory.mkdir(parents=True, exist_ok=True)
+            if replace_existing and (destination_directory / run_name).exists():
+                shutil.rmtree(destination_directory / run_name)
+            if (destination_directory / run_name).exists():
                 results.append(PullResult(owner, run_name, "already local"))
                 continue
             copy = subprocess.run(
-                _gcloud_command(binary, "cp", "-r", f"{BUCKET}/{owner}/{run_name}", str(runs_directory) + "/"),
+                _gcloud_command(binary, "cp", "-r", f"{BUCKET}/{owner}/{run_name}", str(destination_directory) + "/"),
                 capture_output=True, text=True, timeout=1800)
             if copy.returncode == 0:
                 results.append(PullResult(owner, run_name, "pulled"))
