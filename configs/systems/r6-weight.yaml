@@ -1,0 +1,23 @@
+# Round 6 candidate, written by scripts/run_loop.py.
+# Adapter: the same as the round before. Tool guards: on.
+# Why: loop, context_overflow, tool_error_ignored failed: turn the tool guards on (a repeated lookup, a change to another product type and a second change to one order are rejected). No training needed
+name: r6-weight
+model: CohereLabs/tiny-aya-global
+adapter:
+  repo: mitushigoyal5/shipwright-lora
+  revision: round-5
+route: weight_fix
+targets:
+- invented_id
+- tool_example_copied
+- loop
+- tool_error_ignored
+- unknown_tool
+- malformed_args
+- wrong_tool
+- bad_arguments
+- wrong_order
+- skipped_policy_step
+- invented_answer
+- premature_transfer
+tool_guards: true
