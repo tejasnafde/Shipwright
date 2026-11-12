@@ -130,6 +130,42 @@ def test_call_with_refresh_waits_and_retries_on_429():
     assert len(waits) == len(vertex.RATE_LIMIT_WAITS)
 
 
+def test_call_with_refresh_retries_a_timeout_twice_then_raises():
+    tokens = vertex.TokenProvider(fetch=lambda: "tok")
+    attempts = []
+
+    class APITimeoutError(Exception):
+        pass
+
+    def hangs_once(**kw):
+        attempts.append(1)
+        if len(attempts) < 2:
+            raise APITimeoutError()
+        return "ok"
+
+    assert vertex.call_with_refresh(hangs_once, {"model": USER, "messages": []}, tokens) == "ok"
+
+    attempts.clear()
+
+    def always_hangs(**kw):
+        attempts.append(1)
+        raise APITimeoutError()
+
+    with pytest.raises(APITimeoutError):
+        vertex.call_with_refresh(always_hangs, {"model": USER, "messages": []}, tokens)
+    assert len(attempts) == 1 + vertex.TIMEOUT_RETRIES
+
+
+def test_route_kwargs_sets_timeout_and_low_reasoning_for_gpt_oss_only():
+    tokens = vertex.TokenProvider(fetch=lambda: "tok")
+    user_kwargs = vertex.route_kwargs({"model": USER, "messages": []}, tokens)
+    assert user_kwargs["timeout"] == 60.0 and user_kwargs["reasoning_effort"] == "low"
+    teacher_kwargs = vertex.route_kwargs({"model": TEACHER, "messages": []}, tokens)
+    assert teacher_kwargs["timeout"] == vertex.DEFAULT_REQUEST_TIMEOUT_S and "reasoning_effort" not in teacher_kwargs
+    explicit = vertex.route_kwargs({"model": USER, "messages": [], "timeout": 5}, tokens)
+    assert explicit["timeout"] == 5
+
+
 def test_gcloud_token_uses_named_config_not_adc(monkeypatch):
     calls = []
 

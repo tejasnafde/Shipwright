@@ -50,6 +50,12 @@ METADATA_TOKEN_URL = "http://metadata.google.internal/computeMetadata/v1/instanc
 TOKEN_EXPIRY_MARGIN_S = 5 * 60
 # gpt-oss spends tokens on reasoning before it answers: a small max_tokens leaves no answer.
 MIN_REPLY_TOKENS = {"openai/gpt-oss-120b-maas": 1024}
+# gpt-oss reasons before it answers; "low" cuts that (and the reply time) at no cost to the simulator's job.
+REASONING_EFFORT = {"openai/gpt-oss-120b-maas": "low"}
+# Seconds before a hung request is abandoned and retried. Round 2 saw gpt-oss calls hang for up to
+# 20 minutes (the litellm default) while its median reply takes a few seconds.
+REQUEST_TIMEOUT_S = {"openai/gpt-oss-120b-maas": 60.0}
+DEFAULT_REQUEST_TIMEOUT_S = 180.0
 
 # The team's current choice (2026-11-09). Scripts still take these as explicit arguments.
 TEACHER_MODEL = "vertex/deepseek-ai/deepseek-v4.1-flash-maas"
@@ -227,6 +233,11 @@ def route_kwargs(kwargs: dict, tokens: TokenProvider | None = None) -> dict:
     max_tokens = routed_kwargs.get("max_tokens")
     if min_reply_tokens and isinstance(max_tokens, int) and max_tokens < min_reply_tokens:
         routed_kwargs["max_tokens"] = min_reply_tokens
+    effort = REASONING_EFFORT.get(vertex_model_id)
+    if effort and "reasoning_effort" not in routed_kwargs:
+        routed_kwargs["reasoning_effort"] = effort
+    if "timeout" not in routed_kwargs:
+        routed_kwargs["timeout"] = REQUEST_TIMEOUT_S.get(vertex_model_id, DEFAULT_REQUEST_TIMEOUT_S)
     # Params added for OpenAI's Responses bridge do not apply here.
     routed_kwargs.pop("allowed_openai_params", None)
     return routed_kwargs
@@ -248,6 +259,14 @@ RATE_LIMIT_WAITS = (2.0, 5.0, 10.0, 20.0, 40.0)
 BAD_REQUEST_WAITS = (2.0, 5.0)
 
 
+# A request that timed out is sent again this many times before the error is raised.
+TIMEOUT_RETRIES = 2
+
+
+def is_timeout(error: BaseException) -> bool:
+    return "Timeout" in type(error).__name__
+
+
 def is_bad_request(error: BaseException) -> bool:
     return getattr(error, "status_code", None) == 400 or "BadRequest" in type(error).__name__
 
@@ -256,7 +275,7 @@ def call_with_refresh(call: Callable[..., Any], kwargs: dict, tokens: TokenProvi
                       sleep: Callable[[float], None] = time.sleep,
                       bad_request_waits: tuple[float, ...] = ()) -> Any:
     """Run ``call(**route_kwargs(kwargs))``; on a 401, get a new token and retry once; on a 429,
-    wait and retry (RATE_LIMIT_WAITS, with jitter); on a 400, wait and retry once per entry of
+    wait and retry (RATE_LIMIT_WAITS, with jitter); on a timeout, retry at once (TIMEOUT_RETRIES); on a 400, wait and retry once per entry of
     ``bad_request_waits`` (empty by default: only the user simulator and judge pass it)."""
     import random
 
@@ -264,6 +283,7 @@ def call_with_refresh(call: Callable[..., Any], kwargs: dict, tokens: TokenProvi
     auth_already_refreshed = False
     rate_limit_waits = list(RATE_LIMIT_WAITS)
     bad_request_retry_waits = list(bad_request_waits)
+    timeout_retries_left = TIMEOUT_RETRIES
     while True:
         try:
             return call(**route_kwargs(kwargs, tokens))
@@ -275,6 +295,8 @@ def call_with_refresh(call: Callable[..., Any], kwargs: dict, tokens: TokenProvi
                 sleep(rate_limit_waits.pop(0) * (1 + random.random() / 2))
             elif is_bad_request(call_error) and bad_request_retry_waits:
                 sleep(bad_request_retry_waits.pop(0) * (1 + random.random() / 2))
+            elif is_timeout(call_error) and timeout_retries_left > 0:
+                timeout_retries_left -= 1
             else:
                 raise
 

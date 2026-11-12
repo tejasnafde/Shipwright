@@ -86,7 +86,7 @@ def parse_options() -> argparse.Namespace:
     parser.add_argument("--teacher-model", required=True, help="e.g. vertex/deepseek-ai/deepseek-v4.1-flash-maas")
     parser.add_argument("--owner", default="ishank", help="whose Cloud Run job runs the cloud stages")
     parser.add_argument("--round-budget-usd", type=float, default=8.0, help="no stage starts if its cap passes this total")
-    parser.add_argument("--max-concurrency", type=int, default=4)
+    parser.add_argument("--max-concurrency", type=int, default=8)
     parser.add_argument("--dry-run", action="store_true", help="cloud stages with the fake LLM: tests the plumbing, free")
     parser.add_argument("--launch", action="store_true", help="train and gate: submit the HF Job (spends credits)")
     return parser.parse_args()
