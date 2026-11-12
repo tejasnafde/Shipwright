@@ -154,7 +154,7 @@ def wait_for_job(job_id: str) -> tuple[str, float]:
         job = hf_api.inspect_job(job_id=job_id)
         stage = str(job.status.stage)
         if stage in ("COMPLETED", "ERROR", "CANCELED", "DELETED"):
-            seconds = job.durations.total_secs if job.durations else 0
+            seconds = job.durations.running_secs if job.durations else 0  # not the time spent waiting for a GPU
             return stage, round(seconds / 3600 * HF_PRICES.get(str(job.flavor), 2.5), 4)
         logger.info("waiting for the HF job", job=job_id, stage=stage)
         time.sleep(JOB_POLL_SECONDS)
