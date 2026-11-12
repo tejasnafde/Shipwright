@@ -45,6 +45,10 @@ RUNS_REPO = "mitushigoyal5/shipwright-runs"
 VLLM_PORT = 8000
 API_BASE = f"http://localhost:{VLLM_PORT}/v1"
 JOB_WORKDIR = Path("/tmp/shipwright")
+# vLLM 0.32.0 warms up its FlashInfer top-k/top-p sampler at start, which JIT-compiles a CUDA kernel and needs nvcc.
+# The HF Job image has no CUDA toolkit, so the first gate run died at startup (RuntimeError: Could not find nvcc,
+# round 3, 2026-11-12). The gate samples greedily, so the plain PyTorch sampler is enough.
+VLLM_ENVIRONMENT = {"VLLM_USE_FLASHINFER_SAMPLER": "0"}
 DRY_BFCL = ROOT / "tests" / "fixtures" / "bfcl"
 
 
@@ -414,7 +418,9 @@ class VLLMServer:
 
         print("+ " + " ".join(self.command), flush=True)
         self._log_file = open(self.log_path, "w")
-        self.process = subprocess.Popen(self.command, stdout=self._log_file, stderr=subprocess.STDOUT)
+        self.process = subprocess.Popen(
+            self.command, stdout=self._log_file, stderr=subprocess.STDOUT, env={**os.environ, **VLLM_ENVIRONMENT},
+        )
 
         deadline = time.time() + self.timeout_seconds
         while time.time() < deadline:
