@@ -87,6 +87,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - Frozen before round 1: failure label list, gate thresholds, k for pass^k, seeds, teacher and judge
   model versions. To change a frozen value, add the change and the reason as a new line here.
 - The gate never approves by default. Too few test runs means reject.
+- 2026-11-12 (Ishank): the headline result is task accuracy on the held-out tasks (pass^1 and pass^k from AuditKIT), because problem statement 8 says to "gate redeployment on measured accuracy". Tool-error and label rates are supporting metrics (the rules ask for before-and-after numbers on more than one metric), never a replacement. A low base pass rate is fixed by improving the student and the data, not by changing the headline metric.
 - Every round appends one row to `metrics.jsonl`.
 
 ## Baseline harness
