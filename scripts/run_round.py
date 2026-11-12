@@ -59,10 +59,12 @@ class StageBudget:
 # The team has $10 in total (2026-11-12), so every cap is small and the caps add up to well under it.
 # Estimates come from the round 1 runs (runs/r1-baseline-train: $1.49 for 74 runs, runs/r1-teacher-t1:
 # $0.53 for 54 runs, so 3 trials of about 54 tasks is about $1.60). GPU caps are price x timeout:
-# train L4 $0.80/h x 1h, gate A10G large $1.50/h x 1h plus about $0.60 of user simulator calls.
+# train L40S $1.80/h x 1h, gate A10G large $1.50/h x 1h plus about $0.60 of user simulator calls.
 TRAIN_TIMEOUT = "1h"
 GATE_TIMEOUT = "90m"
-TRAIN_FLAVOR = "l4x1"
+# 185 examples x 3 epochs is about 555 sequences of 5.5k tokens: an L4 (24 GB, $0.80/h) risks the 1 h limit and the
+# 262k-token vocabulary logits (docs/pipeline/training.md); an L40S (48 GB, $1.80/h) is faster and has the memory.
+TRAIN_FLAVOR = "l40sx1"
 GATE_FLAVOR = "a10g-large"
 # The gate's user simulator is an HF router model: a Vertex token minted at launch lasts about 1 hour
 # with no refresh (AGENTS.md traps), and the gate (120 tau2 runs, BFCL, model load) can run longer, which
@@ -73,7 +75,7 @@ BUDGETS = {
     "classify": StageBudget(estimate_usd=0.05, cap_usd=0.30),
     "teacher": StageBudget(estimate_usd=1.6, cap_usd=2.0),
     "data": StageBudget(estimate_usd=0.0, cap_usd=0.0),
-    "train": StageBudget(estimate_usd=0.4, cap_usd=0.8),
+    "train": StageBudget(estimate_usd=1.0, cap_usd=1.8),
     "ceiling": StageBudget(estimate_usd=0.5, cap_usd=1.0),
     "gate": StageBudget(estimate_usd=2.3, cap_usd=3.0),  # A10G $1.50/h x 1.5h = $2.25 cap, plus about $0.60 of simulator
 }
@@ -82,7 +84,7 @@ DESCRIPTIONS = {
     "classify": "label and route every failure (AgentTune detector and classifier, our rules)",
     "teacher": "the teacher replays the tool-fix and weight-fix failures (minus tasks it never solved), 3 trials each; passes are kept",
     "data": "build the SFT dataset from the teacher passes and push it to the HF dataset repo",
-    "train": "LoRA on Tiny Aya Global with AgentTune (HF Job, L4, 1h limit)",
+    "train": "LoRA on Tiny Aya Global with AgentTune (HF Job, L40S, 1h limit)",
     "ceiling": "the teacher on the 20 held-out tasks, 3 trials: the pass rate the student is compared with (evaluation only)",
     "gate": "base vs the new adapter on the 20 held-out tasks, k=3, 8 checks (HF Job, A10G, 90 min limit)",
 }

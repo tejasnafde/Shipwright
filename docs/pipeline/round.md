@@ -9,7 +9,7 @@ to `runs/round-N.json` (run dir, exit code, estimate, actual cost, `cost_basis`:
 | `classify` | Cloud Run job | label and route every failure | $0.05 | $0.30 |
 | `teacher` | Cloud Run job | teacher replays the tool-fix and weight-fix failures, 3 trials; passes kept | $1.60 | $2.00 |
 | `data` | laptop | `build_sft.py` from the teacher passes, pushed to the HF dataset repo | 0 | 0 |
-| `train` | HF Job, L4, 1h | LoRA with AgentTune (`--launch` to submit) | $0.40 | $0.80 |
+| `train` | HF Job, L40S, 1h | LoRA with AgentTune (`--launch` to submit); an L4 was too tight for 185 examples | $1.00 | $1.80 |
 | `ceiling` | Cloud Run job | side stage, any time: the teacher on the 20 held-out tasks, 3 trials (evaluation only) | $0.50 | $1.00 |
 | `gate` | HF Job, A10G large, 90 min | base vs the adapter, 20 held-out tasks, k=3, HF router user simulator (`--launch` to submit) | $2.30 | $3.00 |
 
