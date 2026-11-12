@@ -173,6 +173,10 @@ def save_manifest(manifest: dict, round_number: int) -> None:
         else:
             stage_entry["cost_basis"] = "estimated"
             estimated += stage_entry.get("estimate_usd") or 0.0
+    # Spend that belongs to no stage: failed attempts, smoke tests. Add one by hand with what it was and where the number
+    # came from (for an HF Job: runtime from `hf jobs inspect` x the flavor's price).
+    for other_cost in manifest.get("other_costs", []):
+        metered += other_cost["usd"]
     manifest["spent_metered_usd"] = round(metered, 4)
     manifest["spent_estimated_usd"] = round(estimated, 4)
     manifest["spent_usd"] = round(metered + estimated, 4)

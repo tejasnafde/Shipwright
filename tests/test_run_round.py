@@ -178,3 +178,12 @@ def test_manifest_names_the_library_parts_each_stage_uses(tmp_path, monkeypatch)
     run_round.save_manifest(manifest, 9)
     assert set(manifest["libraries"]["versions"]) == {"agenttune", "auditkit"}
     assert "agenttune RetrainingTrigger" in manifest["libraries"]["used_by_stage"]["train"][0]
+
+
+def test_other_costs_count_as_metered_spend(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_round, "ROOT", tmp_path)
+    (tmp_path / "runs").mkdir()
+    manifest = {"stages": {"baseline": {"actual_usd": 1.0, "estimate_usd": 1.5}},
+                "other_costs": [{"what": "failed train attempt", "usd": 0.12, "basis": "hf job runtime x price"}]}
+    run_round.save_manifest(manifest, 9)
+    assert manifest["spent_metered_usd"] == 1.12 and manifest["spent_usd"] == 1.12
