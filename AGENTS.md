@@ -393,6 +393,8 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   (e) Cheap screens before the gate: `run_loop.py --screen-bfcl` scores BFCL alone on the candidate (about 8 minutes, $0.17) and stops if the gate's BFCL check could not pass. A refused gate costs about $1 (L40S, 30 minutes) and a training run about $1.1: spend on one blocker at a time. HF GPUs queue: an A10G waited 30 minutes, an L40S 2 to 16 minutes; an HF job is billed by its running seconds, not the wait (`durations.running_secs`).
   (f) Held-out reuse: every gate we run on the same 20 held-out tasks selects on them. If a candidate is ever promoted, the number to report comes from the hidden split, opened once.
 
+- 2026-11-13: the loop runs unattended (`scripts/run_loop.py`, `docs/pipeline/loop.md`). Rules for working on it: a first-use path that was never run on real infrastructure is the usual cause of a failed run (about 20 of them in rounds 3 to 5), so add a check for it to `scripts/doctor.py` in the same change; do not patch a run while it is going: a run that needs a human is a defect to fix before the next run. The remedy ladder (`heal/recipe.py`: BFCL, then the tool guards, then corrections) is the only place that decides what a round changes; a rule stays only while its evidence does. The guards define what a wrong turn is, for the harness and for the correction data (`scripts/build_corrections.py`); a correction row trains only the teacher's final reply (`train_last_only`, `train_lora.mask_all_but_last_assistant`). Vertex's gcloud config resolves like the GCS code (`lexsi` if present).
+
 ## Keep this file correct
 
 This file corrects itself through you. **`AGENTS.md` is the only file that carries facts, traps
