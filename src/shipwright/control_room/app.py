@@ -29,7 +29,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from shipwright.control_room import gcs_runs
+from shipwright.control_room import gcs_runs, hub_runs, rounds
 
 RUNS_DIR = Path(__file__).resolve().parents[3] / "runs"
 LEDGER_PATH = RUNS_DIR.parent / "patches" / "ledger.jsonl"
@@ -375,29 +375,34 @@ def render_run_kind_banner(run_dir: Path) -> None:
     if info.kind == "demo":
         return  # render_demo_banner already explains it
     if info.kind == "dry":
-        st.warning(f"**DRY RUN.** `{info.name}` used a fake model to test the plumbing. "
-                   "Its pass rates and failures mean nothing.")
+        st.warning(f"**Practice run.** `{info.name}` used a fake model to test the plumbing. "
+                   "Its numbers mean nothing.")
     else:
-        st.success(f"**REAL RUN** by **{info.owner}**: `{info.name}`"
-                   + (f", started {info.created} UTC" if info.created else "")
-                   + (f", {info.passed_text}" if info.passed_text else "") + ".")
+        st.success(f"This is a **real run** (`{info.name}`, made by {info.owner}"
+                   + (f" on {info.created} UTC" if info.created else "") + ")"
+                   + (f": {info.passed_text.replace('passed', 'tasks passed')}" if info.passed_text else "") + ".")
 
 
 def render_reading_guide() -> None:
-    with st.expander("How to read this (60 seconds)", expanded=False):
+    first_visit = "guide_seen" not in st.session_state
+    st.session_state["guide_seen"] = True
+    with st.expander("Start here: what you are looking at", expanded=first_visit):
         st.markdown(
-            "**The loop:** the student (Tiny Aya) runs customer-support tasks, failed runs are "
-            "**detected** and **classified**, each failure is **routed** to one fix, and a **gate** "
-            "decides whether the fixed system may replace the live one.\n\n"
-            "| Tab | Question it answers |\n|---|---|\n"
-            "| **Follow a Task** | One task: why it failed, the fix, before vs after. |\n"
-            "| **Run & Trace** | How many tasks passed, and every conversation. |\n"
-            "| **Classify & Route** | Why runs failed and which fix each gets: `tool_fix`, `weight_fix` or `no_fix`. |\n"
-            "| **Fix & Train** | Tool patches, and teacher runs the student is trained on. |\n"
-            "| **Gate & Outcome** | Promote or reject, and the measured deltas behind it. |\n"
-            "| **History** | One row per round from `metrics.jsonl`. |\n\n"
-            "Every run is labelled: **REAL** (real models, real tau2 tasks), **DRY RUN** (fake "
-            "model, plumbing only), **STAGED** (hand-written walkthrough data, never a measured result).")
+            "**The idea.** A small model (Tiny Aya, the *student*) answers customer-support tasks. When it fails, we find "
+            "out *why*, a stronger model (the *teacher*) shows the right way on those same tasks, and we train the student "
+            "on that. A **gate** then tests the retrained student on tasks it has never seen and decides whether it "
+            "is allowed to replace the current one. If it is refused, the next round starts from what went wrong.\n\n"
+            "**How to use this page**\n\n"
+            "1. In the sidebar, pick a **round**. That fills in every run below for you, and the sidebar says in words "
+            "what each one is. You only open *Choose runs by hand* for something unusual.\n"
+            "2. Open **What changed?** first: what the retrained student does better, what it does worse, "
+            "and a task-by-task list. Click any task to read the two conversations next to each other.\n"
+            "3. **Follow a Task** walks one training task through the loop: why it failed, what the teacher did, "
+            "what the student does now.\n"
+            "4. The other tabs hold the detail: every conversation, why runs failed, what we trained on, "
+            "the gate's tests, and the history.\n\n"
+            "**Labels.** REAL = real models on real tasks. DRY RUN = a fake model, only testing the plumbing. "
+            "STAGED = hand-written example data, never a measured result.")
 
 
 def render_header(data: RoundData) -> None:
@@ -405,25 +410,25 @@ def render_header(data: RoundData) -> None:
     render_demo_banner(data.baseline_dir)
     decision = data.gate_decision
     outcome_state = "pending"
-    outcome_text = "ROUND IN PROGRESS"
+    outcome_text = "NOT TESTED BY THE GATE YET"
     if decision is not None:
         outcome_state = "good" if decision.get("decision") == "promote" else "bad"
-        outcome_text = "PROMOTED" if outcome_state == "good" else "REJECTED"
+        outcome_text = "GATE SAID YES" if outcome_state == "good" else "GATE SAID NO"
 
     top = st.columns([2, 1, 1, 1, 1])
     with top[0]:
-        st.markdown(f"### Round {data.round_num}" if data.round_num is not None else "### Selected run")
+        st.markdown(f"### Round {data.round_num}" if data.round_num is not None else "### The runs you picked")
         st.markdown(f'<span class="cr-badge {outcome_state}">{outcome_text}</span>', unsafe_allow_html=True)
     with top[1]:
-        st.metric("Trials run", data.num_trials)
+        st.metric("Conversations run", data.num_trials)
     with top[2]:
         pr = data.pass_rate
-        st.metric("Pass rate", f"{pr:.0%}" if pr is not None else "-")
+        st.metric("Passed", f"{data.num_passed} ({pr:.0%})" if pr is not None else "-")
     with top[3]:
-        st.metric("Failures found", len(data.failures))
+        st.metric("Failed", len(data.failures))
     with top[4]:
         passed, total = data.gate_checks_passed
-        st.metric("Gate checks passed", f"{passed}/{total}" if total else "-")
+        st.metric("Gate tests passed", f"{passed} of {total}" if total else "-")
 
     render_pipeline(data)
 
@@ -833,6 +838,15 @@ def tab_gate_outcome(data: RoundData) -> None:
     else:
         st.error("**REJECTED. The live system is kept.**\n\n" + "\n".join(f"- {reason}" for reason in reasons))
 
+    st.markdown("#### The gate's tests, in plain words")
+    for check in data.gate_checks:
+        if check.get("skipped"):
+            continue
+        passed = bool(check.get("passed"))
+        words = (CHECK_PLAIN_PASS if passed else CHECK_PLAIN_FAIL).get(check.get("name"), check.get("detail") or "")
+        st.markdown((":green-badge[passed]" if passed else ":red-badge[failed]") + f" {words}")
+    st.caption("The exact rule and numbers behind each test are in the tiles and the raw decision below.")
+
     score_checks = [c for c in data.gate_checks if c.get("current") is not None and c.get("candidate") is not None]
     other_checks = [c for c in data.gate_checks if c not in score_checks]
 
@@ -928,9 +942,12 @@ def tab_follow_task(data: RoundData, after_dir: Path | None, task_id: str) -> No
             elif after_trace:
                 st.error("**Still fails** with the trained student.")
             elif after_dir is None:
-                st.caption("No after-training run selected (picker above).")
+                st.caption("No \"after\" run for this round yet. It is made at the start of the next round: the "
+                           "trained student runs the same training tasks again. Meanwhile **What changed?** compares "
+                           "the student before and after on the gate's held-out tasks.")
             else:
-                st.caption("Task not found in the after dir.")
+                st.caption(f"Task {task_id} is not in `{after_dir.name}`: that run used other tasks (for example the "
+                           "held-out ones). Pick a run on the same training tasks, or look at **What changed?**.")
         if after_trace:
             st.caption(f"from `{after_dir.name}`")
             _render_task_trace(after_trace, key="follow_after")
@@ -987,6 +1004,165 @@ def render_pull_runs_button(container) -> None:
     st.rerun()
 
 
+CHECK_PLAIN_FAIL = {
+    "pass_1": "It solves fewer tasks on a single try than the current system.",
+    "pass_k": "It no longer solves the same task every time it tries (the gate asks for 3 out of 3).",
+    "target": "The failures we trained it to fix did not go down enough.",
+    "non_target": "More runs now fail for reasons we were not trying to fix.",
+    "bfcl": "It got worse at general tool-calling outside our retail tasks (the BFCL quiz).",
+    "agenttune_gate": "AgentTune's own deployment check saw a regression.",
+    "valid_runs": "Too few of its runs finished to judge it fairly (often a serving problem, not the model).",
+    "comparable": "The two systems were not tested on the same tasks, so the comparison is not valid.",
+}
+CHECK_PLAIN_PASS = {
+    "pass_1": "It solves at least as many tasks on a single try.",
+    "pass_k": "It is at least as consistent from try to try.",
+    "target": "The failures we trained it to fix went down.",
+    "non_target": "No new kinds of failure appeared.",
+    "bfcl": "It kept its general tool-calling skill.",
+    "agenttune_gate": "AgentTune's deployment check saw no regression.",
+    "valid_runs": "Enough runs finished to judge it.",
+    "comparable": "Both systems were tested on the same tasks.",
+}
+
+
+def _group_by_task() -> dict[str, str]:
+    """Task id -> how many changes it needs ("0-1 writes" or "2+ writes"), when tau2 is installed here."""
+    try:
+        from shipwright.heal import slices
+
+        return slices.write_slice_by_task("retail", "test")
+    except Exception:  # noqa: BLE001 - tau2 is not in the Space image; the column is simply left out
+        return {}
+
+
+def _system_name(system: object, default: str) -> str:
+    """A system's name: a real gate decision has {"name": ...}, the staged demo data has the bare string."""
+    if isinstance(system, dict):
+        return system.get("name") or default
+    return system or default
+
+
+def _gate_system_traces(gate_dir: Path, decision: dict) -> tuple[list[dict], list[dict], str, str]:
+    systems = decision.get("systems") or {}
+    live_name = _system_name(systems.get("current"), "base")
+    candidate_name = _system_name(systems.get("candidate"), "")
+    return (_read_jsonl(gate_dir / live_name / "traces.jsonl"), _read_jsonl(gate_dir / candidate_name / "traces.jsonl"),
+            live_name, candidate_name)
+
+
+def _render_findings(decision: dict) -> None:
+    findings = rounds.what_changed(decision)
+    better = [finding for finding in findings if finding.kind == "good"]
+    worse = [finding for finding in findings if finding.kind == "bad"]
+    columns = st.columns(2)
+    with columns[0]:
+        st.markdown("##### Better")
+        if better:
+            for finding in better:
+                st.markdown(f":green[**+**] {finding.text}")
+        else:
+            st.caption("Nothing clearly better.")
+    with columns[1]:
+        st.markdown("##### Worse")
+        if worse:
+            for finding in worse:
+                st.markdown(f":red[**-**] {finding.text}")
+        else:
+            st.caption("Nothing clearly worse.")
+
+
+def _render_numbers(decision: dict) -> None:
+    current, candidate = decision.get("metrics_current") or {}, decision.get("metrics_candidate") or {}
+
+    def percent(value):
+        return "-" if value is None else f"{value:.0%}"
+
+    def number(value, digits=1):
+        return "-" if value is None else f"{value:.{digits}f}"
+
+    bfcl_before, bfcl_after = rounds._bfcl_points(current), rounds._bfcl_points(candidate)
+    st.dataframe([
+        {"": "Tasks solved on one try", "Before": percent(current.get("pass_1")), "After": percent(candidate.get("pass_1"))},
+        {"": "Tasks solved on every try", "Before": percent(current.get("pass_k")), "After": percent(candidate.get("pass_k"))},
+        {"": "Tool calls that returned an error", "Before": percent(current.get("tool_call_error_rate")),
+         "After": percent(candidate.get("tool_call_error_rate"))},
+        {"": "Steps per conversation", "Before": number(current.get("avg_steps")), "After": number(candidate.get("avg_steps"))},
+        {"": "General tool-calling quiz (BFCL, points)", "Before": number(bfcl_before), "After": number(bfcl_after)},
+    ], hide_index=True, width="stretch")
+
+
+def _render_task_by_task(gate_dir: Path, decision: dict) -> None:
+    before_traces, after_traces, live_name, candidate_name = _gate_system_traces(gate_dir, decision)
+    if not before_traces or not after_traces:
+        st.caption("The per-task conversations are not in this gate folder.")
+        return
+    changes = rounds.compare_tasks(before_traces, after_traces, _group_by_task())
+    changed = [change for change in changes if change.change != "same"]
+    st.markdown("#### Task by task")
+    st.caption(f"The gate's held-out tasks, run {changes[0].before_trials} times each by the current student "
+               f"(`{live_name}`) and by the retrained one (`{candidate_name}`). Only tasks both ran are listed.")
+    show_all = st.radio("Show", ["Only tasks that changed", "All tasks"], horizontal=True, key="compare_filter")
+    shown = changes if show_all == "All tasks" else changed
+    if not shown:
+        st.info("No task changed how often it passes.")
+        return
+    has_group = any(change.group for change in shown)
+    rows = []
+    for change in shown:
+        row = {"Task": change.task_id}
+        if has_group:
+            row["Needs"] = change.group
+        row["Before"] = f"{change.before_passed} of {change.before_trials}"
+        row["After"] = f"{change.after_passed} of {change.after_trials}"
+        row["What happened"] = rounds.CHANGE_WORDS[change.change]
+        rows.append(row)
+    st.dataframe(rows, hide_index=True, width="stretch")
+
+    st.markdown("#### Read one task side by side")
+    task_ids = [change.task_id for change in shown]
+    task_id = st.selectbox("Task", task_ids, key="compare_task")
+    left, right = st.columns(2)
+    for column, traces, title, key in ((left, before_traces, f"Before: `{live_name}`", "cmp_before"),
+                                       (right, after_traces, f"After: `{candidate_name}`", "cmp_after")):
+        with column:
+            st.markdown(f"##### {title}")
+            task_traces = [trace for trace in traces if str(trace.get("task_id")) == task_id]
+            if not task_traces:
+                st.caption("This system has no run of that task.")
+                continue
+            trial_numbers = [trace.get("trial") for trace in task_traces]
+            trial = st.selectbox("Try", trial_numbers, key=f"{key}_trial_{task_id}",
+                                 format_func=lambda number, task_traces=task_traces: (
+                                     f"try {number}: " + ("passed" if _trace_passed(
+                                         next(trace for trace in task_traces if trace.get("trial") == number)) else "failed")))
+            _render_task_trace(next(trace for trace in task_traces if trace.get("trial") == trial), key=f"{key}_{task_id}")
+
+
+def tab_compare(data: RoundData, entry: rounds.RoundEntry | None) -> None:
+    """The first thing to read: what the retrained student does differently, in words, then the proof."""
+    decision = data.gate_decision
+    if decision is None:
+        st.info("**No gate results are loaded for this round.** The gate is the test on tasks the student has never "
+                "seen, and this tab compares the student before and after it. "
+                + ("Use *Update runs* in the sidebar to download this round's gate results from Hugging Face."
+                   if entry and entry.outcome != "unfinished" else
+                   "This round has not reached the gate yet."))
+        return
+    round_words = f"Round {data.round_num}" if data.round_num is not None else "This round"
+    if decision.get("decision") == "promote":
+        st.success(f"**{round_words}: the gate said yes.** The retrained student is allowed to replace the current one.")
+    else:
+        st.error(f"**{round_words}: the gate said no.** The current student stays. Below: what the retrained student "
+                 "did better, what it did worse, and the task-by-task proof.")
+    _render_findings(decision)
+    st.markdown("#### The numbers")
+    _render_numbers(decision)
+    _render_task_by_task(data.gate_dir, decision)
+
+
+# ---------------------------------------------------------------- sidebar: pick a round
+
 @dataclass
 class RoundSelection:
     baseline_dir: Path | None
@@ -994,8 +1170,16 @@ class RoundSelection:
     gate_dir: Path | None
     after_dir: Path | None
     round_num: int | None
+    entry: rounds.RoundEntry | None
     scenario: Scenario | None
-    scenario_name: str
+    choice: str
+
+
+CHOICE_BY_HAND = "(choose runs by hand)"
+
+
+def _round_choices() -> dict[str, rounds.RoundEntry]:
+    return {entry.label: entry for entry in rounds.discover_rounds(RUNS_DIR)}
 
 
 def _available_scenarios() -> dict[str, Scenario]:
@@ -1008,72 +1192,115 @@ def _available_scenarios() -> dict[str, Scenario]:
     return available
 
 
-def _apply_scenario() -> None:
-    """on_change of the scenario dropdown: point every manual picker at the scenario's dirs,
-    so the pickers below always show (and can override) exactly what is loaded."""
-    scenario = SCENARIOS.get(st.session_state["scenario_choice"])
-    if scenario is None:
-        return
-    st.session_state["baseline_choice"] = scenario.baseline
-    st.session_state["sft_choice"] = scenario.sft or "(none)"
-    st.session_state["gate_choice"] = scenario.gate or "(none)"
-    st.session_state["after_choice"] = scenario.after or "(none)"
+def _apply_choice() -> None:
+    """on_change of the round dropdown: point the four run pickers at that round's dirs, so the pickers always show
+    (and can override) exactly what is loaded."""
+    choice = st.session_state["scenario_choice"]
+    entry = _round_choices().get(choice)
+    scenario = SCENARIOS.get(choice)
+    if entry is not None:
+        st.session_state["baseline_choice"] = entry.before or "(none)"
+        st.session_state["sft_choice"] = entry.teacher or "(none)"
+        st.session_state["gate_choice"] = entry.gate or "(none)"
+        st.session_state["after_choice"] = entry.after or "(none)"
+    elif scenario is not None:
+        st.session_state["baseline_choice"] = scenario.baseline
+        st.session_state["sft_choice"] = scenario.sft or "(none)"
+        st.session_state["gate_choice"] = scenario.gate or "(none)"
+        st.session_state["after_choice"] = scenario.after or "(none)"
     st.session_state.pop("task_id_choice", None)
 
 
+def _default_choice(choices: dict[str, rounds.RoundEntry], scenarios: dict[str, Scenario]) -> str:
+    decided = [label for label, entry in choices.items() if entry.outcome != "unfinished"]
+    if decided:
+        return decided[0]  # the newest round the gate has decided
+    if choices:
+        return next(iter(choices))
+    return next(iter(scenarios), CHOICE_BY_HAND)
+
+
+def _status_line(done: bool, role: str, meaning: str, run: Path | None, missing: str) -> None:
+    mark = ":green[**done**]" if done else ":gray[**missing**]"
+    if done and run is not None:
+        st.sidebar.markdown(f"{mark} **{role}**: {meaning}  \n`{run.name}`")
+    else:
+        st.sidebar.markdown(f"{mark} **{role}**: {meaning}  \n{missing}")
+
+
+def render_loaded_runs(selection: RoundSelection) -> None:
+    """The four roles in words, so nobody has to know which folder goes where."""
+    st.sidebar.markdown("##### The four runs it loaded")
+    _status_line(selection.baseline_dir is not None, "Before", "the student on the training tasks",
+                 selection.baseline_dir, "pick one under *Choose runs by hand*")
+    _status_line(selection.sft_dir is not None, "Corrections", "what the teacher showed, what it is trained on",
+                 selection.sft_dir, "none for this round")
+    _status_line(selection.gate_dir is not None, "Gate", "the test on tasks it has never seen",
+                 selection.gate_dir, "not on this machine: *Update runs* below downloads it")
+    _status_line(selection.after_dir is not None, "After", "the retrained student on the same training tasks",
+                 selection.after_dir, "not run yet: it runs at the start of the next round")
+
+
+def render_update_runs(entry: rounds.RoundEntry | None) -> None:
+    """Both ways to get runs that were made elsewhere: the Cloud Run jobs (GCS) and the gate job (Hugging Face)."""
+    box = st.sidebar.expander("Update runs")
+    box.caption("Runs made on the cloud are not on this machine until you pull them.")
+    if gcs_runs.gcloud_binary() is not None:
+        render_pull_runs_button(box)
+    if entry is not None and entry.outcome != "unfinished":
+        if box.button(f"Download round {entry.number}'s gate results (Hugging Face)", width="stretch", key="pull_gate"):
+            with st.spinner("Downloading..."):
+                try:
+                    hub_runs.pull_gate_results(entry.number, RUNS_DIR, entry.candidate)
+                except Exception as error:  # noqa: BLE001 - shown to the person, not a crash
+                    box.error(f"Could not download them: {error}")
+                    return
+            st.session_state["pull_message"] = f"Downloaded the gate results of round {entry.number}."
+            _apply_choice()
+            st.rerun()
+    if "pull_message" in st.session_state:
+        st.sidebar.success(st.session_state.pop("pull_message"))
+
+
 def select_round() -> RoundSelection:
-    """The sidebar: a scenario dropdown on top that fills in the manual pickers right below it."""
-    scenarios = _available_scenarios()
-    scenario_names = [*scenarios, NO_SCENARIO]
-    if "scenario_choice" not in st.session_state:
-        st.session_state["scenario_choice"] = scenario_names[0]
-        _apply_scenario()
-    scenario_name = st.sidebar.selectbox("Load demo scenario", scenario_names, key="scenario_choice",
-                                         on_change=_apply_scenario)
-    scenario = scenarios.get(scenario_name)
+    st.sidebar.header("1. Pick a round")
+    choices, scenarios = _round_choices(), _available_scenarios()
+    names = [*choices, *scenarios, CHOICE_BY_HAND]
+    if "scenario_choice" not in st.session_state or st.session_state["scenario_choice"] not in names:
+        st.session_state["scenario_choice"] = _default_choice(choices, scenarios)
+        _apply_choice()
+    choice = st.sidebar.selectbox("Which round do you want to look at?", names, key="scenario_choice",
+                                  on_change=_apply_choice,
+                                  help="Picking a round fills in the four runs below. A round is one pass of the loop.")
+    entry, scenario = choices.get(choice), scenarios.get(choice)
     if scenario:
         st.sidebar.caption(scenario.summary)
 
-    st.sidebar.subheader("Run dirs")
-    st.sidebar.caption("The gate run is picked in Gate & Outcome, the after-training run in Follow a Task.")
-    baseline_dir = _pick_dir("Baseline run (the agent run being judged)", "baseline", "baseline")
-    sft_dir = _pick_dir("Teacher/SFT output dir", "sft", "sft")
+    status_slot = st.sidebar.container()
+    st.sidebar.header("2. Something unusual?")
+    advanced = st.sidebar.expander("Choose runs by hand")
+    advanced.caption("Only if you want to mix runs from different rounds. The four boxes are the four roles above.")
+    baseline_dir = _pick_dir("Before: the student on the training tasks", "baseline", "baseline", container=advanced)
+    sft_dir = _pick_dir("Corrections: the teacher's runs or the training data", "sft", "sft", container=advanced,
+                        default_to_real_run=False)
+    gate_dir = _pick_dir("Gate: the held-out test", "gate", "gate", container=advanced, default_to_real_run=False)
+    after_dir = _pick_dir("After: the retrained student, same tasks as Before", "baseline", "after", container=advanced,
+                          default_to_real_run=False)
+    if after_dir is not None and after_dir == baseline_dir:
+        advanced.warning("After is the same run as Before, so it is ignored.")
+        after_dir = None
 
-    if gcs_runs.gcloud_binary() is not None:
-        render_pull_runs_button(st.sidebar.expander("Pull runs from GCS"))
-    if "pull_message" in st.session_state:
-        st.sidebar.success(st.session_state.pop("pull_message"))
-    round_num = scenario.round_num if scenario else None
-    return RoundSelection(baseline_dir, sft_dir, None, None, round_num, scenario, scenario_name)
+    expected = (entry.before, entry.teacher, entry.gate, entry.after) if entry else None
+    loaded = tuple(path.name if path else None for path in (baseline_dir, sft_dir, gate_dir, after_dir))
+    round_num = entry.number if entry and expected == loaded else None
+    if scenario and loaded == (scenario.baseline, scenario.sft, scenario.gate, scenario.after):
+        round_num = scenario.round_num
 
-
-def pick_gate_dir() -> Path | None:
-    """Drawn at the top of the Gate & Outcome tab; History and the header read the same dir."""
-    return _pick_dir("Gate run", "gate", "gate", container=st)
-
-
-def pick_after_dir(baseline_dir: Path) -> Path | None:
-    """Drawn at the top of Follow a Task, the only tab that reads it."""
-    after_dir = _pick_dir("After: a run made with the trained adapter", "baseline", "after",
-                          container=st, default_to_real_run=False)
-    if after_dir == baseline_dir:
-        st.warning("The after run is the baseline run itself, so it is ignored. "
-                   "Pick a run made with the trained adapter.")
-        return None
-    return after_dir
-
-
-def _scenario_still_matches(selection: RoundSelection) -> bool:
-    """The scenario's text only describes the data while every picker still points at its dirs."""
-    scenario = selection.scenario
-    loaded = (selection.baseline_dir, selection.sft_dir, selection.gate_dir, selection.after_dir)
-    expected = (_scenario_dir(scenario.baseline), _scenario_dir(scenario.sft),
-                _scenario_dir(scenario.gate), _scenario_dir(scenario.after))
-    return loaded == expected
-
-
-def _scenario_dir(name: str | None) -> Path | None:
-    return RUNS_DIR / name if name else None
+    selection = RoundSelection(baseline_dir, sft_dir, gate_dir, after_dir, round_num, entry, scenario, choice)
+    with status_slot:
+        render_loaded_runs(selection)
+    render_update_runs(entry)
+    return selection
 
 
 def select_task_id(data: RoundData, selection: RoundSelection) -> str:
@@ -1089,59 +1316,51 @@ def select_task_id(data: RoundData, selection: RoundSelection) -> str:
         default_task_id = next((task_id for task_id in candidates if task_id in task_ids), task_ids[0])
     if st.session_state.get("task_id_choice") not in task_ids:
         st.session_state["task_id_choice"] = default_task_id
-    st.sidebar.divider()
-    return st.sidebar.selectbox("Follow a task", task_ids, key="task_id_choice")
+    st.sidebar.header("3. Follow one task")
+    st.sidebar.caption("Used by the Follow a Task tab.")
+    return st.sidebar.selectbox("Training task", task_ids, key="task_id_choice")
 
 
 def main() -> None:
     st.set_page_config(page_title="Shipwright control room", layout="wide")
     st.markdown(CSS, unsafe_allow_html=True)
     st.title("Shipwright: a self-healing support agent")
-    st.caption("Run → detect → classify → route → fix → gate. Every number here is read from a run's own files.")
+    st.caption("The student fails, we find out why, the teacher shows the right way, we retrain, and a gate decides. "
+               "Every number is read from the run's own files.")
 
     selection = select_round()
     if selection.baseline_dir is None or not selection.baseline_dir.exists():
         st.warning(
-            f"Pick a baseline run dir in the sidebar (looked under `{RUNS_DIR}`). "
-            "Run `scripts/baseline.py` first, for real or with `--dry-run`, or `scripts/demo_data.py` "
-            "for the staged walkthrough."
+            f"Pick a round in the sidebar (looked under `{RUNS_DIR}`). If the list is empty, there are no runs on this "
+            "machine yet: open *Update runs* to pull them, or run `scripts/baseline.py` (a real or a `--dry-run`)."
         )
         return
 
-    scenario_slot = st.container()
     render_reading_guide()
     header_slot = st.container()
     st.divider()
-    tabs = st.tabs(["Follow a Task", "Run & Trace", "Classify & Route", "Fix & Train", "Gate & Outcome", "History"])
-    # These two pickers sit inside the tab that uses them, but the header above the tabs reads
-    # the gate dir too, so pick both before loading and fill the header afterwards.
-    with tabs[4]:
-        selection.gate_dir = pick_gate_dir()
-    with tabs[0]:
-        selection.after_dir = pick_after_dir(selection.baseline_dir)
-
-    scenario_matches = selection.scenario is not None and _scenario_still_matches(selection)
-    if not scenario_matches:
-        selection.round_num = None  # a hand-picked mix of runs is not a numbered round
+    tabs = st.tabs(["What changed?", "Follow a Task", "Run & Trace", "Classify & Route", "Fix & Train",
+                    "Gate & Outcome", "History"])
     data = RoundData(selection.baseline_dir, selection.sft_dir, selection.gate_dir, selection.round_num)
     task_id = select_task_id(data, selection)
 
-    if scenario_matches:
-        scenario_slot.info(f"**{selection.scenario_name}.** {selection.scenario.summary}")
     with header_slot:
         render_header(data)
     with tabs[0]:
-        tab_follow_task(data, selection.after_dir, task_id)
+        tab_compare(data, selection.entry)
     with tabs[1]:
-        tab_run_trace(data)
+        tab_follow_task(data, selection.after_dir, task_id)
     with tabs[2]:
-        tab_classify_route(data)
+        tab_run_trace(data)
     with tabs[3]:
-        tab_fix_train(data)
+        tab_classify_route(data)
     with tabs[4]:
-        tab_gate_outcome(data)
+        tab_fix_train(data)
     with tabs[5]:
+        tab_gate_outcome(data)
+    with tabs[6]:
         tab_history(data)
+
 
 if __name__ == "__main__":
     main()

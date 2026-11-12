@@ -196,6 +196,8 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   ledger rows whose `source_failures` are that run's simulation ids. The 35 round-1 patches were
   proposed on Nov 8 from a run no longer on disk, and `r1-baseline-train` ran with all 35 active.
 
+- 2026-11-12 (Ishank): the control room is organised around a **round**, not four hand-picked dirs. The sidebar's first dropdown lists the real rounds it finds (`runs/round-N.json`, `control_room/rounds.py`) and fills in the four roles: Before (`rN-baseline`, or `rN-cand-train` for a loop round), Corrections (`rN-teacher` or `rN-sft`), Gate (`gate-rN`), After (`r(N+1)-cand-train`, this round's adapter on the same training tasks, run at the start of the next round). "Choose runs by hand" holds the four pickers for unusual mixes. "Update runs" pulls cloud runs (GCS) and `hub_runs.pull_gate_results` downloads a round's gate results from the public runs dataset on Hugging Face into `runs/gate-rN`. The first tab, **What changed?**, says in words what the retrained student does better and worse (`rounds.what_changed`), shows before and after numbers and a task-by-task table (`rounds.compare_tasks`), and shows the two conversations of a task side by side. Held-out (gate) tasks and training tasks are different tasks: a Follow a Task "After" run must be on the training tasks, a gate comparison is on the held-out ones. Logic lives in `rounds.py` (tested without Streamlit); `streamlit.testing.v1.AppTest` runs the whole app against `runs/` for a smoke check.
+
 ## Infrastructure
 
 - **GCP project `lexsi-hackathon`**, region `asia-south1`. Owner: Tejas. Editors: Ishank, Mitushi.
