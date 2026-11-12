@@ -9,7 +9,7 @@ cached prompt tokens. Prices are estimates; check HF billing and GCP billing for
 from __future__ import annotations
 
 import threading
-from typing import Any
+from typing import Any, Callable
 
 # USD per 1M tokens: (input, cached input, output).
 VERTEX_PRICES = {  # Vertex AI MaaS list prices, checked 2026-11-09
@@ -31,7 +31,9 @@ def provider_of(model: str, api_base: str | None = None, dry_run: bool = False) 
         return "dry_run"
     if api_base:
         return "local"  # our own GPU (vLLM), billed per hour, not per token
-    return "vertex" if model.startswith("vertex/") else "hf_router"
+    if model.startswith("vertex/"):
+        return "vertex"
+    return "hf_router"
 
 
 def price_for(model: str, provider: str) -> tuple[tuple[float, float, float], bool]:
@@ -39,13 +41,28 @@ def price_for(model: str, provider: str) -> tuple[tuple[float, float, float], bo
     if provider in ("dry_run", "local"):
         return ZERO, False
     if provider == "vertex":
-        p = VERTEX_PRICES.get(model.removeprefix("vertex/"))
-        return (p, False) if p else (UNKNOWN_GUESS, True)
+        vertex_price = VERTEX_PRICES.get(model.removeprefix("vertex/"))
+        if vertex_price:
+            return vertex_price, False
+        return UNKNOWN_GUESS, True
     if model in HF_PRICES:
         return HF_PRICES[model], False
     if "tiny-aya" in model.lower():
         return TINY_AYA_GUESS, True
     return UNKNOWN_GUESS, True
+
+
+def _read_field(container: Any, key: str) -> Any:
+    """container[key] for a dict, getattr for an object, None for a missing container."""
+    if container is None:
+        return None
+    if isinstance(container, dict):
+        return container.get(key)
+    return getattr(container, key, None)
+
+
+def _is_count(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def cached_tokens(usage: Any) -> int | None:
@@ -60,32 +77,40 @@ def cached_tokens(usage: Any) -> int | None:
     if usage is None:
         return None
 
-    def get(obj: Any, key: str) -> Any:
-        if obj is None:
-            return None
-        return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
-
-    details = get(usage, "prompt_tokens_details")
-    google = get(get(usage, "extra_properties"), "google")
-    found = [int(v) for v in (get(details, "cached_tokens"), get(usage, "cached_tokens"),
-                  get(usage, "cachedContentTokenCount"), get(usage, "cache_read_input_tokens"),
-                  get(google, "cached_content_token_count"), get(google, "cachedContentTokenCount"),
-                  get(google, "cached_tokens"))
-             if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    prompt_details = _read_field(usage, "prompt_tokens_details")
+    google_block = _read_field(_read_field(usage, "extra_properties"), "google")
+    candidate_counts = [
+        _read_field(prompt_details, "cached_tokens"),
+        _read_field(usage, "cached_tokens"),
+        _read_field(usage, "cachedContentTokenCount"),
+        _read_field(usage, "cache_read_input_tokens"),
+        _read_field(google_block, "cached_content_token_count"),
+        _read_field(google_block, "cachedContentTokenCount"),
+        _read_field(google_block, "cached_tokens"),
+    ]
+    reported_counts = [int(count) for count in candidate_counts if _is_count(count)]
     # litellm may fill a default 0 in one field while the provider reports the hit in another.
-    return max(found) if found else None
+    if reported_counts:
+        return max(reported_counts)
+    return None
 
 
 def usage_numbers(usage: Any) -> dict:
     """prompt, completion and cached prompt tokens from a usage block (missing -> 0)."""
-    def get(key: str) -> int:
-        v = usage.get(key) if isinstance(usage, dict) else getattr(usage, key, None)
-        return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
-
     if usage is None:
         return {"prompt_tokens": 0, "completion_tokens": 0, "cached_prompt_tokens": 0}
-    return {"prompt_tokens": get("prompt_tokens"), "completion_tokens": get("completion_tokens"),
-            "cached_prompt_tokens": cached_tokens(usage) or 0}
+
+    def token_count(key: str) -> int:
+        value = _read_field(usage, key)
+        if _is_count(value):
+            return int(value)
+        return 0
+
+    return {
+        "prompt_tokens": token_count("prompt_tokens"),
+        "completion_tokens": token_count("completion_tokens"),
+        "cached_prompt_tokens": cached_tokens(usage) or 0,
+    }
 
 
 class UsageMeter:
@@ -96,64 +121,103 @@ class UsageMeter:
         self.rows: dict[tuple[str, str], dict] = {}
 
     def add(self, role: str, model: str, usage: Any) -> None:
-        nums = usage_numbers(usage)
+        token_counts = usage_numbers(usage)
         with self._lock:
-            row = self.rows.setdefault((role, model), {"calls": 0, "prompt_tokens": 0,
-                                                        "completion_tokens": 0, "cached_prompt_tokens": 0})
+            row = self.rows.setdefault(
+                (role, model),
+                {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_prompt_tokens": 0},
+            )
             row["calls"] += 1
-            for k, v in nums.items():
-                row[k] += v
+            for counter_name, count in token_counts.items():
+                row[counter_name] += count
 
     def by_role(self) -> dict[str, dict]:
         """{role: {calls, prompt_tokens, completion_tokens, cached_prompt_tokens, models: [...]}}."""
-        out: dict[str, dict] = {}
+        totals_by_role: dict[str, dict] = {}
         with self._lock:
             for (role, model), row in self.rows.items():
-                agg = out.setdefault(role, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
-                                            "cached_prompt_tokens": 0, "models": []})
-                for k in ("calls", "prompt_tokens", "completion_tokens", "cached_prompt_tokens"):
-                    agg[k] += row[k]
-                agg["models"].append(model)
-        return out
+                role_totals = totals_by_role.setdefault(
+                    role,
+                    {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_prompt_tokens": 0, "models": []},
+                )
+                for counter_name in ("calls", "prompt_tokens", "completion_tokens", "cached_prompt_tokens"):
+                    role_totals[counter_name] += row[counter_name]
+                role_totals["models"].append(model)
+        return totals_by_role
+
+
+class BudgetExceeded(RuntimeError):
+    """Raised by SpendGuard before a model call once the run has spent its --max-cost-usd."""
+
+
+class SpendGuard:
+    """Stops a run from spending more than ``limit_usd``: call it before every model call.
+
+    ``spent_usd`` returns the cost metered so far. Calls already in flight when the limit is
+    crossed still finish, so the final cost can pass the limit by a few cents.
+    """
+
+    def __init__(self, limit_usd: float, spent_usd: Callable[[], float]) -> None:
+        self.limit_usd = limit_usd
+        self.spent_usd = spent_usd
+        self.hit = False
+
+    def __call__(self) -> None:
+        if self.hit or self.spent_usd() >= self.limit_usd:
+            self.hit = True
+            raise BudgetExceeded(f"run stopped: spent the --max-cost-usd limit of ${self.limit_usd:.2f}")
 
 
 def cost_usd(prompt: int, cached: int, completion: int, price: tuple[float, float, float]) -> float:
-    pin, pcached, pout = price
+    input_price, cached_input_price, output_price = price
     cached = min(cached, prompt)
-    return ((prompt - cached) * pin + cached * pcached + completion * pout) / 1e6
+    uncached = prompt - cached
+    return (uncached * input_price + cached * cached_input_price + completion * output_price) / 1e6
 
 
 def hit_rate(prompt: int, cached: int) -> float | None:
-    return round(cached / prompt, 4) if prompt else None
+    if prompt:
+        return round(cached / prompt, 4)
+    return None
 
 
-def estimate(meter_rows: dict[tuple[str, str], dict], providers: dict[str, str],
-             role_names: dict[str, str] | None = None) -> dict:
+def estimate(
+    meter_rows: dict[tuple[str, str], dict],
+    providers: dict[str, str],
+    role_names: dict[str, str] | None = None,
+) -> dict:
     """Cost estimate per role, from ``UsageMeter.rows`` and the provider of each model.
 
     ``providers`` maps model -> provider (``provider_of``). ``role_names`` renames roles in the
     output (teacher runs: ``{"agent": "teacher"}``).
     """
     role_names = role_names or {}
-    by_role: dict[str, dict] = {}
-    total = 0.0
+    entry_by_role_name: dict[str, dict] = {}
+    total_usd = 0.0
     for (role, model), row in sorted(meter_rows.items()):
-        name = role_names.get(role, role)
+        role_name = role_names.get(role, role)
         provider = providers.get(model) or provider_of(model)
-        price, assumed = price_for(model, provider)
-        usd = cost_usd(row["prompt_tokens"], row["cached_prompt_tokens"], row["completion_tokens"], price)
-        total += usd
-        entry = by_role.setdefault(name, {"usd": 0.0, "models": []})
-        entry["usd"] = round(entry["usd"] + usd, 6)
-        entry["models"].append({
-            "model": model, "provider": provider, **row,
+        price, price_is_assumed = price_for(model, provider)
+        model_usd = cost_usd(row["prompt_tokens"], row["cached_prompt_tokens"], row["completion_tokens"], price)
+        total_usd += model_usd
+
+        role_entry = entry_by_role_name.setdefault(role_name, {"usd": 0.0, "models": []})
+        role_entry["usd"] = round(role_entry["usd"] + model_usd, 6)
+        role_entry["models"].append({
+            "model": model,
+            "provider": provider,
+            **row,
             "cache_hit_rate": hit_rate(row["prompt_tokens"], row["cached_prompt_tokens"]),
             "usd_per_1m": {"input": price[0], "cached_input": price[1], "output": price[2]},
-            "price_assumed": assumed, "usd": round(usd, 6),
+            "price_assumed": price_is_assumed,
+            "usd": round(model_usd, 6),
         })
-    out: dict[str, Any] = {name: round(entry["usd"], 4) for name, entry in by_role.items()}
-    out["total"] = round(total, 4)
-    out["by_role"] = by_role
-    out["note"] = ("estimate from metered token counts and list prices in src/shipwright/llm/costs.py;"
-                   " check HF and GCP billing for the real number")
-    return out
+
+    estimate_by_role: dict[str, Any] = {name: round(entry["usd"], 4) for name, entry in entry_by_role_name.items()}
+    estimate_by_role["total"] = round(total_usd, 4)
+    estimate_by_role["by_role"] = entry_by_role_name
+    estimate_by_role["note"] = (
+        "estimate from metered token counts and list prices in src/shipwright/llm/costs.py;"
+        " check HF and GCP billing for the real number"
+    )
+    return estimate_by_role

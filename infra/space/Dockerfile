@@ -16,6 +16,8 @@ RUN pip install --no-cache-dir ".[space]"
 # control-room is read-only and has no way to produce its own, see
 # infra/space/README.md for how this directory gets populated before build.
 COPY runs/ runs/
+# The tool-patch ledger, read by the Fix & Train tab (patches active in / proposed from a run).
+COPY patches/ patches/
 
 ENV PYTHONPATH=/app/src
 

@@ -149,32 +149,36 @@ def make_classifier(model_name: str, api_base: str | None = None):
 
     ``model_name``: a ``vertex/<publisher>/<model>`` id (Vertex AI through litellm, api_base and
     a fresh gcloud token per call, see ``shipwright.llm.vertex``) or any other litellm id."""
-    base = _failure_classifier_cls()
+    agenttune_classifier_class = _failure_classifier_cls()
 
-    class ShipwrightFailureClassifier(base):
+    class ShipwrightFailureClassifier(agenttune_classifier_class):
         """Same system prompt, root causes and JSON reply as AgentTune's. The user message
         keeps AgentTune's fields and adds the task goal, the expected actions, the whole
         compact run and our rule hits as hints (up to 12000 characters, not 2000)."""
 
         def _build_prompt(self, failure: Failure) -> list[dict[str, str]]:
             messages = super()._build_prompt(failure)
-            ctx = failure.context or {}
-            hints = "\n".join(f"- {h['label']} at turn {h['turn']}: {h['detail']}"
-                              for h in ctx.get("rule_hits") or []) or "(none)"
-            detector = "\n".join(f"- {d['failure_type']}: {d['stage']}" + (f" ({d['error']})" if d.get("error") else "")
-                                 for d in ctx.get("detector_hits") or []) or "(none)"
-            user = (
+            context = failure.context or {}
+            rule_hits_text = "\n".join(
+                f"- {hit['label']} at turn {hit['turn']}: {hit['detail']}"
+                for hit in context.get("rule_hits") or []
+            ) or "(none)"
+            detector_hits_text = "\n".join(
+                f"- {hit['failure_type']}: {hit['stage']}" + (f" ({hit['error']})" if hit.get("error") else "")
+                for hit in context.get("detector_hits") or []
+            ) or "(none)"
+            user_message = (
                 f"Failure Type: {failure.failure_type}\n"
                 f"Failed Stage: {failure.failed_stage_name}\n"
                 f"Error Message: {failure.error_message or 'None'}\n"
                 f"Task reward: {failure.judge_score}\n\n"
-                f"User goal:\n{ctx.get('instruction') or '(unknown)'}\n\n"
-                f"Expected agent actions:\n{ctx.get('expected_actions') or '(none)'}\n\n"
-                f"Deterministic rule hits (hints, already verified):\n{hints}\n\n"
-                f"Failure detector hits:\n{detector}\n\n"
-                f"Run (turn numbers in brackets):\n{ctx.get('run') or ''}"
+                f"User goal:\n{context.get('instruction') or '(unknown)'}\n\n"
+                f"Expected agent actions:\n{context.get('expected_actions') or '(none)'}\n\n"
+                f"Deterministic rule hits (hints, already verified):\n{rule_hits_text}\n\n"
+                f"Failure detector hits:\n{detector_hits_text}\n\n"
+                f"Run (turn numbers in brackets):\n{context.get('run') or ''}"
             )
-            messages[-1] = {"role": "user", "content": user[:CLASSIFIER_CONTEXT_CHARS]}
+            messages[-1] = {"role": "user", "content": user_message[:CLASSIFIER_CONTEXT_CHARS]}
             return messages
 
         async def _classify_single(self, failure: Failure) -> ClassifiedFailure:
@@ -191,36 +195,46 @@ def make_classifier(model_name: str, api_base: str | None = None):
                 return await retry.acall_with_retry(theirs, policy=retry.LLM, what=f"llm_classifier {self.model_name}")
             import litellm
 
-            kwargs = {"model": self.model_name, "messages": self._build_prompt(failure),
-                      "response_format": {"type": "json_object"}}
-            tokens = vertex.provider()
+            request_options = {
+                "model": self.model_name,
+                "messages": self._build_prompt(failure),
+                "response_format": {"type": "json_object"},
+            }
+            token_provider = vertex.provider()
 
-            async def once() -> dict:
-                with instrument.external("llm_classifier", self.model_name, role="classifier") as call:
-                    call["retries"] = 0
+            async def classify_once() -> dict:
+                with instrument.external("llm_classifier", self.model_name, role="classifier") as call_record:
+                    call_record["retries"] = 0
                     try:
-                        response = await litellm.acompletion(**vertex.route_kwargs(kwargs, tokens))
-                    except Exception as e:  # noqa: BLE001
-                        if not vertex.is_auth_error(e):
+                        response = await litellm.acompletion(**vertex.route_kwargs(request_options, token_provider))
+                    except Exception as call_error:  # noqa: BLE001
+                        if not vertex.is_auth_error(call_error):
                             raise
-                        tokens.invalidate()
-                        call["retries"] = 1
-                        response = await litellm.acompletion(**vertex.route_kwargs(kwargs, tokens))
-                    call.update(instrument.usage_fields(response))
+                        token_provider.invalidate()
+                        call_record["retries"] = 1
+                        response = await litellm.acompletion(**vertex.route_kwargs(request_options, token_provider))
+                    call_record.update(instrument.usage_fields(response))
                 return json.loads(response.choices[0].message.content)  # a non-JSON reply is retried
 
             try:
-                parsed = await retry.acall_with_retry(once, policy=retry.LLM_USER,
-                                                      what=f"llm_classifier {self.model_name}")
-                root = parsed.get("root_cause", "")
+                parsed_reply = await retry.acall_with_retry(classify_once, policy=retry.LLM_USER,
+                                                            what=f"llm_classifier {self.model_name}")
+                root_cause = parsed_reply.get("root_cause", "")
+                if root_cause not in self.ROOT_CAUSES:
+                    root_cause = "incomplete_reasoning"
                 return ClassifiedFailure(
                     failure=failure,
-                    root_cause=root if root in self.ROOT_CAUSES else "incomplete_reasoning",
-                    confidence=float(parsed.get("confidence", 0.5)),
-                    analysis=parsed.get("analysis", "No analysis provided"))
-            except Exception as e:  # noqa: BLE001 - same fallback as AgentTune's
-                return ClassifiedFailure(failure=failure, root_cause="incomplete_reasoning", confidence=0.0,
-                                         analysis=f"Classification failed due to error: {type(e).__name__}: {e}")
+                    root_cause=root_cause,
+                    confidence=float(parsed_reply.get("confidence", 0.5)),
+                    analysis=parsed_reply.get("analysis", "No analysis provided"),
+                )
+            except Exception as classify_error:  # noqa: BLE001 - same fallback as AgentTune's
+                return ClassifiedFailure(
+                    failure=failure,
+                    root_cause="incomplete_reasoning",
+                    confidence=0.0,
+                    analysis=f"Classification failed due to error: {type(classify_error).__name__}: {classify_error}",
+                )
 
     return ShipwrightFailureClassifier(model_name=model_name, api_base=api_base)
 
@@ -288,20 +302,20 @@ def load_heal_loop():
     package imports torch. Our CPU harness installs agenttune without torch, so on an
     ImportError we load the module file directly, without the package ``__init__``.
     """
-    name = "agenttune.agentic.heal_loop"
+    module_name = "agenttune.agentic.heal_loop"
     try:
-        return importlib.import_module(name)
+        return importlib.import_module(module_name)
     except ImportError:
         pass
-    if name in sys.modules:
-        return sys.modules[name]
+    if module_name in sys.modules:
+        return sys.modules[module_name]
     import agenttune
 
-    path = Path(agenttune.__file__).parent / "agentic" / "heal_loop.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
+    module_path = Path(agenttune.__file__).parent / "agentic" / "heal_loop.py"
+    module_spec = importlib.util.spec_from_file_location(module_name, module_path)
+    module = importlib.util.module_from_spec(module_spec)
+    sys.modules[module_name] = module
+    module_spec.loader.exec_module(module)
     return module
 
 
@@ -314,9 +328,16 @@ def classify_failures(failures: list[Failure], classifier) -> list[ClassifiedFai
 
 # ---------------------------------------------------------------- whole run
 
-def classify_traces(traces: list[dict], run_dir: Path, *, instructions: dict[str, str] | None = None,
-                    chat=None, judge_all: bool = False, example_values: set[str] | None = None,
-                    classifier=None) -> list[dict]:
+def classify_traces(
+    traces: list[dict],
+    run_dir: Path,
+    *,
+    instructions: dict[str, str] | None = None,
+    chat=None,
+    judge_all: bool = False,
+    example_values: set[str] | None = None,
+    classifier=None,
+) -> list[dict]:
     """failures.jsonl rows for a run: AgentTune detector + our rules (+ judge) + AgentTune classifier.
 
     Writes ``run_dir/audit.jsonl`` (AgentTune audit records). Each row has ``detected_by``
@@ -327,68 +348,91 @@ def classify_traces(traces: list[dict], run_dir: Path, *, instructions: dict[str
     from shipwright.heal.classify import classify_run, rule_labels
 
     instructions = instructions or {}
-    audit = write_audit_log(traces, Path(run_dir) / "audit.jsonl")
-    hits_by_traj = detect(audit)
+    audit_path = write_audit_log(traces, Path(run_dir) / "audit.jsonl")
+    detector_hits_by_trajectory = detect(audit_path)
 
-    rows, to_classify = [], []
-    for i, t in enumerate(traces):
-        tid = trajectory_id(t, i)
-        det = hits_by_traj.get(tid, [])
-        instruction = instructions.get(str(t.get("task_id")))
-        row = classify_run(t, instruction, chat, judge_all, example_values)
-        if row is None and not det:
-            continue
+    rows = []
+    rows_to_classify = []  # (row, AgentTune Failure) pairs
+    for trace_index, trace in enumerate(traces):
+        trajectory = trajectory_id(trace, trace_index)
+        detector_hits = detector_hits_by_trajectory.get(trajectory, [])
+        instruction = instructions.get(str(trace.get("task_id")))
+
+        row = classify_run(trace, instruction, chat, judge_all, example_values)
+        if row is None and not detector_hits:
+            continue  # passed, and the detector found nothing
         if row is None:  # passed run, detector hit only
-            hits = rule_labels(t, example_values)
-            row = {"task_id": t.get("task_id"), "trial": t.get("trial"),
-                   "simulation_id": t.get("simulation_id"), "reward": t.get("reward"),
-                   "labels": list(dict.fromkeys(h["label"] for h in hits)), "rule_hits": hits,
-                   "first_wrong_turn": None, "fault_layer": "model", "route": "no_fix",
-                   "source": "agenttune_detector", "outcome_failed": False,
-                   "explanation": "the run passed; AgentTune's detector flagged it"}
-            row["detected_by"] = ["agenttune_detector"]
+            rule_hits = rule_labels(trace, example_values)
+            row = {
+                "task_id": trace.get("task_id"),
+                "trial": trace.get("trial"),
+                "simulation_id": trace.get("simulation_id"),
+                "reward": trace.get("reward"),
+                "labels": list(dict.fromkeys(hit["label"] for hit in rule_hits)),
+                "rule_hits": rule_hits,
+                "first_wrong_turn": None,
+                "fault_layer": "model",
+                "route": "no_fix",
+                "source": "agenttune_detector",
+                "outcome_failed": False,
+                "explanation": "the run passed; AgentTune's detector flagged it",
+                "detected_by": ["agenttune_detector"],
+            }
         else:
             row["outcome_failed"] = True
-            row["detected_by"] = ["outcome"] + (["agenttune_detector"] if det else [])
-        for f in det:
-            label = DETECTOR_LABELS.get(f.failure_type)
-            if label and row["route"] != "no_fix" and label not in row["labels"]:
-                row["labels"] = [lab for lab in row["labels"] if lab != "unclassified"] + [label]
+            row["detected_by"] = ["outcome"] + (["agenttune_detector"] if detector_hits else [])
+
+        for detector_hit in detector_hits:
+            detector_label = DETECTOR_LABELS.get(detector_hit.failure_type)
+            if detector_label and row["route"] != "no_fix" and detector_label not in row["labels"]:
+                row["labels"] = [label for label in row["labels"] if label != "unclassified"] + [detector_label]
                 if row["source"] == "unclassified":
-                    row["fault_layer"], row["source"] = RULE_LAYERS[label], "agenttune_detector"
+                    row["fault_layer"] = RULE_LAYERS[detector_label]
+                    row["source"] = "agenttune_detector"
                     row["route"] = route(row["fault_layer"])
-        row["agenttune_failures"] = [failure_summary(f) for f in det]
+        row["agenttune_failures"] = [failure_summary(hit) for hit in detector_hits]
         row["agenttune_root_cause"] = None
         rows.append(row)
-        if classifier is not None and row["outcome_failed"] and row["fault_layer"] != "environment":
-            to_classify.append((row, build_failure(t, tid, row, det, instruction)))
 
-    classified = classify_failures([f for _, f in to_classify], classifier) if to_classify else []
-    for (row, _), c in zip(to_classify, classified):
-        merge_classification(row, c)
+        if classifier is not None and row["outcome_failed"] and row["fault_layer"] != "environment":
+            failure = build_failure(trace, trajectory, row, detector_hits, instruction)
+            rows_to_classify.append((row, failure))
+
+    if rows_to_classify:
+        classified_failures = classify_failures([failure for _, failure in rows_to_classify], classifier)
+    else:
+        classified_failures = []
+    for (row, _), classified in zip(rows_to_classify, classified_failures):
+        merge_classification(row, classified)
     return rows
 
 
 # ---------------------------------------------------------------- RETRAIN TRIGGER
 
 def trigger_config(values: dict | None = None) -> TriggerConfig:
-    values = dict(values or {})
-    unknown = set(values) - set(TriggerConfig.__dataclass_fields__)
-    if unknown:
-        raise ValueError(f"unknown retrain trigger keys: {sorted(unknown)}")
-    return TriggerConfig(**values)
+    config_values = dict(values or {})
+    unknown_keys = set(config_values) - set(TriggerConfig.__dataclass_fields__)
+    if unknown_keys:
+        raise ValueError(f"unknown retrain trigger keys: {sorted(unknown_keys)}")
+    return TriggerConfig(**config_values)
 
 
 def classified_from_row(row: dict) -> ClassifiedFailure:
     """A failures.jsonl row as AgentTune's ClassifiedFailure (classification already done)."""
-    root = row.get("agenttune_root_cause") or (row.get("labels") or ["unclassified"])[0]
-    failure = Failure(trajectory_id=str(row.get("simulation_id")), failure_type="task_failed",
-                      failed_stage_name=f"turn {row.get('first_wrong_turn')}",
-                      context={"task_id": str(row.get("task_id")), "labels": row.get("labels") or []},
-                      judge_score=row.get("reward"))
-    return ClassifiedFailure(failure=failure, root_cause=root,
-                             confidence=float(row.get("agenttune_confidence") or 1.0),
-                             analysis=str(row.get("explanation") or ""))
+    root_cause = row.get("agenttune_root_cause") or (row.get("labels") or ["unclassified"])[0]
+    failure = Failure(
+        trajectory_id=str(row.get("simulation_id")),
+        failure_type="task_failed",
+        failed_stage_name=f"turn {row.get('first_wrong_turn')}",
+        context={"task_id": str(row.get("task_id")), "labels": row.get("labels") or []},
+        judge_score=row.get("reward"),
+    )
+    return ClassifiedFailure(
+        failure=failure,
+        root_cause=root_cause,
+        confidence=float(row.get("agenttune_confidence") or 1.0),
+        analysis=str(row.get("explanation") or ""),
+    )
 
 
 def correction_generator(corrections: dict[str, list[dict]]):
@@ -399,99 +443,145 @@ def correction_generator(corrections: dict[str, list[dict]]):
     nor rejected, so AgentTune's buffer counts it as attempted but not accepted, and its
     drop-rate gate blocks training on a buffer that is mostly uncorrected.
     """
-    def generate(classified: list[ClassifiedFailure]) -> list[TrainingExample]:
-        out = []
-        for c in classified:
-            task = c.failure.context.get("task_id")
-            fix = corrections.get(task) or []
-            first = next((i for i, m in enumerate(fix) if m.get("role") == "assistant"), len(fix))
-            out.append(TrainingExample(
-                trajectory_id=c.failure.trajectory_id, original_failure_type=c.failure.failure_type,
-                root_cause=c.root_cause, prompt=fix[:first], chosen=fix[first:] or None,
-                is_negative_only=not fix))
-        return out
+    def generate(classified_failures: list[ClassifiedFailure]) -> list[TrainingExample]:
+        training_examples = []
+        for classified in classified_failures:
+            task_id = classified.failure.context.get("task_id")
+            correction_messages = corrections.get(task_id) or []
+            first_assistant_index = next(
+                (index for index, message in enumerate(correction_messages) if message.get("role") == "assistant"),
+                len(correction_messages),
+            )
+            training_examples.append(TrainingExample(
+                trajectory_id=classified.failure.trajectory_id,
+                original_failure_type=classified.failure.failure_type,
+                root_cause=classified.root_cause,
+                prompt=correction_messages[:first_assistant_index],
+                chosen=correction_messages[first_assistant_index:] or None,
+                is_negative_only=not correction_messages,
+            ))
+        return training_examples
 
     return generate
 
 
-def retrain_status(rows: list[dict], corrections: dict[str, list[dict]], config: dict | None = None,
-                   baseline_rewards: list[float] | None = None, rewards: list[float] | None = None) -> dict:
+def retrain_status(
+    rows: list[dict],
+    corrections: dict[str, list[dict]],
+    config: dict | None = None,
+    baseline_rewards: list[float] | None = None,
+    rewards: list[float] | None = None,
+) -> dict:
     """Run AgentTune's SelfHealLoop over the weight-fix failures with a RetrainingTrigger.
 
     No trainer is passed (training is a separate HF Job, scripts/train_job.py), so the loop
     only fills the trigger's buffer and asks ``should_trigger()``. ``baseline_rewards``
     lock the reward-drift baseline; ``rewards`` are this run's episode rewards.
     """
-    heal = load_heal_loop()
-    cfg = trigger_config(config)
+    heal_loop_module = load_heal_loop()
+    trigger_settings = trigger_config(config)
     if baseline_rewards:
-        cfg.reward_drift_baseline_size = len(baseline_rewards)
-        cfg.reward_drift_window = max(1, len(rewards or []))
-    trigger = RetrainingTrigger(config=cfg)
-    for r in list(baseline_rewards or []) + (list(rewards or []) if baseline_rewards else []):
-        trigger.push_reward(r)
-    weight = [r for r in rows if r.get("route") == "weight_fix" and r.get("outcome_failed", True)]
-    loop = heal.SelfHealLoop(classifier=lambda fs: [classified_from_row(r) for r in weight],
-                             generator=correction_generator(corrections), retraining_trigger=trigger)
-    result = loop.run([classified_from_row(r).failure for r in weight])
-    health = trigger.buffer.health()
+        trigger_settings.reward_drift_baseline_size = len(baseline_rewards)
+        trigger_settings.reward_drift_window = max(1, len(rewards or []))
+    trigger = RetrainingTrigger(config=trigger_settings)
+
+    if baseline_rewards:
+        for reward in list(baseline_rewards) + list(rewards or []):
+            trigger.push_reward(reward)
+
+    weight_fix_rows = [row for row in rows if row.get("route") == "weight_fix" and row.get("outcome_failed", True)]
+    heal_loop = heal_loop_module.SelfHealLoop(
+        classifier=lambda failures: [classified_from_row(row) for row in weight_fix_rows],
+        generator=correction_generator(corrections),
+        retraining_trigger=trigger,
+    )
+    result = heal_loop.run([classified_from_row(row).failure for row in weight_fix_rows])
+    buffer_health = trigger.buffer.health()
     return {
         "should_train": bool(result["trigger_fired"]),
         "reason": result["trigger_reason"],
-        "num_weight_fix_failures": len(weight),
-        "num_with_correction": sum(1 for ex in result["generated"] if ex.chosen),
-        "buffer_health": {k: v for k, v in health.__dict__.items()},
-        "reward_drift": {"baseline_mean": trigger.reward_tracker._baseline_mean,
-                         "current_mean": trigger.reward_tracker.current_mean(),
-                         "drifting": trigger.reward_tracker.is_drifting(cfg.reward_drift_sigma)},
-        "trigger_config": dict(cfg.__dict__),
+        "num_weight_fix_failures": len(weight_fix_rows),
+        "num_with_correction": sum(1 for example in result["generated"] if example.chosen),
+        "buffer_health": dict(buffer_health.__dict__),
+        "reward_drift": {
+            "baseline_mean": trigger.reward_tracker._baseline_mean,
+            "current_mean": trigger.reward_tracker.current_mean(),
+            "drifting": trigger.reward_tracker.is_drifting(trigger_settings.reward_drift_sigma),
+        },
+        "trigger_config": dict(trigger_settings.__dict__),
         "agenttune_classes": ["SelfHealLoop", "RetrainingTrigger", "TrainingBuffer", "RewardDriftTracker"],
     }
 
 
 # ---------------------------------------------------------------- GATE
 
-def paired_test_set(cur_tasks: dict, cand_tasks: dict) -> tuple[list[dict], dict, dict]:
+def paired_test_set(current_tasks: dict, candidate_tasks: dict) -> tuple[list[dict], dict, dict]:
     """DeploymentGate test cases from the per-task AuditKIT results of both systems.
 
     One case per decided trial that both systems have on the same task (task id, trial
     slot). Each system's verdict for a case is PASS for its first n_success slots, else
     FAIL, so a system's score on the set is its pass rate on the paired runs.
     """
-    cases, old, new = [], {}, {}
-    for tid in sorted(set(cur_tasks) & set(cand_tasks), key=lambda x: (len(x), x)):
-        a, b = cur_tasks[tid], cand_tasks[tid]
-        for j in range(min(a.get("n_decided") or 0, b.get("n_decided") or 0)):
-            key = f"{tid}#{j}"
-            cases.append({"pipeline_id": key, "input_text": key, "expected_verdict": "PASS"})
-            old[key] = "PASS" if j < (a.get("n_success") or 0) else "FAIL"
-            new[key] = "PASS" if j < (b.get("n_success") or 0) else "FAIL"
-    return cases, old, new
+    test_cases = []
+    current_verdicts = {}
+    candidate_verdicts = {}
+    shared_task_ids = sorted(set(current_tasks) & set(candidate_tasks), key=lambda task_id: (len(task_id), task_id))
+    for task_id in shared_task_ids:
+        current_task = current_tasks[task_id]
+        candidate_task = candidate_tasks[task_id]
+        paired_trial_count = min(current_task.get("n_decided") or 0, candidate_task.get("n_decided") or 0)
+        for trial_slot in range(paired_trial_count):
+            case_key = f"{task_id}#{trial_slot}"
+            test_cases.append({"pipeline_id": case_key, "input_text": case_key, "expected_verdict": "PASS"})
+            current_passes = trial_slot < (current_task.get("n_success") or 0)
+            candidate_passes = trial_slot < (candidate_task.get("n_success") or 0)
+            current_verdicts[case_key] = "PASS" if current_passes else "FAIL"
+            candidate_verdicts[case_key] = "PASS" if candidate_passes else "FAIL"
+    return test_cases, current_verdicts, candidate_verdicts
 
 
-def agenttune_gate_check(current: dict, candidate: dict, min_test_samples: int,
-                         task_regression_tol: float) -> dict:
+def agenttune_gate_check(
+    current: dict,
+    candidate: dict,
+    min_test_samples: int,
+    task_regression_tol: float,
+) -> dict:
     """AgentTune ``DeploymentGate.evaluate_decision`` as one gate check.
 
     AgentTune approves when there is no regression, and also when the test set is empty
     (both scores fall back to 0). We add the floor: fewer than ``min_test_samples`` paired
     cases fails the check, whatever AgentTune says. Both verdicts are kept.
     """
-    cases, old, new = paired_test_set(current.get("per_task") or {}, candidate.get("per_task") or {})
-    d = DeploymentGate(seed=0).evaluate_decision(
-        cases, old.get, new.get, task_regression_tol=task_regression_tol)
-    enough = len(cases) >= min_test_samples
-    passed = d.approved and enough
-    if not enough:
-        detail = (f"AgentTune DeploymentGate: only {len(cases)} paired held-out runs, needs"
-                  f" {min_test_samples} (AgentTune alone said: {d.reason})")
+    test_cases, current_verdicts, candidate_verdicts = paired_test_set(
+        current.get("per_task") or {}, candidate.get("per_task") or {}
+    )
+    decision = DeploymentGate(seed=0).evaluate_decision(
+        test_cases, current_verdicts.get, candidate_verdicts.get, task_regression_tol=task_regression_tol
+    )
+    has_enough_cases = len(test_cases) >= min_test_samples
+    passed = decision.approved and has_enough_cases
+    if not has_enough_cases:
+        detail = (
+            f"AgentTune DeploymentGate: only {len(test_cases)} paired held-out runs, needs"
+            f" {min_test_samples} (AgentTune alone said: {decision.reason})"
+        )
     else:
-        detail = (f"AgentTune DeploymentGate {d.reason}: pass rate {d.task_new:.4f} vs {d.task_old:.4f}"
-                  f" on {len(cases)} paired runs (tol {task_regression_tol})")
-    return {"name": "agenttune_gate", "passed": passed, "detail": detail,
-            "agenttune_approved": d.approved, "agenttune_reason": d.reason,
-            "num_cases": len(cases), "min_test_samples": min_test_samples,
-            "current": d.task_old, "candidate": d.task_new, "delta": d.task_delta}
+        detail = (
+            f"AgentTune DeploymentGate {decision.reason}: pass rate {decision.task_new:.4f}"
+            f" vs {decision.task_old:.4f} on {len(test_cases)} paired runs (tol {task_regression_tol})"
+        )
+    return {
+        "name": "agenttune_gate",
+        "passed": passed,
+        "detail": detail,
+        "agenttune_approved": decision.approved,
+        "agenttune_reason": decision.reason,
+        "num_cases": len(test_cases),
+        "min_test_samples": min_test_samples,
+        "current": decision.task_old,
+        "candidate": decision.task_new,
+        "delta": decision.task_delta,
+    }
 
 
 __all__ = [

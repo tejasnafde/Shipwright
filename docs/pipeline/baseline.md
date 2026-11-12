@@ -69,12 +69,12 @@ assistant turns, and the HF router (cohere provider) drops the `tools` parameter
 with `tiny-aya` in the name. tau2 stays unchanged.
 
 - Request: `tools` and `tool_choice` are removed. The tool schemas, a short instruction
-  and one example go into the system message.
+  and one example go into the system message. The example uses `<...>` placeholders, never a real-looking id: until 2026-11-11 it used `#W1234567`, and the student copied it into 28 of 74 baseline traces (`invented_id`, 34 of 71 failures).
 - Reply format the model must use:
 
   ````
   ```json
-  {"name": "get_order_details", "arguments": {"order_id": "#W1234567"}}
+  {"name": "get_order_details", "arguments": {"order_id": "<that order id>"}}
   ```
   ````
 
@@ -95,8 +95,10 @@ Tiny Aya has an 8192-token context (prompt plus reply), and the cohere provider
 rejects longer requests. `src/shipwright/llm/context.py` keeps each prompted request inside it:
 
 - Tools are listed one per line, for example
-  `get_order_details(order_id: str e.g. '#W0000000') - Get the status and details of an order.`
-  (`?` marks an optional argument). About 2.9k chars instead of 12k of JSON schemas.
+  `get_order_details(order_id: str (real value only, from the customer or a tool)) - Get the status and details of an order.`
+  (`?` marks an optional argument). An example that looks real (3 or more digits, or an email at example.com) is
+  replaced by that hint (`prompted_tools.example_hint`): the student copied `#W0000000` into 43 of 85 failed order lookups in round 2.
+  Short examples such as `'John'` stay. The instruction also tells it how to find an order when the customer gave none. About 2.9k chars instead of 12k of JSON schemas.
 - Tool results in history are minified JSON.
 - `max_tokens` is 700. The prompt budget is 8192 - 700 - a margin (100 with the real
   tokenizer, 400 with the 3.5 chars per token estimate). The baseline downloads

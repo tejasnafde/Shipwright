@@ -31,15 +31,17 @@ TOOL = {
 
 
 def main() -> int:
-    p = argparse.ArgumentParser()
-    p.add_argument("--model", default="CohereLabs/tiny-aya-global:cohere")
-    args = p.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default="CohereLabs/tiny-aya-global:cohere")
+    options = parser.parse_args()
+
     token = load_token()
     if not token:
         print("No HF token found.", file=sys.stderr)
         return 2
-    body = {
-        "model": args.model,
+
+    request_body = {
+        "model": options.model,
         "messages": [
             {"role": "system", "content": "You are a retail support agent. Use tools to look up orders."},
             {"role": "user", "content": "What is the status of my order #W2378156?"},
@@ -49,23 +51,31 @@ def main() -> int:
         "temperature": 0,
         "max_tokens": 200,
     }
-    r = httpx.post(
+    response = httpx.post(
         f"{HF_ROUTER}/chat/completions",
         headers={"Authorization": f"Bearer {token}"},
-        json=body,
+        json=request_body,
         timeout=60,
     )
-    print("HTTP", r.status_code)
-    if r.status_code != 200:
-        print(r.text[:1000])
+    print("HTTP", response.status_code)
+    if response.status_code != 200:
+        print(response.text[:1000])
         return 2
-    data = r.json()
-    msg = data["choices"][0]["message"]
-    print(json.dumps({"message": msg, "finish_reason": data["choices"][0].get("finish_reason"),
-                      "usage": data.get("usage")}, indent=2))
-    calls = msg.get("tool_calls") or []
-    if calls:
-        print(f"NATIVE TOOL CALLING: yes ({calls[0]['function']['name']} {calls[0]['function']['arguments']})")
+
+    response_data = response.json()
+    first_choice = response_data["choices"][0]
+    message = first_choice["message"]
+    report = {
+        "message": message,
+        "finish_reason": first_choice.get("finish_reason"),
+        "usage": response_data.get("usage"),
+    }
+    print(json.dumps(report, indent=2))
+
+    tool_calls = message.get("tool_calls") or []
+    if tool_calls:
+        function_call = tool_calls[0]["function"]
+        print(f"NATIVE TOOL CALLING: yes ({function_call['name']} {function_call['arguments']})")
         return 0
     print("NATIVE TOOL CALLING: no tool_calls in the response")
     return 1

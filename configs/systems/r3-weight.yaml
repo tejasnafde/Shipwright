@@ -1,0 +1,12 @@
+# Round 3 weight-fix candidate: the round-3 LoRA adapter alone, no tool patches.
+# Alone on purpose: the base system has no patches either, so any gain is the weights.
+# Targets: every failure label that routes to weight_fix (model-layer faults, src/shipwright/heal/classify.py),
+# not a hand-picked subset: the weights are trained on teacher passes of all of them.
+name: r3-weight
+model: CohereLabs/tiny-aya-global
+adapter:
+  repo: mitushigoyal5/shipwright-lora
+  revision: round-3
+route: weight_fix
+targets: [invented_id, tool_example_copied, loop, tool_error_ignored, unknown_tool, malformed_args,
+          wrong_tool, bad_arguments, wrong_order, skipped_policy_step, invented_answer, premature_transfer]

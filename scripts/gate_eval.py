@@ -48,192 +48,310 @@ JOB_WORKDIR = Path("/tmp/shipwright")
 DRY_BFCL = ROOT / "tests" / "fixtures" / "bfcl"
 
 
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # What the gate compares.
+    parser.add_argument(
+        "--round",
+        type=int,
+        required=True,
+        help="loop round number (results go to gate/round-N/<candidate>/)",
+    )
+    parser.add_argument("--config", type=Path, default=ROOT / "configs" / "gate.yaml")
+    parser.add_argument("--current", type=Path, default=None, help="system config of the current system")
+    parser.add_argument("--candidate", type=Path, default=None, help="system config of the candidate")
+    parser.add_argument(
+        "--user-model",
+        default=None,
+        help="user simulator: HF router litellm id or vertex/<publisher>/<model> (required for"
+        " --in-job; no default). In a job, vertex/ uses $SHIPWRIGHT_VERTEX_TOKEN (set by gate_job.py)",
+    )
+    parser.add_argument("--target-label", nargs="*", default=None, help="override the candidate's targets")
+
+    # How the evaluation runs.
+    parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--runs-repo", default=RUNS_REPO)
+    parser.add_argument("--no-push", action="store_true", help="in a job: keep results local (debug)")
+    parser.add_argument("--serve-mode", choices=("lora", "merged"), default=None, help="override serve.mode")
+    parser.add_argument(
+        "--no-merge-fallback",
+        action="store_true",
+        help="do not fall back to a merged adapter if vLLM fails to start with LoRA",
+    )
+    parser.add_argument("--num-tasks", type=int, default=None, help="override heldout.num_tasks (debug only)")
+
+    # The mode: exactly one of --in-job, --local-dry-run, or --current-run with --candidate-run.
+    parser.add_argument("--in-job", action="store_true")
+    parser.add_argument("--code-bundle", default=None, help="path in --runs-repo of the code tarball (job mode)")
+    parser.add_argument("--bootstrapped", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--local-dry-run", action="store_true")
+    parser.add_argument("--current-run", type=Path, default=None)
+    parser.add_argument("--candidate-run", type=Path, default=None)
+    return parser
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--round", type=int, required=True, help="loop round number (results go to gate/round-N/<candidate>/)")
-    p.add_argument("--config", type=Path, default=ROOT / "configs" / "gate.yaml")
-    p.add_argument("--current", type=Path, default=None, help="system config of the current system")
-    p.add_argument("--candidate", type=Path, default=None, help="system config of the candidate")
-    p.add_argument("--user-model", default=None,
-                   help="user simulator: HF router litellm id or vertex/<publisher>/<model> (required for"
-                        " --in-job; no default). In a job, vertex/ uses $SHIPWRIGHT_VERTEX_TOKEN (set by gate_job.py)")
-    p.add_argument("--target-label", nargs="*", default=None, help="override the candidate's targets")
-    p.add_argument("--output-dir", type=Path, default=None)
-    p.add_argument("--runs-repo", default=RUNS_REPO)
-    p.add_argument("--no-push", action="store_true", help="in a job: keep results local (debug)")
-    p.add_argument("--serve-mode", choices=("lora", "merged"), default=None, help="override serve.mode")
-    p.add_argument("--no-merge-fallback", action="store_true",
-                   help="do not fall back to a merged adapter if vLLM fails to start with LoRA")
-    p.add_argument("--num-tasks", type=int, default=None, help="override heldout.num_tasks (debug only)")
-    # modes
-    p.add_argument("--in-job", action="store_true")
-    p.add_argument("--code-bundle", default=None, help="path in --runs-repo of the code tarball (job mode)")
-    p.add_argument("--bootstrapped", action="store_true", help=argparse.SUPPRESS)
-    p.add_argument("--local-dry-run", action="store_true")
-    p.add_argument("--current-run", type=Path, default=None)
-    p.add_argument("--candidate-run", type=Path, default=None)
-    args = p.parse_args(argv)
-    if bool(args.current_run) != bool(args.candidate_run):
-        p.error("--current-run and --candidate-run go together")
-    decide_only = bool(args.current_run)
-    if sum([args.in_job, args.local_dry_run, decide_only]) != 1:
-        p.error("choose one mode: --in-job, --local-dry-run, or --current-run/--candidate-run")
-    if not decide_only and not (args.current and args.candidate):
-        p.error("--current and --candidate system configs are required")
-    if args.in_job and not args.user_model:
-        p.error("--user-model is required (no default)")
+    parser = build_parser()
+    gate_options = parser.parse_args(argv)
+
+    decide_only = bool(gate_options.current_run)
+    if bool(gate_options.current_run) != bool(gate_options.candidate_run):
+        parser.error("--current-run and --candidate-run go together")
+
+    selected_mode_count = sum([gate_options.in_job, gate_options.local_dry_run, decide_only])
+    if selected_mode_count != 1:
+        parser.error("choose one mode: --in-job, --local-dry-run, or --current-run/--candidate-run")
+    if not decide_only and not (gate_options.current and gate_options.candidate):
+        parser.error("--current and --candidate system configs are required")
+    if gate_options.in_job and not gate_options.user_model:
+        parser.error("--user-model is required (no default)")
+
     # Config paths are repo-relative (the job re-runs this script from the unpacked bundle).
-    for key in ("config", "current", "candidate"):
-        path = getattr(args, key)
-        if path is not None and not path.is_absolute():
-            setattr(args, key, ROOT / path)
-    return args
+    for option_name in ("config", "current", "candidate"):
+        config_path = getattr(gate_options, option_name)
+        if config_path is not None and not config_path.is_absolute():
+            setattr(gate_options, option_name, ROOT / config_path)
+    return gate_options
 
 
 # ---------------------------------------------------------------- shared steps
 
-def run(cmd: list[str], log: Path | None = None, cwd: Path | None = None, env: dict | None = None) -> int:
-    print("+ " + " ".join(cmd), flush=True)
-    if log is None:
-        return subprocess.call(cmd, cwd=cwd, env=env)
-    with open(log, "w") as f:
-        return subprocess.call(cmd, cwd=cwd, env=env, stdout=f, stderr=subprocess.STDOUT)
+def run(
+    command: list[str],
+    log_path: Path | None = None,
+    working_directory: Path | None = None,
+    environment: dict | None = None,
+) -> int:
+    """Run a command and return its exit code. With log_path, stdout and stderr go to that file."""
+    print("+ " + " ".join(command), flush=True)
+    if log_path is None:
+        return subprocess.call(command, cwd=working_directory, env=environment)
+    with open(log_path, "w") as log_file:
+        return subprocess.call(
+            command,
+            cwd=working_directory,
+            env=environment,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
 
 
-def heldout_task_ids(cfg: dict, num_tasks: int | None = None) -> list[str]:
+def heldout_task_ids(gate_config: dict, num_tasks: int | None = None) -> list[str]:
     """The held-out ids of configs/splits.yaml (never the hidden ones); --num-tasks takes the first N."""
     from shipwright.heal import splits
 
-    ids = splits.heldout_ids()
-    if len(ids) != cfg["heldout"]["num_tasks"]:
-        raise SystemExit(f"configs/gate.yaml heldout.num_tasks is {cfg['heldout']['num_tasks']}, "
-                         f"configs/splits.yaml has {len(ids)} held-out ids")
-    return ids[:num_tasks] if num_tasks is not None else ids
+    task_ids = splits.heldout_ids()
+    configured_count = gate_config["heldout"]["num_tasks"]
+    if len(task_ids) != configured_count:
+        raise SystemExit(
+            f"configs/gate.yaml heldout.num_tasks is {configured_count}, "
+            f"configs/splits.yaml has {len(task_ids)} held-out ids"
+        )
+    if num_tasks is not None:
+        return task_ids[:num_tasks]
+    return task_ids
 
 
-def baseline_cmd(cfg: dict, system: dict, patch_ids: list[str], out: Path, args: argparse.Namespace) -> list[str]:
+def baseline_cmd(
+    gate_config: dict,
+    system: dict,
+    patch_ids: list[str],
+    run_directory: Path,
+    gate_options: argparse.Namespace,
+) -> list[str]:
+    """The baseline.py command line that runs one system on the held-out tasks."""
     from shipwright.heal.systems import agent_model_id, baseline_args
 
-    held = cfg["heldout"]
-    cmd = [
+    held_out = gate_config["heldout"]
+    command = [
         sys.executable, str(ROOT / "scripts" / "baseline.py"),
-        "--domain", held["domain"], "--task-split", held["task_split"],
-        "--task-ids", *heldout_task_ids(cfg, args.num_tasks),
-        "--trials", str(cfg["k"]), "--seed", str(cfg["seed"]),
+        "--domain", held_out["domain"],
+        "--task-split", held_out["task_split"],
+        "--task-ids", *heldout_task_ids(gate_config, gate_options.num_tasks),
+        "--trials", str(gate_config["k"]),
+        "--seed", str(gate_config["seed"]),
         "--agent-model", agent_model_id(system),
-        "--agent-temperature", str(cfg.get("agent_temperature", 0.0)),
-        "--max-steps", str(cfg.get("max_steps", 100)),
-        "--max-concurrency", str(cfg.get("max_concurrency", 4)),
-        "--output-dir", str(out),
+        "--agent-temperature", str(gate_config.get("agent_temperature", 0.0)),
+        "--max-steps", str(gate_config.get("max_steps", 100)),
+        "--max-concurrency", str(gate_config.get("max_concurrency", 4)),
+        "--output-dir", str(run_directory),
         *baseline_args(system, patch_ids, ROOT),
     ]
-    if args.local_dry_run:
-        cmd.append("--dry-run")
+    if gate_options.local_dry_run:
+        command.append("--dry-run")
     else:
-        cmd += ["--agent-api-base", API_BASE, "--user-model", args.user_model]
-    return cmd
+        command += ["--agent-api-base", API_BASE, "--user-model", gate_options.user_model]
+    return command
 
 
-def classify_cmd(cfg: dict, run_dir: Path) -> list[str]:
-    model = (cfg.get("classify") or {}).get("classifier_model")
-    cmd = [sys.executable, str(ROOT / "scripts" / "classify.py"), str(run_dir)]
-    return cmd + (["--classifier-model", model] if model else ["--no-llm"])
+def classify_cmd(gate_config: dict, run_directory: Path) -> list[str]:
+    """The classify.py command line: LLM classifier if the config names one, else rules only."""
+    classifier_model = (gate_config.get("classify") or {}).get("classifier_model")
+    command = [sys.executable, str(ROOT / "scripts" / "classify.py"), str(run_directory)]
+    if classifier_model:
+        return command + ["--classifier-model", classifier_model]
+    return command + ["--no-llm"]
 
 
-def run_bfcl(cfg: dict, system: dict, out: Path, args: argparse.Namespace) -> dict | None:
+def run_bfcl(
+    gate_config: dict,
+    system: dict,
+    run_directory: Path,
+    gate_options: argparse.Namespace,
+) -> dict | None:
+    """BFCL tool-calling score of one system (None when BFCL is off). Writes bfcl.json."""
     from shipwright.heal import bfcl_eval
     from shipwright.heal.systems import served_name
 
-    bcfg = cfg.get("bfcl") or {}
-    if not bcfg.get("enabled"):
+    bfcl_config = gate_config.get("bfcl") or {}
+    if not bfcl_config.get("enabled"):
         return None
-    if args.local_dry_run:
-        root, revision = DRY_BFCL, "fixture"
+
+    if gate_options.local_dry_run:
+        samples_root = DRY_BFCL
+        revision = "fixture"
 
         def chat(messages: list[dict]) -> str:
             return "Sorry, I cannot help with that."  # fake model: never calls a tool
     else:
-        root, revision = bfcl_eval.download(bcfg["revision"], bcfg["categories"], os.environ.get("HF_TOKEN")), bcfg["revision"]
+        revision = bfcl_config["revision"]
+        samples_root = bfcl_eval.download(revision, bfcl_config["categories"], os.environ.get("HF_TOKEN"))
         chat = bfcl_eval.make_chat(API_BASE, served_name(system))
-    samples = bfcl_eval.load_samples(root, bcfg["categories"], revision, bcfg.get("limit_per_category"))
+
+    samples = bfcl_eval.load_samples(
+        samples_root, bfcl_config["categories"], revision, bfcl_config.get("limit_per_category")
+    )
     result = bfcl_eval.evaluate(samples, chat)
     result["revision"] = revision
-    (out / "bfcl.json").write_text(json.dumps(result, indent=1))
+    (run_directory / "bfcl.json").write_text(json.dumps(result, indent=1))
     print(f"BFCL {system['name']}: {result['accuracy_points']} points on {result['num_samples']} samples")
-    return {k: v for k, v in result.items() if k != "rows"}
+    return {key: value for key, value in result.items() if key != "rows"}
 
 
-def metrics_for(run_dir: Path, cfg: dict, name: str, bfcl: dict | None) -> dict | None:
+def metrics_for(run_directory: Path, gate_config: dict, system_name: str, bfcl_result: dict | None) -> dict | None:
     from shipwright.heal.eval_metrics import compute_metrics, load_run
 
     try:
-        m = compute_metrics(load_run(run_dir), cfg["k"], system=name)
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
-        print(f"metrics for {name} failed: {exc}", file=sys.stderr)
+        metrics = compute_metrics(load_run(run_directory), gate_config["k"], system=system_name)
+    except (FileNotFoundError, json.JSONDecodeError) as metrics_error:
+        print(f"metrics for {system_name} failed: {metrics_error}", file=sys.stderr)
         return None
-    if bfcl is None and (run_dir / "bfcl.json").exists():
-        bfcl = {k: v for k, v in json.loads((run_dir / "bfcl.json").read_text()).items() if k != "rows"}
-    m["bfcl"] = bfcl
-    return m
+
+    bfcl_path = run_directory / "bfcl.json"
+    if bfcl_result is None and bfcl_path.exists():
+        saved_bfcl = json.loads(bfcl_path.read_text())
+        bfcl_result = {key: value for key, value in saved_bfcl.items() if key != "rows"}
+    metrics["bfcl"] = bfcl_result
+    return metrics
 
 
-def missing_metrics(name: str, reason: str) -> dict:
+def missing_metrics(system_name: str, reason: str) -> dict:
     """Metrics for a system whose run failed: every check on it fails, so the gate rejects."""
-    return {"system": name, "error": reason, "num_valid_runs": 0, "num_tasks_complete": 0,
-            "pass_1": None, "pass_k": None, "task_ids": [], "failed_run_labels": []}
+    return {
+        "system": system_name,
+        "error": reason,
+        "num_valid_runs": 0,
+        "num_tasks_complete": 0,
+        "pass_1": None,
+        "pass_k": None,
+        "task_ids": [],
+        "failed_run_labels": [],
+    }
 
 
-def decide_and_write(out: Path, cfg: dict, round_: int, metrics: dict[str, dict], systems: dict,
-                     targets: list[str]) -> dict:
+def decide_and_write(
+    output_directory: Path,
+    gate_config: dict,
+    round_number: int,
+    metrics_by_role: dict[str, dict],
+    systems: dict,
+    targets: list[str],
+) -> dict:
+    """Run the gate on the two systems' metrics, write the decision files, print the checks."""
     from shipwright.heal.gate import decide, metrics_row
 
-    for who in ("current", "candidate"):
-        (out / f"metrics_{who}.json").write_text(json.dumps(metrics[who], indent=1, default=str))
-    decision = decide(metrics["current"], metrics["candidate"], cfg, targets)
-    decision["round"] = round_
+    for role in ("current", "candidate"):
+        metrics_path = output_directory / f"metrics_{role}.json"
+        metrics_path.write_text(json.dumps(metrics_by_role[role], indent=1, default=str))
+
+    decision = decide(metrics_by_role["current"], metrics_by_role["candidate"], gate_config, targets)
+    decision["round"] = round_number
     decision["systems"] = systems
-    (out / "gate_decision.json").write_text(json.dumps(decision, indent=1, default=str))
-    row = metrics_row(round_, decision, systems)
-    with open(out / "metrics.jsonl", "a") as f:
-        f.write(json.dumps(row, default=str) + "\n")
-    print(f"\nGATE round {round_}: {decision['decision'].upper()}")
-    for c in decision["checks"]:
-        print(f"  [{'ok' if c['passed'] else 'FAIL'}] {c['name']}: {c['detail']}")
-    for w in decision["warnings"]:
-        print(f"  warning: {w}")
+    (output_directory / "gate_decision.json").write_text(json.dumps(decision, indent=1, default=str))
+
+    metrics_json_row = metrics_row(round_number, decision, systems)
+    with open(output_directory / "metrics.jsonl", "a") as metrics_file:
+        metrics_file.write(json.dumps(metrics_json_row, default=str) + "\n")
+
+    print(f"\nGATE round {round_number}: {decision['decision'].upper()}")
+    for check in decision["checks"]:
+        check_label = "ok" if check["passed"] else "FAIL"
+        print(f"  [{check_label}] {check['name']}: {check['detail']}")
+    for warning in decision["warnings"]:
+        print(f"  warning: {warning}")
+    print_slices(metrics_by_role)
     return decision
 
 
-def load_inputs(args: argparse.Namespace) -> tuple[dict, dict, dict, dict]:
-    """Gate config, the two systems and their resolved patch ids."""
+def print_slices(metrics_by_role: dict[str, dict]) -> None:
+    """Pass rates per task slice (heal/slices.py): context for the decision, never part of it."""
+    for role in ("current", "candidate"):
+        for slice_name, slice_result in (metrics_by_role[role].get("slices") or {}).items():
+            pass_1 = slice_result["pass_1"]
+            pass_1_text = "n/a" if pass_1 is None else f"{pass_1:.3f}"
+            print(f"  slice {slice_name:10} {role:9} tasks={slice_result['num_tasks']:2} pass^1={pass_1_text}")
+
+
+def load_inputs(gate_options: argparse.Namespace) -> tuple[dict, dict, dict, dict]:
+    """Gate config, the two systems, their resolved patch ids, and the systems as recorded."""
     from shipwright.heal.gate import load_config
     from shipwright.heal.systems import load_system, resolve_patch_ids
     from shipwright.heal.tool_fix import load_ledger
 
-    cfg = load_config(args.config)
-    if args.serve_mode:
-        cfg.setdefault("serve", {})["mode"] = args.serve_mode
-    systems = {"current": load_system(args.current, ROOT), "candidate": load_system(args.candidate, ROOT)}
+    gate_config = load_config(gate_options.config)
+    if gate_options.serve_mode:
+        gate_config.setdefault("serve", {})["mode"] = gate_options.serve_mode
+
+    systems = {
+        "current": load_system(gate_options.current, ROOT),
+        "candidate": load_system(gate_options.candidate, ROOT),
+    }
     if systems["current"]["name"] == systems["candidate"]["name"]:
         raise SystemExit("current and candidate need different names")
-    patch_ids = {}
-    for who, s in systems.items():
-        rows = load_ledger(ROOT / s["tool_patches"]["ledger"]) if s["tool_patches"] else []
-        patch_ids[who] = resolve_patch_ids(s, rows)
-    return cfg, systems, patch_ids, {who: {**s, "resolved_patch_ids": patch_ids[who]} for who, s in systems.items()}
+
+    patch_ids_by_role = {}
+    recorded_systems = {}
+    for role, system in systems.items():
+        if system["tool_patches"]:
+            ledger_rows = load_ledger(ROOT / system["tool_patches"]["ledger"])
+        else:
+            ledger_rows = []
+        patch_ids_by_role[role] = resolve_patch_ids(system, ledger_rows)
+        recorded_systems[role] = {**system, "resolved_patch_ids": patch_ids_by_role[role]}
+    return gate_config, systems, patch_ids_by_role, recorded_systems
 
 
-def default_out(round_: int, tag: str) -> Path:
-    return ROOT / "runs" / f"gate-round-{round_}-{tag}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+def default_out(round_number: int, tag: str) -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return ROOT / "runs" / f"gate-round-{round_number}-{tag}-{timestamp}"
 
 
 # ---------------------------------------------------------------- vLLM (job mode)
 
-def download_adapter(adapter: dict, dest: Path) -> Path:
+def download_adapter(adapter: dict, destination: Path) -> Path:
     from huggingface_hub import snapshot_download
 
-    return Path(snapshot_download(adapter["repo"], revision=adapter["revision"], local_dir=str(dest),
-                                  token=os.environ.get("HF_TOKEN")))
+    downloaded_path = snapshot_download(
+        adapter["repo"],
+        revision=adapter["revision"],
+        local_dir=str(destination),
+        token=os.environ.get("HF_TOKEN"),
+    )
+    return Path(downloaded_path)
 
 
 MERGE_CODE = """
@@ -249,167 +367,253 @@ print("merged", out)
 """
 
 
-def merge_adapter(base: str, adapter_dir: Path, out: Path, vllm_spec: str, log: Path) -> Path:
+def merge_adapter(base: str, adapter_directory: Path, output_directory: Path, vllm_spec: str, log_path: Path) -> Path:
     """peft merge_and_unload in vLLM's own env (same torch and transformers)."""
-    cmd = ["uv", "run", "--no-project", "--python", "3.12", "--with", vllm_spec, "--with", "peft",
-           "python", "-c", MERGE_CODE, base, str(adapter_dir), str(out)]
-    if run(cmd, log=log) != 0:
-        raise RuntimeError(f"adapter merge failed, see {log}")
-    return out
+    command = [
+        "uv", "run", "--no-project", "--python", "3.12", "--with", vllm_spec, "--with", "peft",
+        "python", "-c", MERGE_CODE, base, str(adapter_directory), str(output_directory),
+    ]
+    if run(command, log_path=log_path) != 0:
+        raise RuntimeError(f"adapter merge failed, see {log_path}")
+    return output_directory
 
 
-def vllm_cmd(server: dict, scfg: dict, lora_paths: dict[str, Path], model_path: str) -> list[str]:
-    cmd = ["uv", "run", "--no-project", "--python", "3.12", "--with", scfg["vllm"],
-           "vllm", "serve", model_path, "--served-model-name", server["served_base"],
-           "--port", str(VLLM_PORT), "--dtype", "bfloat16",
-           "--max-model-len", str(scfg.get("max_model_len", 8192)),
-           "--gpu-memory-utilization", str(scfg.get("gpu_memory_utilization", 0.85))]
+def vllm_cmd(server: dict, serve_config: dict, lora_paths: dict[str, Path], model_path: str) -> list[str]:
+    command = [
+        "uv", "run", "--no-project", "--python", "3.12", "--with", serve_config["vllm"],
+        "vllm", "serve", model_path,
+        "--served-model-name", server["served_base"],
+        "--port", str(VLLM_PORT),
+        "--dtype", "bfloat16",
+        "--max-model-len", str(serve_config.get("max_model_len", 8192)),
+        "--gpu-memory-utilization", str(serve_config.get("gpu_memory_utilization", 0.85)),
+    ]
     if lora_paths:
-        cmd += ["--enable-lora", "--max-lora-rank", str(scfg.get("max_lora_rank", 16)),
-                "--max-loras", str(len(lora_paths)), "--lora-modules",
-                *[f"{name}={path}" for name, path in lora_paths.items()]]
-    return cmd
+        lora_modules = [f"{name}={path}" for name, path in lora_paths.items()]
+        command += [
+            "--enable-lora",
+            "--max-lora-rank", str(serve_config.get("max_lora_rank", 16)),
+            "--max-loras", str(len(lora_paths)),
+            "--lora-modules", *lora_modules,
+        ]
+    return command
 
 
 class VLLMServer:
-    def __init__(self, cmd: list[str], expect: list[str], log: Path, timeout_s: int):
-        self.cmd, self.expect, self.log, self.timeout_s = cmd, expect, log, timeout_s
-        self.proc: subprocess.Popen | None = None
+    """A vLLM server process, started on enter and stopped on exit."""
+
+    def __init__(self, command: list[str], expected_model_names: list[str], log_path: Path, timeout_seconds: int):
+        self.command = command
+        self.expected_model_names = expected_model_names
+        self.log_path = log_path
+        self.timeout_seconds = timeout_seconds
+        self.process: subprocess.Popen | None = None
 
     def __enter__(self) -> "VLLMServer":
         import httpx
 
-        print("+ " + " ".join(self.cmd), flush=True)
-        self._f = open(self.log, "w")
-        self.proc = subprocess.Popen(self.cmd, stdout=self._f, stderr=subprocess.STDOUT)
-        deadline = time.time() + self.timeout_s
+        print("+ " + " ".join(self.command), flush=True)
+        self._log_file = open(self.log_path, "w")
+        self.process = subprocess.Popen(self.command, stdout=self._log_file, stderr=subprocess.STDOUT)
+
+        deadline = time.time() + self.timeout_seconds
         while time.time() < deadline:
-            if self.proc.poll() is not None:
+            if self.process.poll() is not None:
                 self.close()
-                raise RuntimeError(f"vLLM exited with {self.proc.returncode}, see {self.log}")
+                raise RuntimeError(f"vLLM exited with {self.process.returncode}, see {self.log_path}")
             try:
-                r = httpx.get(f"{API_BASE}/models", timeout=5)
-                names = {m["id"] for m in r.json().get("data", [])}
-                if r.status_code == 200 and set(self.expect) <= names:
-                    print(f"vLLM ready: {sorted(names)}", flush=True)
+                response = httpx.get(f"{API_BASE}/models", timeout=5)
+                served_names = {model["id"] for model in response.json().get("data", [])}
+                if response.status_code == 200 and set(self.expected_model_names) <= served_names:
+                    print(f"vLLM ready: {sorted(served_names)}", flush=True)
                     return self
             except Exception:  # noqa: BLE001 - not up yet
                 pass
             time.sleep(10)
+
         self.close()
-        raise RuntimeError(f"vLLM not ready after {self.timeout_s}s, see {self.log}")
+        raise RuntimeError(f"vLLM not ready after {self.timeout_seconds}s, see {self.log_path}")
 
     def close(self) -> None:
-        if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
             try:
-                self.proc.wait(timeout=60)
+                self.process.wait(timeout=60)
             except subprocess.TimeoutExpired:
-                self.proc.kill()
-        self._f.close()
+                self.process.kill()
+        self._log_file.close()
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, *exception_info) -> None:
         self.close()
 
 
-def serve_and_run(cfg: dict, systems: dict, patch_ids: dict, out: Path, args: argparse.Namespace) -> dict:
+def run_server_plan(
+    plan: list[dict],
+    gate_config: dict,
+    system_by_name: dict[str, tuple[str, dict]],
+    patch_ids_by_role: dict,
+    output_directory: Path,
+    gate_options: argparse.Namespace,
+    status_by_system: dict[str, dict],
+) -> None:
+    """For each vLLM server of the plan: start it, then run tau2 and BFCL for its systems."""
+    from shipwright.heal.systems import served_name
+
+    serve_config = gate_config.get("serve") or {}
+    adapters_directory = Path("/tmp/adapters")
+
+    for server_index, server in enumerate(plan):
+        lora_paths = {
+            lora_name: download_adapter(adapter, adapters_directory / lora_name)
+            for lora_name, adapter in server["loras"].items()
+        }
+        model_path = server["base"]
+        if server["merged"]:
+            adapter_directory = download_adapter(server["merged"], adapters_directory / server["served_base"])
+            merged_directory = Path(f"/tmp/merged/{server['served_base']}")
+            model_path = str(merge_adapter(
+                server["base"], adapter_directory, merged_directory,
+                serve_config["vllm"], output_directory / f"merge-{server_index}.log",
+            ))
+
+        expected_model_names = [server["served_base"], *lora_paths]
+        startup_timeout = int(serve_config.get("startup_timeout_s", 1200))
+        server_command = vllm_cmd(server, serve_config, lora_paths, model_path)
+        with VLLMServer(server_command, expected_model_names, output_directory / f"vllm-{server_index}.log",
+                        startup_timeout):
+            for system_name in server["systems"]:
+                role, system = system_by_name[system_name]
+                run_directory = output_directory / system_name
+                run_directory.mkdir(parents=True, exist_ok=True)
+                baseline_exit_code = run(
+                    baseline_cmd(gate_config, system, patch_ids_by_role[role], run_directory, gate_options),
+                    log_path=run_directory / "baseline.log",
+                )
+                bfcl_result = None
+                try:
+                    bfcl_result = run_bfcl(gate_config, system, run_directory, gate_options)
+                except Exception as bfcl_error:  # noqa: BLE001 - recorded; the gate rejects without BFCL
+                    print(f"BFCL failed for {system_name}: {bfcl_error}", file=sys.stderr)
+                status_by_system[system_name] = {
+                    "baseline_exit": baseline_exit_code,
+                    "bfcl": bfcl_result,
+                    "served_as": served_name(system),
+                }
+
+
+def serve_and_run(
+    gate_config: dict,
+    systems: dict,
+    patch_ids_by_role: dict,
+    output_directory: Path,
+    gate_options: argparse.Namespace,
+) -> dict:
     """Start vLLM per the serve plan, run tau2 and BFCL for each system. Returns status per system."""
-    from shipwright.heal.systems import serve_plan, served_name
+    from shipwright.heal.systems import serve_plan
 
-    scfg = cfg.get("serve") or {}
-    mode = scfg.get("mode", "lora")
-    by_name = {s["name"]: (who, s) for who, s in systems.items()}
-    status: dict[str, dict] = {}
-    adapters_dir = Path("/tmp/adapters")
+    serve_mode = (gate_config.get("serve") or {}).get("mode", "lora")
+    system_by_name = {system["name"]: (role, system) for role, system in systems.items()}
+    all_systems = list(systems.values())
+    status_by_system: dict[str, dict] = {}
 
-    def run_plan(plan: list[dict]) -> None:
-        for i, server in enumerate(plan):
-            lora_paths = {n: download_adapter(a, adapters_dir / n) for n, a in server["loras"].items()}
-            model_path = server["base"]
-            if server["merged"]:
-                adapter_dir = download_adapter(server["merged"], adapters_dir / server["served_base"])
-                model_path = str(merge_adapter(server["base"], adapter_dir, Path(f"/tmp/merged/{server['served_base']}"),
-                                               scfg["vllm"], out / f"merge-{i}.log"))
-            expect = [server["served_base"], *lora_paths]
-            with VLLMServer(vllm_cmd(server, scfg, lora_paths, model_path), expect,
-                            out / f"vllm-{i}.log", int(scfg.get("startup_timeout_s", 1200))):
-                for name in server["systems"]:
-                    who, system = by_name[name]
-                    run_dir = out / name
-                    run_dir.mkdir(parents=True, exist_ok=True)
-                    code = run(baseline_cmd(cfg, system, patch_ids[who], run_dir, args), log=run_dir / "baseline.log")
-                    bfcl = None
-                    try:
-                        bfcl = run_bfcl(cfg, system, run_dir, args)
-                    except Exception as exc:  # noqa: BLE001 - recorded; the gate rejects without BFCL
-                        print(f"BFCL failed for {name}: {exc}", file=sys.stderr)
-                    status[name] = {"baseline_exit": code, "bfcl": bfcl, "served_as": served_name(system)}
+    def run_plan(mode: str) -> None:
+        run_server_plan(
+            serve_plan(all_systems, mode), gate_config, system_by_name, patch_ids_by_role,
+            output_directory, gate_options, status_by_system,
+        )
 
     try:
-        run_plan(serve_plan(list(systems.values()), mode))
-        status["_serve_mode"] = {"mode": mode}
-    except RuntimeError as exc:
-        has_lora = any(s.get("adapter") for s in systems.values())
-        if mode != "lora" or not has_lora or args.no_merge_fallback or status:
+        run_plan(serve_mode)
+        status_by_system["_serve_mode"] = {"mode": serve_mode}
+    except RuntimeError as serve_error:
+        any_system_has_adapter = any(system.get("adapter") for system in all_systems)
+        cannot_fall_back = (
+            serve_mode != "lora"
+            or not any_system_has_adapter
+            or gate_options.no_merge_fallback
+            or bool(status_by_system)  # some system already ran: do not run it twice
+        )
+        if cannot_fall_back:
             raise
-        print(f"vLLM with LoRA failed ({exc}); falling back to merged adapters", file=sys.stderr)
-        run_plan(serve_plan(list(systems.values()), "merged"))
-        status["_serve_mode"] = {"mode": "merged", "lora_error": str(exc)[:500]}
-    return status
+        print(f"vLLM with LoRA failed ({serve_error}); falling back to merged adapters", file=sys.stderr)
+        run_plan("merged")
+        status_by_system["_serve_mode"] = {"mode": "merged", "lora_error": str(serve_error)[:500]}
+    return status_by_system
 
 
 # ---------------------------------------------------------------- push
 
-def push(out: Path, args: argparse.Namespace, row_file: Path, candidate: str) -> None:
+def push(output_directory: Path, gate_options: argparse.Namespace, row_file: Path, candidate_name: str) -> None:
     from huggingface_hub import HfApi, hf_hub_download
     from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
-
-    token = os.environ.get("HF_TOKEN")
     from shipwright.observability import instrument, retry
 
-    api = HfApi(token=token)
-    retry.call_with_retry(api.create_repo, args.runs_repo, repo_type="dataset", exist_ok=True, private=False,
-                          what="hf_hub create_repo")
-    prefix = f"gate/round-{args.round}/{candidate}"
+    token = os.environ.get("HF_TOKEN")
+    hf_api = HfApi(token=token)
+    retry.call_with_retry(hf_api.create_repo, gate_options.runs_repo, repo_type="dataset", exist_ok=True,
+                          private=False, what="hf_hub create_repo")
 
-    with instrument.external("hf_hub_upload", f"datasets/{args.runs_repo}/{prefix}"):
-        retry.call_with_retry(api.upload_folder, folder_path=str(out), repo_id=args.runs_repo, repo_type="dataset",
-                              path_in_repo=prefix, commit_message=f"gate round {args.round}: results",
-                              ignore_patterns=["**/tau2/**"],  # tau2's own results.json duplicates traces.jsonl
-                              what="hf_hub_upload")
+    path_in_repo = f"gate/round-{gate_options.round}/{candidate_name}"
+    with instrument.external("hf_hub_upload", f"datasets/{gate_options.runs_repo}/{path_in_repo}"):
+        retry.call_with_retry(
+            hf_api.upload_folder,
+            folder_path=str(output_directory),
+            repo_id=gate_options.runs_repo,
+            repo_type="dataset",
+            path_in_repo=path_in_repo,
+            commit_message=f"gate round {gate_options.round}: results",
+            ignore_patterns=["**/tau2/**"],  # tau2's own results.json duplicates traces.jsonl
+            what="hf_hub_upload",
+        )
+
     # Append this run's row to the dataset-level metrics.jsonl.
     try:
-        old = Path(retry.call_with_retry(hf_hub_download, args.runs_repo, "metrics.jsonl", repo_type="dataset",
-                                         token=token, what="hf_hub_download")).read_text()
+        existing_metrics_path = retry.call_with_retry(
+            hf_hub_download, gate_options.runs_repo, "metrics.jsonl", repo_type="dataset", token=token,
+            what="hf_hub_download",
+        )
+        existing_metrics = Path(existing_metrics_path).read_text()
     except (EntryNotFoundError, RepositoryNotFoundError):
-        old = ""
-    merged = out / "_metrics_all.jsonl"
-    merged.write_text(old + ("" if not old or old.endswith("\n") else "\n") + row_file.read_text())
-    with instrument.external("hf_hub_upload", f"datasets/{args.runs_repo}/metrics.jsonl"):
-        retry.call_with_retry(api.upload_file, path_or_fileobj=str(merged), path_in_repo="metrics.jsonl",
-                              repo_id=args.runs_repo, repo_type="dataset",
-                              commit_message=f"metrics.jsonl: gate round {args.round}", what="hf_hub_upload")
-    print(f"pushed to https://huggingface.co/datasets/{args.runs_repo}/tree/main/{prefix}")
+        existing_metrics = ""
+    separator = ""
+    if existing_metrics and not existing_metrics.endswith("\n"):
+        separator = "\n"
+    combined_metrics_path = output_directory / "_metrics_all.jsonl"
+    combined_metrics_path.write_text(existing_metrics + separator + row_file.read_text())
+    with instrument.external("hf_hub_upload", f"datasets/{gate_options.runs_repo}/metrics.jsonl"):
+        retry.call_with_retry(
+            hf_api.upload_file,
+            path_or_fileobj=str(combined_metrics_path),
+            path_in_repo="metrics.jsonl",
+            repo_id=gate_options.runs_repo,
+            repo_type="dataset",
+            commit_message=f"metrics.jsonl: gate round {gate_options.round}",
+            what="hf_hub_upload",
+        )
+    print(f"pushed to https://huggingface.co/datasets/{gate_options.runs_repo}/tree/main/{path_in_repo}")
 
 
 # ---------------------------------------------------------------- modes
 
-def bootstrap(argv: list[str], args: argparse.Namespace) -> None:
+def bootstrap(argv: list[str], gate_options: argparse.Namespace) -> None:
     """Job mode, first pass: fetch the code bundle, install the harness, re-run in its venv."""
     from huggingface_hub import hf_hub_download
 
-    if not args.code_bundle:
+    if not gate_options.code_bundle:
         raise SystemExit("--code-bundle is required in job mode")
-    tar = hf_hub_download(args.runs_repo, args.code_bundle, repo_type="dataset", token=os.environ.get("HF_TOKEN"))
+    bundle_path = hf_hub_download(
+        gate_options.runs_repo, gate_options.code_bundle,
+        repo_type="dataset", token=os.environ.get("HF_TOKEN"),
+    )
     if JOB_WORKDIR.exists():
         shutil.rmtree(JOB_WORKDIR)
     JOB_WORKDIR.mkdir(parents=True)
-    with tarfile.open(tar) as t:
-        t.extractall(JOB_WORKDIR, filter="data")
+    with tarfile.open(bundle_path) as bundle:
+        bundle.extractall(JOB_WORKDIR, filter="data")
     if run(["bash", str(JOB_WORKDIR / "scripts" / "setup_tau2.sh")]) != 0:
         raise SystemExit("harness setup failed")
-    python = str(JOB_WORKDIR / ".venv" / "bin" / "python")
-    os.execv(python, [python, str(JOB_WORKDIR / "scripts" / "gate_eval.py"), *argv, "--bootstrapped"])
+    python_path = str(JOB_WORKDIR / ".venv" / "bin" / "python")
+    os.execv(python_path, [python_path, str(JOB_WORKDIR / "scripts" / "gate_eval.py"), *argv, "--bootstrapped"])
 
 
 def _expected_reject() -> None:
@@ -420,86 +624,147 @@ def _expected_reject() -> None:
     log.expected_exit(1, "the gate rejected the candidate")
 
 
-def _attach(out: Path) -> None:
+def _attach(output_directory: Path) -> None:
     """log.jsonl, errors.json and repro.json in the gate output dir (when run through log.run_script)."""
     try:
         from shipwright.observability import log
     except ImportError:
         return
-    log.attach_run_dir(out)
+    log.attach_run_dir(output_directory)
+
+
+def decide_from_existing_runs(gate_options: argparse.Namespace) -> int:
+    """--current-run and --candidate-run: gate two finished run dirs. Exit 0 = promote, 1 = reject."""
+    from shipwright.heal.gate import load_config
+
+    gate_config = load_config(gate_options.config)
+    if gate_options.output_dir:
+        output_directory = gate_options.output_dir.resolve()
+    else:
+        output_directory = default_out(gate_options.round, "decide").resolve()
+    output_directory.mkdir(parents=True, exist_ok=True)
+    _attach(output_directory)
+
+    run_directories = {"current": gate_options.current_run, "candidate": gate_options.candidate_run}
+    metrics_by_role = {}
+    for role, run_directory in run_directories.items():
+        metrics = metrics_for(run_directory, gate_config, run_directory.name, None)
+        metrics_by_role[role] = metrics or missing_metrics(run_directory.name, "no metrics")
+
+    targets = gate_options.target_label or []
+    recorded_systems = {role: {"run_dir": str(run_directory)} for role, run_directory in run_directories.items()}
+    decision = decide_and_write(
+        output_directory, gate_config, gate_options.round, metrics_by_role, recorded_systems, targets
+    )
+    print(f"\nWrote {output_directory}")
+    if decision["decision"] == "promote":
+        return 0
+    _expected_reject()
+    return 1
+
+
+def collect_metrics(
+    output_directory: Path,
+    gate_config: dict,
+    systems: dict,
+    status_by_system: dict,
+) -> dict[str, dict]:
+    """Classify each system's run and compute its metrics; a failed system gets missing_metrics."""
+    metrics_by_role = {}
+    for role, system in systems.items():
+        system_name = system["name"]
+        run_directory = output_directory / system_name
+        system_status = status_by_system.get(system_name) or {}
+        baseline_exit_code = system_status.get("baseline_exit")
+
+        if baseline_exit_code != 0 or not (run_directory / "traces.jsonl").exists():
+            metrics_by_role[role] = missing_metrics(system_name, f"tau2 run failed (exit {baseline_exit_code})")
+            continue
+        classify_exit_code = run(classify_cmd(gate_config, run_directory), log_path=run_directory / "classify.log")
+        if classify_exit_code != 0:
+            metrics_by_role[role] = missing_metrics(system_name, "classify failed")
+            continue
+        metrics = metrics_for(run_directory, gate_config, system_name, system_status.get("bfcl"))
+        metrics_by_role[role] = metrics or missing_metrics(system_name, "no metrics")
+    return metrics_by_role
+
+
+def evaluate_systems(gate_options: argparse.Namespace) -> int:
+    """--in-job and --local-dry-run: run both systems on the held-out tasks, then gate them."""
+    gate_config, systems, patch_ids_by_role, recorded_systems = load_inputs(gate_options)
+    if gate_options.target_label is not None:
+        targets = gate_options.target_label
+    else:
+        targets = systems["candidate"]["targets"]
+
+    mode_tag = "dry" if gate_options.local_dry_run else "job"
+    if gate_options.output_dir:
+        output_directory = gate_options.output_dir.resolve()
+    elif gate_options.in_job:
+        output_directory = Path("/tmp/gate-out").resolve()
+    else:
+        output_directory = default_out(gate_options.round, mode_tag).resolve()
+    output_directory.mkdir(parents=True, exist_ok=True)
+    _attach(output_directory)
+
+    gate_inputs = {
+        "round": gate_options.round,
+        "config": gate_config,
+        "systems": recorded_systems,
+        "targets": targets,
+        "user_model": gate_options.user_model,
+        "mode": mode_tag,
+    }
+    (output_directory / "gate_inputs.json").write_text(json.dumps(gate_inputs, indent=1))
+
+    if gate_options.local_dry_run:
+        status_by_system = {}
+        for role, system in systems.items():
+            run_directory = output_directory / system["name"]
+            run_directory.mkdir(parents=True, exist_ok=True)
+            baseline_exit_code = run(
+                baseline_cmd(gate_config, system, patch_ids_by_role[role], run_directory, gate_options),
+                log_path=run_directory / "baseline.log",
+            )
+            status_by_system[system["name"]] = {
+                "baseline_exit": baseline_exit_code,
+                "bfcl": run_bfcl(gate_config, system, run_directory, gate_options),
+            }
+    else:
+        try:
+            status_by_system = serve_and_run(gate_config, systems, patch_ids_by_role, output_directory, gate_options)
+        except Exception as serve_error:  # noqa: BLE001 - still decide (reject) and publish the logs
+            print(f"serving or running failed: {serve_error}", file=sys.stderr)
+            status_by_system = {"_error": str(serve_error)[:1000]}
+
+    metrics_by_role = collect_metrics(output_directory, gate_config, systems, status_by_system)
+    (output_directory / "run_status.json").write_text(json.dumps(status_by_system, indent=1, default=str))
+    decide_and_write(output_directory, gate_config, gate_options.round, metrics_by_role, recorded_systems, targets)
+
+    if gate_options.in_job and not gate_options.no_push:
+        push(output_directory, gate_options, output_directory / "metrics.jsonl", systems["candidate"]["name"])
+    print(f"\nWrote {output_directory}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-    args = parse_args(argv)
-    if args.in_job and not args.bootstrapped:
-        bootstrap(argv, args)  # does not return
-
-    from shipwright.heal.gate import load_config
-
-    if args.current_run:  # decide only
-        cfg = load_config(args.config)
-        out = (args.output_dir or default_out(args.round, "decide")).resolve()
-        out.mkdir(parents=True, exist_ok=True)
-        _attach(out)
-        names = {"current": args.current_run.name, "candidate": args.candidate_run.name}
-        targets = args.target_label or []
-        metrics = {who: metrics_for(d, cfg, names[who], None) or missing_metrics(names[who], "no metrics")
-                   for who, d in (("current", args.current_run), ("candidate", args.candidate_run))}
-        decision = decide_and_write(out, cfg, args.round, metrics,
-                                    {who: {"run_dir": str(d)} for who, d in
-                                     (("current", args.current_run), ("candidate", args.candidate_run))}, targets)
-        print(f"\nWrote {out}")
-        if decision["decision"] != "promote":
-            _expected_reject()
-        return 0 if decision["decision"] == "promote" else 1
-
-    cfg, systems, patch_ids, record = load_inputs(args)
-    targets = args.target_label if args.target_label is not None else systems["candidate"]["targets"]
-    tag = "dry" if args.local_dry_run else "job"
-    out = (args.output_dir or (Path("/tmp/gate-out") if args.in_job else default_out(args.round, tag))).resolve()
-    out.mkdir(parents=True, exist_ok=True)
-    _attach(out)
-    (out / "gate_inputs.json").write_text(json.dumps(
-        {"round": args.round, "config": cfg, "systems": record, "targets": targets,
-         "user_model": args.user_model, "mode": tag}, indent=1))
-
-    if args.local_dry_run:
-        status = {}
-        for who, s in systems.items():
-            run_dir = out / s["name"]
-            run_dir.mkdir(parents=True, exist_ok=True)
-            code = run(baseline_cmd(cfg, s, patch_ids[who], run_dir, args), log=run_dir / "baseline.log")
-            status[s["name"]] = {"baseline_exit": code, "bfcl": run_bfcl(cfg, s, run_dir, args)}
+    if argv is None:
+        argv = list(sys.argv[1:])
     else:
-        try:
-            status = serve_and_run(cfg, systems, patch_ids, out, args)
-        except Exception as exc:  # noqa: BLE001 - still decide (reject) and publish the logs
-            print(f"serving or running failed: {exc}", file=sys.stderr)
-            status = {"_error": str(exc)[:1000]}
+        argv = list(argv)
+    gate_options = parse_args(argv)
 
-    metrics = {}
-    for who, s in systems.items():
-        run_dir, st = out / s["name"], status.get(s["name"]) or {}
-        if st.get("baseline_exit") != 0 or not (run_dir / "traces.jsonl").exists():
-            metrics[who] = missing_metrics(s["name"], f"tau2 run failed (exit {st.get('baseline_exit')})")
-            continue
-        if run(classify_cmd(cfg, run_dir), log=run_dir / "classify.log") != 0:
-            metrics[who] = missing_metrics(s["name"], "classify failed")
-            continue
-        metrics[who] = metrics_for(run_dir, cfg, s["name"], st.get("bfcl")) or missing_metrics(s["name"], "no metrics")
-    (out / "run_status.json").write_text(json.dumps(status, indent=1, default=str))
-    decide_and_write(out, cfg, args.round, metrics, record, targets)
+    if gate_options.in_job and not gate_options.bootstrapped:
+        bootstrap(argv, gate_options)  # does not return
 
-    if args.in_job and not args.no_push:
-        push(out, args, out / "metrics.jsonl", systems["candidate"]["name"])
-    print(f"\nWrote {out}")
-    return 0
+    if gate_options.current_run:
+        return decide_from_existing_runs(gate_options)
+    return evaluate_systems(gate_options)
 
 
 if __name__ == "__main__":
     if "--in-job" in sys.argv and "--bootstrapped" not in sys.argv:
-        sys.exit(main())  # first pass in an HF Job: the harness (and shipwright.log) is not installed yet
+        sys.exit(main())  # first pass in an HF Job: the harness (and shipwright.observability.log) is not installed yet
     from shipwright.observability import log
 
     sys.exit(log.run_script(main, step="gate"))

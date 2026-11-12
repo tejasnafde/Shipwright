@@ -130,3 +130,9 @@ done
   bill to this project (prices in `src/shipwright/llm/costs.py`).
 - Cloud Build: the first 2500 build-minutes per month on the default machine are free.
 - Artifact Registry: 0.5 GB free, then about $0.10 per GB-month; the cleanup policy keeps it small.
+
+## Pull runs to your laptop
+
+`scripts/pull_runs.py --owner tejas|ishank|mitushi|main|all [--run NAME]` copies the run dirs a cloud job
+uploaded from `gs://lexsi-hackathon-runs/<owner>/` into `runs/` (the control room reads them from there).
+It uses the `lexsi` gcloud config, or `SHIPWRIGHT_GCLOUD_CONFIG`.

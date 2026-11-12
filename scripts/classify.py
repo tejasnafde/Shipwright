@@ -37,55 +37,92 @@ from shipwright.llm.vertex import JUDGE_MODEL  # noqa: E402
 from shipwright.heal.traces import write_jsonl  # noqa: E402
 
 
-def load_instructions(run_dir: Path) -> dict[str, str]:
-    path = run_dir / "tau2" / "results.json"
-    if not path.exists():
+def load_instructions(run_directory: Path) -> dict[str, str]:
+    """Task id -> the user instructions of that task, from tau2/results.json."""
+    results_path = run_directory / "tau2" / "results.json"
+    if not results_path.exists():
         return {}
-    out = {}
-    for task in json.loads(path.read_text()).get("tasks", []):
-        instr = (task.get("user_scenario") or {}).get("instructions")
-        out[str(task.get("id"))] = json.dumps(instr) if isinstance(instr, dict) else str(instr)
-    return out
+
+    instructions_by_task_id = {}
+    for task in json.loads(results_path.read_text()).get("tasks", []):
+        instructions = (task.get("user_scenario") or {}).get("instructions")
+        if isinstance(instructions, dict):
+            instructions_text = json.dumps(instructions)
+        else:
+            instructions_text = str(instructions)
+        instructions_by_task_id[str(task.get("id"))] = instructions_text
+    return instructions_by_task_id
 
 
-def load_tools(run_dir: Path) -> list[dict]:
+def load_tools(run_directory: Path) -> list[dict]:
     """The domain's tool schemas (from tau2), for the tool_example_copied rule."""
-    cfg = run_dir / "run_config.json"
-    domain = json.loads(cfg.read_text()).get("domain", "retail") if cfg.exists() else "retail"
+    run_config_path = run_directory / "run_config.json"
+    if run_config_path.exists():
+        domain = json.loads(run_config_path.read_text()).get("domain", "retail")
+    else:
+        domain = "retail"
     try:
         from tau2.registry import registry
     except ImportError:
         return []
-    return [t.openai_schema for t in registry.get_env_constructor(domain)().get_tools()]
+    return [tool.openai_schema for tool in registry.get_env_constructor(domain)().get_tools()]
+
+
+def visible_example_values(run_directory: Path, example_values: set[str]) -> set[str]:
+    """The example values that the student's tool list actually showed in this run.
+
+    ``tool_example_copied`` is a tool fault (route tool_fix) only when the tool list held the example. From
+    tool list version 2 (2026-11-12) the prompt hides real-looking examples (``prompted_tools.example_hint``), so a
+    copied ``#W0000000`` is the model inventing an id (route weight_fix). A run without the version in its
+    ``run_config.json`` is version 1: every example was shown."""
+    from shipwright.llm import prompted_tools
+
+    run_config_path = run_directory / "run_config.json"
+    run_config = json.loads(run_config_path.read_text()) if run_config_path.exists() else {}
+    if run_config.get("tool_list_version", 1) < 2:
+        return example_values
+    prompts_path = run_directory / "prompts.json"
+    if not prompts_path.exists():
+        return example_values
+    shown_tool_lists = [
+        prompted_tools.render_tools_prompt(prompt.get("tools") or [])
+        for prompt in json.loads(prompts_path.read_text()).values()
+    ]
+    return {value for value in example_values if any(value in tool_list for tool_list in shown_tool_lists)}
 
 
 def make_chat(token: str | None, model: str):
     """A chat function for the judge or the patch proposer: HF router, or Vertex for vertex/ ids."""
     from shipwright.llm import vertex
 
-    url, body_model, headers = vertex.endpoint(model, token, HF_ROUTER)
-    client = httpx.Client(timeout=120)
+    url, request_model, make_headers = vertex.endpoint(model, token, HF_ROUTER)
+    http_client = httpx.Client(timeout=120)
 
-    def post(messages: list[dict]) -> httpx.Response:
-        return client.post(url, headers=headers(),
-                           json={"model": body_model, "messages": messages, "temperature": 0,
-                                 "max_tokens": 2000, "reasoning_effort": "low"})
+    def post_chat_request(messages: list[dict]) -> httpx.Response:
+        request_body = {
+            "model": request_model,
+            "messages": messages,
+            "temperature": 0,
+            "max_tokens": 2000,
+            "reasoning_effort": "low",
+        }
+        return http_client.post(url, headers=make_headers(), json=request_body)
 
     def once(messages: list[dict]) -> str:
         from shipwright.observability import instrument
 
-        with instrument.external("llm_judge", model, role="judge") as call:
-            r = post(messages)
-            call["retries"] = 0
-            if r.status_code == 401 and vertex.is_vertex_model(model):
+        with instrument.external("llm_judge", model, role="judge") as call_record:
+            response = post_chat_request(messages)
+            call_record["retries"] = 0
+            if response.status_code == 401 and vertex.is_vertex_model(model):
                 vertex.provider().invalidate()  # expired token: get a new one, retry once
-                r = post(messages)
-                call["retries"] = 1
-            call["status"] = r.status_code
-            r.raise_for_status()
-            body = r.json()
-            call.update(instrument.usage_fields(body))
-            return body["choices"][0]["message"].get("content") or ""
+                response = post_chat_request(messages)
+                call_record["retries"] = 1
+            call_record["status"] = response.status_code
+            response.raise_for_status()
+            response_body = response.json()
+            call_record.update(instrument.usage_fields(response_body))
+            return response_body["choices"][0]["message"].get("content") or ""
 
     def chat(messages: list[dict]) -> str:
         from shipwright.observability import retry
@@ -95,55 +132,86 @@ def make_chat(token: str | None, model: str):
     return chat
 
 
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("run_dir", type=Path)
+    parser.add_argument("--no-llm", action="store_true", help="rule labels only, no network")
+
+    # AgentTune's classifier.
+    parser.add_argument(
+        "--classifier-model",
+        default=JUDGE_MODEL,
+        help="AgentTune FailureClassifier model: vertex/<publisher>/<model> or any litellm id"
+        " (default: the team's choice, Vertex gpt-oss-120b)",
+    )
+    parser.add_argument("--classifier-api-base", default=None, help="api_base for a non-vertex classifier model")
+
+    # Our own judge.
+    parser.add_argument("--judge", action="store_true", help="also run our own judge on runs no rule explains")
+    parser.add_argument("--judge-all", action="store_true", help="with --judge: also judge runs that rules label")
+    parser.add_argument(
+        "--judge-model",
+        default=JUDGE_MODEL,
+        help="raw HF router id (e.g. openai/gpt-oss-120b:cerebras) or vertex/<publisher>/<model>"
+        " (default: the team's choice, Vertex gpt-oss-120b)",
+    )
+    return parser
+
+
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("run_dir", type=Path)
-    p.add_argument("--no-llm", action="store_true", help="rule labels only, no network")
-    p.add_argument("--classifier-model", default=JUDGE_MODEL,
-                   help="AgentTune FailureClassifier model: vertex/<publisher>/<model> or any litellm id"
-                        " (default: the team's choice, Vertex gpt-oss-120b)")
-    p.add_argument("--classifier-api-base", default=None, help="api_base for a non-vertex classifier model")
-    p.add_argument("--judge", action="store_true", help="also run our own judge on runs no rule explains")
-    p.add_argument("--judge-all", action="store_true", help="with --judge: also judge runs that rules label")
-    p.add_argument("--judge-model", default=JUDGE_MODEL,
-                   help="raw HF router id (e.g. openai/gpt-oss-120b:cerebras) or vertex/<publisher>/<model>"
-                        " (default: the team's choice, Vertex gpt-oss-120b)")
-    args = p.parse_args()
+    options = build_parser().parse_args()
 
     from shipwright.observability import log, repro
 
-    log.attach_run_dir(args.run_dir)
-    log.note_repro(**repro.models_from_args(args))
-    traces = [json.loads(line) for line in (args.run_dir / "traces.jsonl").read_text().splitlines() if line]
-    instructions = load_instructions(args.run_dir)
-    chat = None
-    if args.judge and not args.no_llm:
+    log.attach_run_dir(options.run_dir)
+    log.note_repro(**repro.models_from_args(options))
+    traces = [json.loads(line) for line in (options.run_dir / "traces.jsonl").read_text().splitlines() if line]
+    instructions = load_instructions(options.run_dir)
+
+    judge_chat = None
+    if options.judge and not options.no_llm:
         try:
-            chat = make_chat(load_token(), args.judge_model)
-        except RuntimeError as e:
-            print(f"{e} Use --no-llm, or provide the token.", file=sys.stderr)
+            judge_chat = make_chat(load_token(), options.judge_model)
+        except RuntimeError as token_error:
+            print(f"{token_error} Use --no-llm, or provide the token.", file=sys.stderr)
             return 2
 
-    examples = tool_example_values(load_tools(args.run_dir))
+    tool_example_strings = visible_example_values(options.run_dir, tool_example_values(load_tools(options.run_dir)))
+
     classifier = None
-    if not args.no_llm:
-        if vertex.is_vertex_model(args.classifier_model):
+    if not options.no_llm:
+        if vertex.is_vertex_model(options.classifier_model):
             try:
                 vertex.provider().get()  # fail now if gcloud cannot mint a token
-            except RuntimeError as e:
-                print(f"{e} Use --no-llm, or fix the gcloud config.", file=sys.stderr)
+            except RuntimeError as token_error:
+                print(f"{token_error} Use --no-llm, or fix the gcloud config.", file=sys.stderr)
                 return 2
-        classifier = make_classifier(args.classifier_model, args.classifier_api_base)
-    rows = classify_traces(traces, args.run_dir, instructions=instructions, chat=chat,
-                           judge_all=args.judge_all, example_values=examples, classifier=classifier)
-    for row in rows:
-        print(f"task {row['task_id']}: {row['route']:10} {','.join(row['labels'])}"
-              f"  [{'+'.join(row['detected_by'])}; agenttune: {row['agenttune_root_cause']}]")
-    write_jsonl(args.run_dir / "failures.jsonl", rows)
-    summary = summarize_failures(rows, len(traces))
-    summary["judge_model"] = args.judge_model if chat else None
-    summary["classifier_model"] = args.classifier_model if classifier else None
-    (args.run_dir / "failure_summary.json").write_text(json.dumps(summary, indent=2))
+        classifier = make_classifier(options.classifier_model, options.classifier_api_base)
+
+    failure_rows = classify_traces(
+        traces,
+        options.run_dir,
+        instructions=instructions,
+        chat=judge_chat,
+        judge_all=options.judge_all,
+        example_values=tool_example_strings,
+        classifier=classifier,
+    )
+    for row in failure_rows:
+        detected_by = "+".join(row["detected_by"])
+        print(
+            f"task {row['task_id']}: {row['route']:10} {','.join(row['labels'])}"
+            f"  [{detected_by}; agenttune: {row['agenttune_root_cause']}]"
+        )
+    write_jsonl(options.run_dir / "failures.jsonl", failure_rows)
+
+    summary = summarize_failures(failure_rows, len(traces))
+    summary["judge_model"] = options.judge_model if judge_chat else None
+    summary["classifier_model"] = options.classifier_model if classifier else None
+    (options.run_dir / "failure_summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary, indent=2))
     return 0
 

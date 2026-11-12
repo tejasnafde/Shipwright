@@ -103,10 +103,20 @@ def test_compact_tool_line():
             "reason": {"type": "string", "description": "either 'no longer needed' or 'ordered by mistake'"},
             "item_ids": {"type": "array", "items": {"type": "string"}}}}}}
     assert pt.compact_tool_line(tool) == (
-        "cancel_pending_order(order_id: str e.g. '#W0000000', "
+        f"cancel_pending_order(order_id: str {pt.NOT_AN_EXAMPLE_HINT}, "
         "reason?: str one of 'no longer needed'|'ordered by mistake', item_ids?: list[str])"
         " - Cancel a pending order."
     )
+
+
+def test_example_hint_hides_real_looking_examples_only():
+    for real_looking in ["'#W0000000'", "'sara_doe_496'", "'6086499569'", "'something@example.com'"]:
+        assert pt.example_hint(real_looking) == pt.NOT_AN_EXAMPLE_HINT
+    assert pt.example_hint("'John'") == "e.g. 'John'"
+    assert "#W0000000" not in pt.render_tools_prompt([{"type": "function", "function": {
+        "name": "get_order_details", "description": "Get an order.",
+        "parameters": {"type": "object", "required": ["order_id"], "properties": {
+            "order_id": {"type": "string", "description": "The order id, such as '#W0000000'."}}}}}])
 
 
 def test_minify_content():

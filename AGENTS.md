@@ -24,7 +24,7 @@ and gate redeployment on measured accuracy."
   Organizers check for real use. CuratorKIT is optional.
 - **Public artifacts:** models, adapters, logs, datasets and benchmarks go to HF, in two ungated
   collections (models, data).
-- **Deadline:** Nov 14, 2026, end of day AoE. Demo Day shortlist Nov 16, Demo Day Nov 22.
+- **Deadline:** the official due time is Nov 15, 2026, 11:59 PM AoE (hackathon.lexsi.ai/structure, checked 2026-11-12); we plan to finish by Nov 14 AoE to keep a day spare. Shortlist (up to 20 teams) is told by Nov 16; shortlisted teams get until Nov 22, 11:59 PM AoE for a video or slides and $200 more HF credits. Judging on Nov 15 to 16 uses what is submitted by the deadline.
 - **License:** Tiny Aya is CC-BY-NC. Make no commercial claims in the write-up.
 
 ## Submission and judging
@@ -34,6 +34,7 @@ and gate redeployment on measured accuracy."
   teams. Rubric: write-up clarity /10, practical usefulness /10, code/notebook quality /10,
   overall review /100. An internal team first checks validity (public artifacts, write-up,
   checklist, no duplicates), then tags each submission to a track.
+- Rules page (checked 2026-11-12): before-and-after metrics on more than one metric; the write-up says which metrics and why, the approach and why these datasets, tasks and models, and how the model is meaningfully better; an HF article; an HF Space if relevant; an optional but preferred ROI comparison (closed-model token billing vs self-hosting: sample volume, GPU hours, GPU price per hour, tokens/sec). Track 3 is exempt from the 2-repos rule. Late or incomplete submissions may not be considered.
 - HF article checklist: (1) problem statement and approach, (2) hackathon repos used and for
   what, (3) models used and their licenses, (4) datasets/benchmarks used and their licenses,
   (5) model artifacts as a public HF collection, (6) data artifacts as a public HF collection,
@@ -52,7 +53,7 @@ AgentTune already has the self-healing loop: `Project.heal()`, `FailureDetector`
 Check for an existing AgentTune or AuditKIT function before you write a new one.
 
 What we add: the 3-way router, a tool-patch ledger with rollback, the AuditKIT gate (pass^k, BFCL),
-the tool-fix vs weight-fix comparison, and Agent-R revision data for the weight fix (below).
+and the tool-fix vs weight-fix comparison.
 
 Design inspiration drawn from outside Track 3 too: the tool-patch ledger + one-step rollback
 follows NousResearch/hermes-agent's `skill_ledger.py` pattern (JSONL audit, content-addressed
@@ -87,6 +88,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - Frozen before round 1: failure label list, gate thresholds, k for pass^k, seeds, teacher and judge
   model versions. To change a frozen value, add the change and the reason as a new line here.
 - The gate never approves by default. Too few test runs means reject.
+- 2026-11-12 (Ishank): the headline result is task accuracy on the held-out tasks (pass^1 and pass^k from AuditKIT), because problem statement 8 says to "gate redeployment on measured accuracy". Tool-error and label rates are supporting metrics (the rules ask for before-and-after numbers on more than one metric), never a replacement. A low base pass rate is fixed by improving the student and the data, not by changing the headline metric.
 - Every round appends one row to `metrics.jsonl`.
 
 ## Baseline harness
@@ -104,24 +106,21 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - `scripts/baseline.py` defaults to the tau2 `train` split so held-out tasks stay unused until the splits are frozen.
 - Weight fix (teacher runs, SFT data, LoRA job): `docs/pipeline/training.md`. The teacher gets the student's prompted view (`force_prompted`); the teacher model is passed with `--teacher-model` (no default; team choice above).
 - `scripts/train_job.py` launches nothing without `--launch`, and prints flavor price x timeout first.
-- 2026-11-11 (Mitushi): Agent-R (arxiv 2501.11425) is a second weight-fix data source: MCTS over Tiny Aya's own
-  tau2 runs, the actor finds its first bad step, and a revision run (bad prefix masked, revision thought + good
-  suffix trained) goes into `sft.jsonl` with a per-message `loss_mask`. How: `docs/pipeline/agent-r.md`.
-  Logic in `src/shipwright/heal/agent_r.py`; scripts `agent_r_search.py`, `agent_r_revise.py`, `build_sft.py --agent-r`.
-- A record with `loss_mask` must keep it through AgentTune: `train_lora.py` asserts the EventLog rows have the
-  same mask. Never train on the masked (bad) assistant turns.
-- MCTS branching sets tau2 `Task.initial_state.message_history` to the node prefix; tau2 replays its tool calls
-  strictly. Build branches only through `scripts/agent_r_search.py` (`run_single_task`), not by editing tau2.
+- 2026-11-11: Agent-R (MCTS revision data) was removed as scope creep: 1 valid revision for about $1 in round 1.
+  The only weight-fix data source is teacher replay. Do not add a second data source before a full round has
+  reached a gate decision.
+- 2026-11-12: round 2 data: 3 of 74 passed (as in round 1), `invented_id` still 47 of 71 failures: the copied value was `#W0000000` from the tau2 tool descriptions (43 of 85 "Order not found" calls), not only our few-shot id. The student's tool list now hides real-looking examples (`prompted_tools.example_hint`); a baseline made before this is not comparable. The teacher replays `tool_fix` and `weight_fix` failures (round 2 sent only the 24 `weight_fix` ones: 21 SFT examples), `--only-solved-from` + `--teacher-trials 5` harvests more passes from tasks it has solved (about 48% pass again vs 34% overall); `--skip-unsolved-from` and `--skip-solved-from` drop tasks it never solved or already solved. A copied tool example is `tool_example_copied` (route tool_fix) only if that run's tool list showed it (`tool_list_version` 1 in `run_config.json`); from version 2 it is `invented_id` and goes to the weights. `configs/systems/r3-weight.yaml` targets every weight_fix label; `run_round.py ceiling` runs the teacher on the held-out tasks (evaluation only); the gate prints pass^1 per slice (0-1 writes, 2+ writes; context, not part of the decision); `scripts/promote.py` keeps the deployed adapter in `promotions/ledger.jsonl` (rollback, rows never deleted) and the next gate's `--current` is `configs/systems/current.yaml`. Missing: a GPU baseline of the deployed adapter on the train tasks, and the data stage pools earlier teacher runs of the same model (`--extra-teacher-runs`; 140 examples from 47 tasks on what we have, versus 21 from round 2 alone). `run_round.py` stops between stages on over 25% infra errors or under 40 SFT examples (`--force`), waits for the Cloud Build to repoint the job, and splits spend into metered and estimated. Orchestrator logs go to `runs/_meta/` (`log.run_script(meta=True)`).
+- 2026-11-12: A round runs through `scripts/run_round.py` (`docs/pipeline/round.md`): one stage per command, a cost estimate and a hard cap per stage (`--max-cost-usd` on `baseline.py` and `teacher_runs.py`), a manifest `runs/round-N.json`. The baseline and the weight candidate have no tool patches, so a gain is the weights. The round 2 gate uses an HF router user simulator (`GATE_USER_MODEL` in the script) and a 90 minute limit: a Vertex token would expire mid-gate.
 - Gate (step 05): `docs/pipeline/gate.md`. `scripts/gate_job.py` (HF Job, vLLM serves base + LoRA) or `scripts/gate_eval.py --local-dry-run` (offline). Config `configs/gate.yaml` (status `proposed` until the team freezes it), systems in `configs/systems/`. Metrics come from AuditKIT; the user model is a required argument (no default).
 
 ## Logs and debugging
 
 - How to debug a run: `docs/ops/debugging.md` (`scripts/why.py`, the links, `scripts/rerun.py`).
-- Log with `shipwright.log` (`log.get_logger`, keywords as fields), never `logging.basicConfig` or a
+- Log with `shipwright.observability.log` (`log.get_logger`, keywords as fields), never `logging.basicConfig` or a
   new logger setup. Every script ends with `sys.exit(log.run_script(main, step="<step>"))`.
 - Every script writes `log.jsonl`, `errors.json` and `repro.json` into its run dir
   (`log.attach_run_dir`), and `status` (ok / partial / failed) into `summary.json`.
-- New external call (model, HTTP, GCS, HF Hub): wrap it in `shipwright.instrument.external` (or go
+- New external call (model, HTTP, GCS, HF Hub): wrap it in `shipwright.observability.instrument.external` (or go
   through `llm_patch`), so it gets a log line and a span.
 - 2026-11-12 (Tejas): every external call goes through the shared retry helper
   `shipwright.observability.retry` (`call_with_retry`, `@retry`, `acall_with_retry`; policies `LLM`,
@@ -129,8 +128,8 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   `scripts/train_lora.py` (`hub_retry`), which runs alone in an HF Job without the package.
 - Long runs must be resumable and isolate failures: one task's exception is an infra error in
   the results, not a dead run; a rerun into the same `--output-dir` (on Cloud Run: `--fetch` it
-  first) keeps decided runs and redoes infra errors (tau2 `auto_resume`, Agent-R `trees/<id>.done.json`).
-- Never print or log a token or key. `shipwright.log` redacts `hf_`, `ya29.`, `Bearer`, `sk-`; do
+  first) keeps decided runs and redoes infra errors (tau2 `auto_resume`).
+- Never print or log a token or key. `shipwright.observability.log` redacts `hf_`, `ya29.`, `Bearer`, `sk-`; do
   not rely on that for other formats.
 
 ## Traces
@@ -166,9 +165,18 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   Task" tab and a genuine gate-rejection walkthrough, since no real round-2 adapter has been
   trained yet. Every staged dir carries a `demo.json` marker; `render_demo_banner()` shows an
   orange "STAGED EXAMPLE" banner wherever one is loaded, so staged and real data are never
-  visually confused. The sidebar's "Load demo scenario" button jumps straight to these four dirs
-  (`DEMO_SCENARIO` in `app.py`) instead of making a live demo align four dropdowns by hand; the
-  manual pickers still work for any real run dir.
+  visually confused.
+- 2026-11-11 (Ishank): the sidebar's "Load demo scenario" dropdown (`SCENARIOS` in `app.py`: the
+  real round 1, the staged walkthrough) fills in every run-dir picker. Baseline and teacher/SFT
+  pickers stay in the sidebar; the gate picker sits in Gate & Outcome and the after-training
+  picker in Follow a Task (the only tabs that read them; the header is filled after them, since
+  it reads the gate dir too). A scenario is listed only when all of its dirs exist. Traces render as
+  chat bubbles with a raw-JSON expander under each, so no caller may put a trace inside an
+  expander (Streamlit cannot nest them).
+- 2026-11-12 (Ishank): Fix & Train shows tool patches per baseline run, not per ledger `round`:
+  "active" = the ids in that run's `run_config.json` `active_tool_patches`, "proposed from" =
+  ledger rows whose `source_failures` are that run's simulation ids. The 35 round-1 patches were
+  proposed on Nov 8 from a run no longer on disk, and `r1-baseline-train` ran with all 35 active.
 
 ## Infrastructure
 
@@ -263,6 +271,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   Pull `main` into your branch often to stay current.
 - Per-person Cloud Build triggers may run on pushes to these branches later. Do not rename them.
 - No em dashes in code, docs or commits.
+- Code style (2026-11-11, Ishank): readable to a programmer who does not know Python. Descriptive names (`output_directory`, `run_options`, not `out_dir`, `args`), plain `if/else` over clever expressions, named objects (dataclasses) over tuples and string-keyed dicts, shallow nesting, orchestration functions that read like pseudocode. No new abstractions that only wrap one call. New code follows this; `scripts/`, `src/shipwright/heal/` and `src/shipwright/llm/` were converted; `observability/` and `control_room/` are not (left as they were).
 - Prefer the simplest thing that works. Kafka, Langfuse-as-a-dependency and UIs are out of scope.
 
 ## Known traps (add new ones here, with the date)
@@ -287,14 +296,15 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - 2026-11-09 (Ishank): `pip install agenttune` fails on a CPU-only macOS machine (torch 2.11 + bitsandbytes force a source build). It installs on Linux x86_64 (CI, HF Jobs). Do not replace AgentTune with a local reimplementation.
 - 2026-11-09: AuditKIT `reliability()` takes `independent=`, while `AgentEvalRunner` takes `reset_confirmed=` (we use the runner). Verdicts are `success` / `failure` / `unknown`, not pass/fail.
 - 2026-11-09: DeepSeek V4.1 Flash on Vertex is served only on the `global` endpoint (a `us-central1` call fails). Vertex has no explicit context cache (`cachedContents`) for MaaS open models; implicit prefix caching (Preview) covers `deepseek-v4.1-flash-maas` from 4096 prompt tokens, not gpt-oss-120b. Our fixed teacher prefix (policy + tool list) is about 2.6k tokens, so hits come from the growing conversation of one run.
-- 2026-11-09: Vertex gpt-oss-120b spends reply tokens on reasoning (`reasoning_content`) first. `vertex.py` raises `max_tokens` below 1024 to 1024; `reasoning_effort: low` is accepted.
+- 2026-11-09: Vertex gpt-oss-120b spends reply tokens on reasoning (`reasoning_content`) first. `vertex.py` raises `max_tokens` below 1024 to 1024; `reasoning_effort: low` is accepted and now set by `route_kwargs`. 2026-11-12: Vertex calls time out after 60 s (gpt-oss) or 180 s and a timeout retries under `retry.LLM`; round 2 had calls hang up to 20 minutes. `run_round.py` defaults to `--max-concurrency 8`.
 - 2026-11-09: A Vertex token lasts about 1 hour and an HF Job cannot run gcloud. `gate_job.py` passes a token minted at launch (`SHIPWRIGHT_VERTEX_TOKEN`), with no refresh: a gate job with a Vertex user model must finish within about 1 hour. 20 tasks x k=3 x 2 systems (120 tau2 runs) at `max_concurrency: 8` is the scenario this was sized for; don't raise `heldout.num_tasks` back toward 40 without also moving the user model off Vertex (an HF router model instead), or the run risks losing its user simulator partway through.
-- 2026-11-11: In tests, `agenttune.agentic` cannot be imported without torch. `tests/heal/test_agent_r.py` loads
-  `agenttune/agentic/events.py` by file path; register the module in `sys.modules` before `exec_module`, or its
-  dataclasses fail (`'NoneType' object has no attribute '__dict__'`).
+- 2026-11-11: In tests, `agenttune.agentic` cannot be imported without torch. Load `agenttune/agentic/events.py` by file
+  path and register the module in `sys.modules` before `exec_module`, or its dataclasses fail
+  (`'NoneType' object has no attribute '__dict__'`).
+- 2026-11-11: The prompted-tools few-shot example used `#W1234567`, and the student copied it as a real order id (28 of 74 round 1 baseline traces, `invented_id` 34 of 71 failures). It now uses `<...>` placeholders (`prompted_tools.py`). Never put a real-looking id in a prompt example; any baseline or teacher run made before this change used the old prompt and is not comparable with new runs.
 - 2026-11-08: The GitHub repo is private, so an HF Job cannot clone it. `scripts/gate_job.py --launch` uploads `git archive HEAD` to the runs dataset; commit before you launch.
 
-- 2026-11-11: Vertex gpt-oss-120b (user simulator) returns 429 at 4 to 6 concurrent tau2 runs; with no retry, 15 of 74 baseline runs became infra errors. `vertex.call_with_refresh` now waits and retries a 429 up to 5 times. Some 400s from the same model remain (cause not found yet); 2026-11-12: user and judge calls retry a 400 twice (`BAD_REQUEST_WAITS`), and the NL judge is asked again (twice) when its reply is not JSON (tau2 `json.loads` crashed the run, 3 infra errors in round 1).
+- 2026-11-11: Vertex gpt-oss-120b (user simulator) returns 429 at 4 to 6 concurrent tau2 runs; with no retry, 15 of 74 baseline runs became infra errors. `vertex.call_with_refresh` now waits and retries a 429 up to 5 times. Some 400s from the same model remain (cause not found yet); 2026-11-12: user and judge calls also retry a 400 (`retry.LLM_USER`), and the NL judge is asked again (twice) when its reply is not JSON (tau2 `json.loads` crashed the run, 3 infra errors in round 1).
 - 2026-11-11: `SHIPWRIGHT_HF_TOKEN` (mitushigoyal5, fine-grained) can write the Hub but HF Jobs return
   `403 ... missing permissions: job.write` on namespace mitushigoyal5. The token needs the Jobs permissions
   (read and write) before `train_job.py --launch` or `gate_job.py --launch` can work.

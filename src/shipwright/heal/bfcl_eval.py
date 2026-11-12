@@ -40,58 +40,83 @@ def download(revision: str, categories: list[str], token: str | None = None) -> 
 
 
 def load_samples(root: Path, categories: list[str], revision: str, limit: int | None) -> list:
-    import auditkit as ak
+    import auditkit
 
     samples = []
-    for cat in categories:
-        if cat not in SUPPORTED:
-            raise ValueError(f"BFCL category {cat!r} not supported (one call per reply): use {SUPPORTED}")
-        q, a = bfcl_files(root, cat)
-        for s in ak.load_bfcl(str(q), str(a) if a else None, revision=revision, limit=limit):
-            s.metadata["bfcl_category"] = cat
-            samples.append(s)
+    for category in categories:
+        if category not in SUPPORTED:
+            raise ValueError(f"BFCL category {category!r} not supported (one call per reply): use {SUPPORTED}")
+        questions_path, answers_path = bfcl_files(root, category)
+        answers_argument = str(answers_path) if answers_path else None
+        for sample in auditkit.load_bfcl(str(questions_path), answers_argument, revision=revision, limit=limit):
+            sample.metadata["bfcl_category"] = category
+            samples.append(sample)
     return samples
 
 
 def sample_messages(sample) -> list[dict]:
     """The prompted request for one BFCL sample (system prompt with the compact tool list)."""
-    msgs = list(sample.metadata.get("messages") or [{"role": "user", "content": sample.input}])
-    return convert_messages(msgs, sample.tools or [])
+    messages = list(sample.metadata.get("messages") or [{"role": "user", "content": sample.input}])
+    return convert_messages(messages, sample.tools or [])
 
 
 def score_reply(sample, reply: str | None) -> dict:
     """AuditKIT ToolCallF1 (BFCL matcher) on one reply. Returns exact match and the call."""
-    import auditkit as ak
+    import auditkit
 
-    call = parse_tool_call(reply)
-    turns = [[{"name": call[0], "arguments": call[1]}]] if call else []
-    scores = ak.ToolCallF1(arg_match=ak.bfcl_arg_match).score(sample, reply or "", {"trace": {"tool_calls": turns}})
-    by_name = {s.name.split("_custom_")[0]: s.value for s in scores}
-    return {"id": sample.metadata.get("bfcl_id"), "category": sample.metadata.get("bfcl_category"),
-            "exact": by_name.get("tool_call_exact", 0.0), "f1": by_name.get("tool_call_f1", 0.0),
-            "call": {"name": call[0], "arguments": call[1]} if call else None}
+    parsed_call = parse_tool_call(reply)
+    tool_call_turns = [[{"name": parsed_call[0], "arguments": parsed_call[1]}]] if parsed_call else []
+    scorer = auditkit.ToolCallF1(arg_match=auditkit.bfcl_arg_match)
+    scores = scorer.score(sample, reply or "", {"trace": {"tool_calls": tool_call_turns}})
+    value_by_name = {score.name.split("_custom_")[0]: score.value for score in scores}
+    if parsed_call:
+        call = {"name": parsed_call[0], "arguments": parsed_call[1]}
+    else:
+        call = None
+    return {
+        "id": sample.metadata.get("bfcl_id"),
+        "category": sample.metadata.get("bfcl_category"),
+        "exact": value_by_name.get("tool_call_exact", 0.0),
+        "f1": value_by_name.get("tool_call_f1", 0.0),
+        "call": call,
+    }
 
 
 def evaluate(samples: list, chat: Callable[[list[dict]], str]) -> dict:
     """Run every sample through ``chat`` (messages -> reply text) and score it."""
     rows = []
-    for s in samples:
+    for sample in samples:
         try:
-            reply = chat(sample_messages(s))
-        except Exception as exc:  # noqa: BLE001 - a failed request scores as no call, and is counted
-            rows.append({"id": s.metadata.get("bfcl_id"), "category": s.metadata.get("bfcl_category"),
-                         "exact": 0.0, "f1": 0.0, "call": None, "error": str(exc)[:200]})
+            reply = chat(sample_messages(sample))
+        except Exception as request_error:  # noqa: BLE001 - a failed request scores as no call, and is counted
+            rows.append({
+                "id": sample.metadata.get("bfcl_id"),
+                "category": sample.metadata.get("bfcl_category"),
+                "exact": 0.0,
+                "f1": 0.0,
+                "call": None,
+                "error": str(request_error)[:200],
+            })
             continue
-        rows.append(score_reply(s, reply))
-    per_cat: dict[str, list[float]] = {}
-    for r in rows:
-        per_cat.setdefault(r["category"], []).append(r["exact"])
-    acc = sum(r["exact"] for r in rows) / len(rows) if rows else None
+        rows.append(score_reply(sample, reply))
+
+    exact_scores_by_category: dict[str, list[float]] = {}
+    for row in rows:
+        exact_scores_by_category.setdefault(row["category"], []).append(row["exact"])
+
+    if rows:
+        accuracy = sum(row["exact"] for row in rows) / len(rows)
+        accuracy_points = round(100 * accuracy, 2)
+    else:
+        accuracy_points = None
     return {
-        "accuracy_points": round(100 * acc, 2) if acc is not None else None,
-        "per_category_points": {c: round(100 * sum(v) / len(v), 2) for c, v in per_cat.items()},
+        "accuracy_points": accuracy_points,
+        "per_category_points": {
+            category: round(100 * sum(scores) / len(scores), 2)
+            for category, scores in exact_scores_by_category.items()
+        },
         "num_samples": len(rows),
-        "num_request_errors": sum(1 for r in rows if r.get("error")),
+        "num_request_errors": sum(1 for row in rows if row.get("error")),
         "rows": rows,
     }
 
@@ -99,7 +124,7 @@ def evaluate(samples: list, chat: Callable[[list[dict]], str]) -> dict:
 def make_chat(api_base: str, model: str, timeout: float = 120):
     import httpx
 
-    client = httpx.Client(timeout=timeout)
+    http_client = httpx.Client(timeout=timeout)
 
     def chat(messages: list[dict]) -> str:
         from shipwright.observability import retry
@@ -109,13 +134,13 @@ def make_chat(api_base: str, model: str, timeout: float = 120):
     def once(messages: list[dict]) -> str:
         from shipwright.observability import instrument
 
-        with instrument.external("llm_bfcl", model, role="agent") as call:
-            r = client.post(f"{api_base}/chat/completions",
-                            json={"model": model, "messages": messages, "temperature": 0, "max_tokens": REPLY_TOKENS})
-            call["status"] = r.status_code
-            r.raise_for_status()
-            body = r.json()
-            call.update(instrument.usage_fields(body))
-            return body["choices"][0]["message"].get("content") or ""
+        request_body = {"model": model, "messages": messages, "temperature": 0, "max_tokens": REPLY_TOKENS}
+        with instrument.external("llm_bfcl", model, role="agent") as call_record:
+            response = http_client.post(f"{api_base}/chat/completions", json=request_body)
+            call_record["status"] = response.status_code
+            response.raise_for_status()
+            response_body = response.json()
+            call_record.update(instrument.usage_fields(response_body))
+            return response_body["choices"][0]["message"].get("content") or ""
 
     return chat

@@ -28,40 +28,70 @@ def read_jsonl(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def corrections(sft: Path | None) -> dict[str, list[dict]]:
+def corrections(sft_path: Path | None) -> dict[str, list[dict]]:
     """Task id -> the messages of its first teacher SFT example."""
-    out: dict[str, list[dict]] = {}
-    for r in read_jsonl(sft) if sft else []:
-        out.setdefault(str(r.get("task_id")), r["messages"])
-    return out
+    messages_by_task_id: dict[str, list[dict]] = {}
+    if sft_path is None:
+        return messages_by_task_id
+    for example in read_jsonl(sft_path):
+        task_id = str(example.get("task_id"))
+        if task_id not in messages_by_task_id:
+            messages_by_task_id[task_id] = example["messages"]
+    return messages_by_task_id
 
 
-def rewards(run_dir: Path) -> list[float]:
-    return [float(t["reward"]) for t in read_jsonl(run_dir / "traces.jsonl") if t.get("reward") is not None]
+def rewards(run_directory: Path) -> list[float]:
+    traces = read_jsonl(run_directory / "traces.jsonl")
+    return [float(trace["reward"]) for trace in traces if trace.get("reward") is not None]
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("run_dir", type=Path)
-    p.add_argument("--sft", type=Path, default=None, help="sft.jsonl from scripts/build_sft.py (teacher corrections)")
-    p.add_argument("--reward-baseline", type=Path, default=None,
-                   help="earlier run dir: its rewards lock AgentTune's reward-drift baseline")
-    p.add_argument("--config", type=Path, default=ROOT / "configs" / "heal.yaml")
-    args = p.parse_args(argv)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("run_dir", type=Path)
+    parser.add_argument(
+        "--sft",
+        type=Path,
+        default=None,
+        help="sft.jsonl from scripts/build_sft.py (teacher corrections)",
+    )
+    parser.add_argument(
+        "--reward-baseline",
+        type=Path,
+        default=None,
+        help="earlier run dir: its rewards lock AgentTune's reward-drift baseline",
+    )
+    parser.add_argument("--config", type=Path, default=ROOT / "configs" / "heal.yaml")
+    options = parser.parse_args(argv)
 
     import yaml
 
-    cfg = yaml.safe_load(args.config.read_text())
-    rows = read_jsonl(args.run_dir / "failures.jsonl")
+    heal_config = yaml.safe_load(options.config.read_text())
+    failure_rows = read_jsonl(options.run_dir / "failures.jsonl")
+
+    if options.reward_baseline:
+        baseline_rewards = rewards(options.reward_baseline)
+        current_rewards = rewards(options.run_dir)
+    else:
+        baseline_rewards = None
+        current_rewards = None
+
     status = retrain_status(
-        rows, corrections(args.sft), cfg.get("retrain_trigger"),
-        baseline_rewards=rewards(args.reward_baseline) if args.reward_baseline else None,
-        rewards=rewards(args.run_dir) if args.reward_baseline else None)
-    status.update({"run_dir": str(args.run_dir), "sft": str(args.sft) if args.sft else None,
-                   "config_status": cfg.get("status")})
-    (args.run_dir / "round_status.json").write_text(json.dumps(status, indent=2, default=str))
-    print(json.dumps({k: status[k] for k in ("should_train", "reason", "num_weight_fix_failures",
-                                             "num_with_correction")}, indent=2))
+        failure_rows,
+        corrections(options.sft),
+        heal_config.get("retrain_trigger"),
+        baseline_rewards=baseline_rewards,
+        rewards=current_rewards,
+    )
+    status["run_dir"] = str(options.run_dir)
+    status["sft"] = str(options.sft) if options.sft else None
+    status["config_status"] = heal_config.get("status")
+    (options.run_dir / "round_status.json").write_text(json.dumps(status, indent=2, default=str))
+
+    printed_fields = ("should_train", "reason", "num_weight_fix_failures", "num_with_correction")
+    print(json.dumps({field: status[field] for field in printed_fields}, indent=2))
     return 0
 
 

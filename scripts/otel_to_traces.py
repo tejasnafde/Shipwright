@@ -21,14 +21,21 @@ from shipwright.heal.traces import write_jsonl  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("spans", type=Path, help="span file, one JSON span per line")
-    p.add_argument("-o", "--output", type=Path, required=True, help="traces.jsonl to write")
-    args = p.parse_args(argv)
-    traces = spans_to_traces(read_spans(args.spans))
-    write_jsonl(args.output, traces)
-    print(f"{len(traces)} trace records -> {args.output}")
-    return 0 if traces else 1
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("spans", type=Path, help="span file, one JSON span per line")
+    parser.add_argument("-o", "--output", type=Path, required=True, help="traces.jsonl to write")
+    options = parser.parse_args(argv)
+
+    spans = read_spans(options.spans)
+    traces = spans_to_traces(spans)
+    write_jsonl(options.output, traces)
+    print(f"{len(traces)} trace records -> {options.output}")
+    if traces:
+        return 0
+    return 1
 
 
 if __name__ == "__main__":

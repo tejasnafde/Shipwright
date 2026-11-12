@@ -55,45 +55,54 @@ def _is_read(name: str | None) -> bool:
 
 def _calls(trace: dict) -> list[dict]:
     """Agent tool calls in order, with message index and error flag."""
-    out = []
+    calls = []
     for turn in trace.get("agent_turns") or []:
-        results = {r["id"]: r for r in turn.get("tool_results") or []}
-        for tc in turn.get("parsed_tool_calls") or []:
-            res = results.get(tc.get("id")) or {}
-            out.append({
+        result_by_call_id = {result["id"]: result for result in turn.get("tool_results") or []}
+        for tool_call in turn.get("parsed_tool_calls") or []:
+            tool_result = result_by_call_id.get(tool_call.get("id")) or {}
+            calls.append({
                 "index": turn["message_index"],
-                "name": tc.get("name"),
-                "arguments": tc.get("arguments") or {},
-                "key": json.dumps([tc.get("name"), tc.get("arguments")], sort_keys=True),
-                "error": bool(res.get("error")),
-                "malformed": bool(tc.get("malformed_arguments")),
-                "unknown": bool(tc.get("unknown_tool")),
+                "name": tool_call.get("name"),
+                "arguments": tool_call.get("arguments") or {},
+                "key": json.dumps([tool_call.get("name"), tool_call.get("arguments")], sort_keys=True),
+                "error": bool(tool_result.get("error")),
+                "malformed": bool(tool_call.get("malformed_arguments")),
+                "unknown": bool(tool_call.get("unknown_tool")),
             })
-    return out
+    return calls
 
 
-def _id_values(arguments: Any, key: str = "") -> list[str]:
+def _id_values(arguments: Any, argument_name: str = "") -> list[str]:
     """String argument values that look like ids (order, user, item, payment ids)."""
     if isinstance(arguments, dict):
-        return [v for k, val in arguments.items() for v in _id_values(val, k)]
+        id_values = []
+        for name, value in arguments.items():
+            id_values += _id_values(value, name)
+        return id_values
     if isinstance(arguments, list):
-        return [v for val in arguments for v in _id_values(val, key)]
+        id_values = []
+        for value in arguments:
+            id_values += _id_values(value, argument_name)
+        return id_values
     if isinstance(arguments, str):
-        s = arguments.strip()
-        if key.endswith(("_id", "_ids")) or (len(s) >= 5 and _ID_LIKE.match(s)):
-            return [s] if s else []
+        stripped_value = arguments.strip()
+        name_marks_an_id = argument_name.endswith(("_id", "_ids"))
+        if name_marks_an_id or (len(stripped_value) >= 5 and _ID_LIKE.match(stripped_value)):
+            if stripped_value:
+                return [stripped_value]
     return []
 
 
 def tool_example_values(tools: list[dict]) -> set[str]:
     """Example values ("such as '#W0000000'") from tool parameter descriptions."""
-    out = set()
+    example_values = set()
     for tool in tools:
-        fn = tool.get("function", tool)
-        for schema in ((fn.get("parameters") or {}).get("properties") or {}).values():
-            for m in re.finditer(r"such as '([^']+)'", schema.get("description") or ""):
-                out.add(m.group(1))
-    return out
+        function = tool.get("function", tool)
+        parameter_schemas = ((function.get("parameters") or {}).get("properties") or {}).values()
+        for schema in parameter_schemas:
+            for match in re.finditer(r"such as '([^']+)'", schema.get("description") or ""):
+                example_values.add(match.group(1))
+    return example_values
 
 
 def rule_labels(trace: dict, example_values: set[str] | None = None) -> list[dict]:
@@ -107,55 +116,78 @@ def rule_labels(trace: dict, example_values: set[str] | None = None) -> list[dic
     calls = _calls(trace)
     messages = trace.get("messages") or []
 
-    for c in calls:
-        if c["unknown"]:
-            hits.append({"label": "unknown_tool", "turn": c["index"], "detail": c["name"]})
-        if c["malformed"]:
-            hits.append({"label": "malformed_args", "turn": c["index"], "detail": c["name"]})
+    for call in calls:
+        if call["unknown"]:
+            hits.append({"label": "unknown_tool", "turn": call["index"], "detail": call["name"]})
+        if call["malformed"]:
+            hits.append({"label": "malformed_args", "turn": call["index"], "detail": call["name"]})
     for turn in trace.get("agent_turns") or []:
         if turn.get("tool_call_parse") == "parse_failed":
             hits.append({"label": "malformed_args", "turn": turn["message_index"], "detail": "parse_failed"})
         if turn.get("context_trimmed"):
-            hits.append({"label": "context_overflow", "turn": turn["message_index"],
-                         "detail": f"dropped {turn.get('context_dropped_messages', 0)} messages"})
+            hits.append({
+                "label": "context_overflow",
+                "turn": turn["message_index"],
+                "detail": f"dropped {turn.get('context_dropped_messages', 0)} messages",
+            })
 
     # loop: a call repeated after it failed, or the same call made 3 or more times.
-    seen: dict[str, dict] = {}
-    count: Counter = Counter()
-    for c in calls:
-        count[c["key"]] += 1
-        prev = seen.get(c["key"])
-        if prev is not None and (prev["error"] or count[c["key"]] == 3):
-            hits.append({"label": "loop", "turn": c["index"],
-                         "detail": f"{c['name']} repeated (x{count[c['key']]})"})
-        seen[c["key"]] = c
+    previous_call_by_key: dict[str, dict] = {}
+    call_count_by_key: Counter = Counter()
+    for call in calls:
+        call_count_by_key[call["key"]] += 1
+        previous_call = previous_call_by_key.get(call["key"])
+        is_repeat_after_error = previous_call is not None and previous_call["error"]
+        is_third_call = previous_call is not None and call_count_by_key[call["key"]] == 3
+        if is_repeat_after_error or is_third_call:
+            hits.append({
+                "label": "loop",
+                "turn": call["index"],
+                "detail": f"{call['name']} repeated (x{call_count_by_key[call['key']]})",
+            })
+        previous_call_by_key[call["key"]] = call
 
     # tool_error_ignored: after a tool error the next call is a write or a transfer,
     # with no lookup in between.
-    for prev, nxt in zip(calls, calls[1:]):
-        if prev["error"] and not _is_read(nxt["name"]) and nxt["key"] != prev["key"]:
-            hits.append({"label": "tool_error_ignored", "turn": nxt["index"],
-                         "detail": f"{prev['name']} failed, then {nxt['name']}"})
+    for previous_call, next_call in zip(calls, calls[1:]):
+        if (
+            previous_call["error"]
+            and not _is_read(next_call["name"])
+            and next_call["key"] != previous_call["key"]
+        ):
+            hits.append({
+                "label": "tool_error_ignored",
+                "turn": next_call["index"],
+                "detail": f"{previous_call['name']} failed, then {next_call['name']}",
+            })
 
     # invented_id: an id-like argument that never appeared earlier in the conversation.
-    for c in calls:
-        earlier = "\n".join(
-            str(m.get("content") or "") for m in messages[: c["index"]]
-            if m.get("role") in ("user", "tool")
+    for call in calls:
+        earlier_text = "\n".join(
+            str(message.get("content") or "")
+            for message in messages[: call["index"]]
+            if message.get("role") in ("user", "tool")
         )
-        for value in _id_values(c["arguments"]):
-            if value not in earlier and value.lstrip("#") not in earlier:
-                hits.append({"label": "invented_id", "turn": c["index"],
-                             "detail": f"{c['name']}: {value}"})
+        for value in _id_values(call["arguments"]):
+            if value not in earlier_text and value.lstrip("#") not in earlier_text:
+                hits.append({
+                    "label": "invented_id",
+                    "turn": call["index"],
+                    "detail": f"{call['name']}: {value}",
+                })
                 if value in example_values:
-                    hits.append({"label": "tool_example_copied", "turn": c["index"],
-                                 "detail": f"{c['name']}: {value} is a tool description example"})
+                    hits.append({
+                        "label": "tool_example_copied",
+                        "turn": call["index"],
+                        "detail": f"{call['name']}: {value} is a tool description example",
+                    })
 
     # One hit per (label, turn); keep the first detail.
-    unique: dict[tuple, dict] = {}
-    for h in hits:
-        unique.setdefault((h["label"], h["turn"]), h)
-    return sorted(unique.values(), key=lambda h: (h["turn"], list(RULE_LAYERS).index(h["label"])))
+    unique_hits: dict[tuple, dict] = {}
+    for hit in hits:
+        unique_hits.setdefault((hit["label"], hit["turn"]), hit)
+    label_priority = list(RULE_LAYERS)
+    return sorted(unique_hits.values(), key=lambda hit: (hit["turn"], label_priority.index(hit["label"])))
 
 
 def route(fault_layer: str) -> str:
@@ -182,61 +214,71 @@ Reply with only a JSON object:
 
 def compact_trace(trace: dict, limit: int = 300) -> str:
     lines = []
-    names: dict[str, str] = {}
-    for i, m in enumerate(trace.get("messages") or []):
-        role = m.get("role")
-        content = " ".join(str(m.get("content") or "").split())[:limit]
+    tool_name_by_call_id: dict[str, str] = {}
+    for message_index, message in enumerate(trace.get("messages") or []):
+        role = message.get("role")
+        content = " ".join(str(message.get("content") or "").split())[:limit]
         if role == "assistant":
-            for tc in m.get("tool_calls") or []:
-                names[tc.get("id", "")] = tc.get("name", "")
-                lines.append(f"[{i}] agent calls {tc.get('name')}({json.dumps(tc.get('arguments'))[:limit]})")
+            for tool_call in message.get("tool_calls") or []:
+                tool_name_by_call_id[tool_call.get("id", "")] = tool_call.get("name", "")
+                arguments_text = json.dumps(tool_call.get("arguments"))[:limit]
+                lines.append(f"[{message_index}] agent calls {tool_call.get('name')}({arguments_text})")
             if content:
-                lines.append(f"[{i}] agent: {content}")
+                lines.append(f"[{message_index}] agent: {content}")
         elif role == "tool":
-            err = " (ERROR)" if m.get("error") else ""
-            lines.append(f"[{i}] tool {names.get(m.get('id', ''), '')}{err}: {content}")
+            error_mark = " (ERROR)" if message.get("error") else ""
+            tool_name = tool_name_by_call_id.get(message.get("id", ""), "")
+            lines.append(f"[{message_index}] tool {tool_name}{error_mark}: {content}")
         else:
-            lines.append(f"[{i}] {role}: {content}")
+            lines.append(f"[{message_index}] {role}: {content}")
     return "\n".join(lines)
 
 
 def expected_actions(trace: dict) -> str:
-    checks = (trace.get("reward_info") or {}).get("action_checks") or []
-    out = []
-    for c in checks:
-        a = c.get("action") or {}
-        mark = "done" if c.get("action_match") else "MISSING"
-        out.append(f"- {a.get('name')}({json.dumps(a.get('arguments'))}) [{mark}]")
-    return "\n".join(out) or "(none)"
+    action_checks = (trace.get("reward_info") or {}).get("action_checks") or []
+    lines = []
+    for action_check in action_checks:
+        action = action_check.get("action") or {}
+        mark = "done" if action_check.get("action_match") else "MISSING"
+        lines.append(f"- {action.get('name')}({json.dumps(action.get('arguments'))}) [{mark}]")
+    return "\n".join(lines) or "(none)"
 
 
 def judge_messages(trace: dict, instruction: str | None) -> list[dict]:
-    user = (
+    user_message = (
         f"User goal:\n{instruction or '(unknown)'}\n\n"
         f"Expected agent actions:\n{expected_actions(trace)}\n\n"
         f"Run (turn numbers in brackets):\n{compact_trace(trace)}"
     )
-    return [{"role": "system", "content": JUDGE_SYSTEM.format(labels=", ".join(JUDGE_LABELS))},
-            {"role": "user", "content": user}]
+    system_message = JUDGE_SYSTEM.format(labels=", ".join(JUDGE_LABELS))
+    return [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": user_message},
+    ]
 
 
 def parse_verdict(text: str | None) -> dict:
     """Validate a judge reply. Raises ValueError with a short reason."""
-    obj_text = _first_json_object(text or "")
-    if not obj_text:
+    verdict_text = _first_json_object(text or "")
+    if not verdict_text:
         raise ValueError("no JSON object")
-    obj = json.loads(obj_text)
-    if obj.get("label") not in JUDGE_LABELS:
+    verdict = json.loads(verdict_text)
+    if verdict.get("label") not in JUDGE_LABELS:
         raise ValueError(f"label must be one of {', '.join(JUDGE_LABELS)}")
-    if obj.get("fault_layer") not in FAULT_LAYERS:
+    if verdict.get("fault_layer") not in FAULT_LAYERS:
         raise ValueError("fault_layer must be tool, model or environment")
-    turn = obj.get("first_wrong_turn")
-    if isinstance(turn, str) and turn.strip().lstrip("[").rstrip("]").isdigit():
-        turn = int(turn.strip().strip("[]"))
-    if not isinstance(turn, int):
+
+    first_wrong_turn = verdict.get("first_wrong_turn")
+    if isinstance(first_wrong_turn, str) and first_wrong_turn.strip().lstrip("[").rstrip("]").isdigit():
+        first_wrong_turn = int(first_wrong_turn.strip().strip("[]"))
+    if not isinstance(first_wrong_turn, int):
         raise ValueError("first_wrong_turn must be an integer")
-    return {"first_wrong_turn": turn, "label": obj["label"], "fault_layer": obj["fault_layer"],
-            "explanation": str(obj.get("explanation", ""))}
+    return {
+        "first_wrong_turn": first_wrong_turn,
+        "label": verdict["label"],
+        "fault_layer": verdict["fault_layer"],
+        "explanation": str(verdict.get("explanation", "")),
+    }
 
 
 def run_judge(trace: dict, instruction: str | None, chat: Callable[[list[dict]], str]) -> dict:
@@ -245,9 +287,11 @@ def run_judge(trace: dict, instruction: str | None, chat: Callable[[list[dict]],
     reply = chat(messages)
     try:
         return parse_verdict(reply)
-    except (ValueError, json.JSONDecodeError) as exc:
-        messages += [{"role": "assistant", "content": reply or ""},
-                     {"role": "user", "content": f"Invalid reply ({exc}). Reply with only the JSON object."}]
+    except (ValueError, json.JSONDecodeError) as reply_error:
+        messages += [
+            {"role": "assistant", "content": reply or ""},
+            {"role": "user", "content": f"Invalid reply ({reply_error}). Reply with only the JSON object."},
+        ]
         return parse_verdict(chat(messages))
 
 
@@ -261,40 +305,68 @@ def classify_run(
     example_values: set[str] | None = None,
 ) -> dict | None:
     """One failures.jsonl row for a failed run, or None if the run passed."""
-    if trace.get("termination_reason") != INFRA_ERROR and not is_failed(trace):
+    is_infra_error = trace.get("termination_reason") == INFRA_ERROR
+    if not is_infra_error and not is_failed(trace):
         return None
-    row: dict[str, Any] = {"task_id": trace.get("task_id"), "trial": trace.get("trial"),
-                           "simulation_id": trace.get("simulation_id"), "reward": trace.get("reward")}
-    if trace.get("termination_reason") == INFRA_ERROR:
-        return {**row, "labels": ["environment"], "rule_hits": [], "first_wrong_turn": None,
-                "fault_layer": "environment", "route": "no_fix", "source": "detect",
-                "explanation": (trace.get("error") or "infrastructure error")[:300]}
 
-    hits = rule_labels(trace, example_values)
-    labels = list(dict.fromkeys(h["label"] for h in hits))
+    row: dict[str, Any] = {
+        "task_id": trace.get("task_id"),
+        "trial": trace.get("trial"),
+        "simulation_id": trace.get("simulation_id"),
+        "reward": trace.get("reward"),
+    }
+    if is_infra_error:
+        return {
+            **row,
+            "labels": ["environment"],
+            "rule_hits": [],
+            "first_wrong_turn": None,
+            "fault_layer": "environment",
+            "route": "no_fix",
+            "source": "detect",
+            "explanation": (trace.get("error") or "infrastructure error")[:300],
+        }
+
+    rule_hits = rule_labels(trace, example_values)
+    labels = list(dict.fromkeys(hit["label"] for hit in rule_hits))
+
     verdict = None
     judge_error = None
-    if chat is not None and (judge_all or not hits):
+    if chat is not None and (judge_all or not rule_hits):
         try:
             verdict = run_judge(trace, instruction, chat)
-        except Exception as exc:  # noqa: BLE001 - record and fall back to rules
-            judge_error = str(exc)[:300]
+        except Exception as judge_exception:  # noqa: BLE001 - record and fall back to rules
+            judge_error = str(judge_exception)[:300]
 
     if verdict:
         labels = list(dict.fromkeys(labels + [verdict["label"]]))
-        layer, first, source = verdict["fault_layer"], verdict["first_wrong_turn"], "judge"
+        fault_layer = verdict["fault_layer"]
+        first_wrong_turn = verdict["first_wrong_turn"]
+        source = "judge"
         explanation = verdict["explanation"]
-    elif hits:
-        layer, first, source = _rule_layer(labels), hits[0]["turn"], "rules"
-        explanation = "; ".join(f"{h['label']} at turn {h['turn']}: {h['detail']}" for h in hits[:5])
+    elif rule_hits:
+        fault_layer = _rule_layer(labels)
+        first_wrong_turn = rule_hits[0]["turn"]
+        source = "rules"
+        explanation = "; ".join(
+            f"{hit['label']} at turn {hit['turn']}: {hit['detail']}" for hit in rule_hits[:5]
+        )
     else:
-        layer, first, source = "model", None, "unclassified"
+        fault_layer = "model"
+        first_wrong_turn = None
+        source = "unclassified"
         labels = ["unclassified"]
         explanation = judge_error or "no rule matched and no judge verdict"
 
-    row.update({"labels": labels, "rule_hits": hits, "first_wrong_turn": first,
-                "fault_layer": layer, "route": route(layer), "source": source,
-                "explanation": explanation})
+    row.update({
+        "labels": labels,
+        "rule_hits": rule_hits,
+        "first_wrong_turn": first_wrong_turn,
+        "fault_layer": fault_layer,
+        "route": route(fault_layer),
+        "source": source,
+        "explanation": explanation,
+    })
     if judge_error:
         row["judge_error"] = judge_error
     return row
@@ -303,21 +375,26 @@ def classify_run(
 def summarize_failures(rows: list[dict], num_runs: int) -> dict:
     """Counts over failures.jsonl rows. Label, route and layer counts cover failed runs only;
     passed runs that only AgentTune's detector flagged are counted in num_detector_only."""
-    detected_only = [r for r in rows if r.get("outcome_failed") is False]
-    rows = [r for r in rows if r.get("outcome_failed") is not False]
-    labels: Counter = Counter()
-    for r in rows:
-        labels.update(r["labels"])
+    detector_only_rows = [row for row in rows if row.get("outcome_failed") is False]
+    failed_rows = [row for row in rows if row.get("outcome_failed") is not False]
+
+    label_counts: Counter = Counter()
+    for row in failed_rows:
+        label_counts.update(row["labels"])
+    detected_by_counts = Counter(
+        "+".join(row.get("detected_by") or ["outcome"]) for row in failed_rows + detector_only_rows
+    )
+    root_cause_counts = Counter(
+        row["agenttune_root_cause"] for row in failed_rows if row.get("agenttune_root_cause")
+    )
     return {
         "num_runs": num_runs,
-        "num_failed": len(rows),
-        "num_detector_only": len(detected_only),
-        "per_detected_by": dict(Counter("+".join(r.get("detected_by") or ["outcome"])
-                                        for r in rows + detected_only).most_common()),
-        "per_agenttune_root_cause": dict(Counter(r["agenttune_root_cause"] for r in rows
-                                                 if r.get("agenttune_root_cause")).most_common()),
-        "per_label": dict(labels.most_common()),
-        "per_route": dict(Counter(r["route"] for r in rows).most_common()),
-        "per_fault_layer": dict(Counter(r["fault_layer"] for r in rows).most_common()),
-        "per_source": dict(Counter(r["source"] for r in rows).most_common()),
+        "num_failed": len(failed_rows),
+        "num_detector_only": len(detector_only_rows),
+        "per_detected_by": dict(detected_by_counts.most_common()),
+        "per_agenttune_root_cause": dict(root_cause_counts.most_common()),
+        "per_label": dict(label_counts.most_common()),
+        "per_route": dict(Counter(row["route"] for row in failed_rows).most_common()),
+        "per_fault_layer": dict(Counter(row["fault_layer"] for row in failed_rows).most_common()),
+        "per_source": dict(Counter(row["source"] for row in failed_rows).most_common()),
     }
