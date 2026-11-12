@@ -25,6 +25,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +41,11 @@ logger = log.get_logger("run_round")
 REGION = "asia-south1"
 IMAGE = "asia-south1-docker.pkg.dev/lexsi-hackathon/shipwright/harness"
 STAGE_ORDER = ["baseline", "classify", "teacher", "data", "train", "gate"]
+# A stage that finished with more infra errors than this share of its runs, or a teacher that kept fewer
+# traces than this, stops the round before the next stage (override with --force).
+MAX_INFRA_ERROR_RATE = 0.25
+MIN_KEPT_TRACES = 10
+IMAGE_POLL_SECONDS = 30
 
 
 @dataclass
@@ -71,7 +77,7 @@ BUDGETS = {
 DESCRIPTIONS = {
     "baseline": "Tiny Aya (no adapter, no tool patches) on the 74 train tasks, 1 trial",
     "classify": "label and route every failure (AgentTune detector and classifier, our rules)",
-    "teacher": "the teacher replays the weight-fix failures, 3 trials each; passes are kept",
+    "teacher": "the teacher replays the tool-fix and weight-fix failures (minus tasks it never solved), 3 trials each; passes are kept",
     "data": "build the SFT dataset from the teacher passes and push it to the HF dataset repo",
     "train": "LoRA on Tiny Aya Global with AgentTune (HF Job, L4, 1h limit)",
     "gate": "base vs the new adapter on the 20 held-out tasks, k=3, 8 checks (HF Job, A10G, 90 min limit)",
@@ -87,6 +93,11 @@ def parse_options() -> argparse.Namespace:
     parser.add_argument("--owner", default="ishank", help="whose Cloud Run job runs the cloud stages")
     parser.add_argument("--round-budget-usd", type=float, default=8.0, help="no stage starts if its cap passes this total")
     parser.add_argument("--max-concurrency", type=int, default=8)
+    parser.add_argument("--skip-unsolved-from", nargs="*", default=[], metavar="RUN_DIR_NAME",
+                        help="teacher: earlier teacher run dirs (e.g. r2-teacher); leave out the tasks they never solved")
+    parser.add_argument("--wait-for-image-minutes", type=int, default=20,
+                        help="cloud stages: how long to wait for the Cloud Build to finish and the job to be repointed")
+    parser.add_argument("--force", action="store_true", help="skip the health checks on the previous stage")
     parser.add_argument("--dry-run", action="store_true", help="cloud stages with the fake LLM: tests the plumbing, free")
     parser.add_argument("--launch", action="store_true", help="train and gate: submit the HF Job (spends credits)")
     return parser.parse_args()
@@ -113,14 +124,20 @@ def load_manifest(options: argparse.Namespace) -> dict:
 
 
 def save_manifest(manifest: dict, round_number: int) -> None:
-    """Spent so far: the metered cost of a stage, or its estimate when the stage is not metered."""
-    spent = 0.0
+    """Write the manifest with its spend split in two: metered (the stage measured its own cost) and
+    estimated (a GPU job or an unmetered stage: its estimate, until you read the real bill)."""
+    metered = 0.0
+    estimated = 0.0
     for stage_entry in manifest["stages"].values():
         if stage_entry.get("actual_usd") is not None:
-            spent += stage_entry["actual_usd"]
+            stage_entry["cost_basis"] = "metered"
+            metered += stage_entry["actual_usd"]
         else:
-            spent += stage_entry.get("estimate_usd") or 0.0
-    manifest["spent_usd"] = round(spent, 4)
+            stage_entry["cost_basis"] = "estimated"
+            estimated += stage_entry.get("estimate_usd") or 0.0
+    manifest["spent_metered_usd"] = round(metered, 4)
+    manifest["spent_estimated_usd"] = round(estimated, 4)
+    manifest["spent_usd"] = round(metered + estimated, 4)
     manifest_path(round_number).write_text(json.dumps(manifest, indent=2))
 
 
@@ -149,26 +166,63 @@ def gcloud_command(*arguments: str) -> list[str]:
     return [binary, f"--configuration={gcs_runs.gcloud_config(binary)}", f"--project={gcs_runs.PROJECT}", *arguments]
 
 
-def check_cloud_job_runs_this_commit(owner: str) -> None:
-    """The job must run the image built from HEAD, or the round would run old code."""
-    head_sha = run_command(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"]).stdout.strip()
-    dirty = run_command(["git", "-C", str(ROOT), "status", "--porcelain"]).stdout.strip()
-    if dirty:
-        raise SystemExit("uncommitted changes: commit and push first, so the image matches what you ran")
-
+def job_image_digest(owner: str) -> str:
     job = run_command(gcloud_command(
         "run", "jobs", "describe", f"shipwright-{owner}", f"--region={REGION}", "--format=json"))
     job_image = json.loads(job.stdout)["spec"]["template"]["spec"]["template"]["spec"]["containers"][0]["image"]
-    job_digest = job_image.split("@")[-1]
+    return job_image.split("@")[-1]
 
+
+def commit_image_digest(commit: str) -> str:
+    """The digest of the image tagged with the commit, or "" while the Cloud Build has not pushed it."""
     tag = run_command(gcloud_command(
-        "artifacts", "docker", "images", "describe", f"{IMAGE}:{head_sha}", "--format=value(image_summary.digest)"))
-    head_digest = tag.stdout.strip()
-    if not head_digest:
-        raise SystemExit(f"no image for commit {head_sha} yet: push it and wait for the Cloud Build")
-    if head_digest != job_digest:
-        raise SystemExit(f"shipwright-{owner} runs {job_digest[:19]}, not the image of {head_sha}")
-    logger.info("cloud job runs this commit", commit=head_sha, digest=job_digest[:19])
+        "artifacts", "docker", "images", "describe", f"{IMAGE}:{commit}", "--format=value(image_summary.digest)"))
+    return tag.stdout.strip()
+
+
+def check_cloud_job_runs_this_commit(owner: str, wait_minutes: int) -> None:
+    """The job must run the image built from HEAD, or the round would run old code.
+
+    The Cloud Build tags the image first and repoints the job in its last step, so right after a push the
+    two disagree for a few minutes: wait for them (up to ``wait_minutes``) instead of failing."""
+    head_sha = run_command(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"]).stdout.strip()
+    if run_command(["git", "-C", str(ROOT), "status", "--porcelain"]).stdout.strip():
+        raise SystemExit("uncommitted changes: commit and push first, so the image matches what you ran")
+    unpushed = run_command(["git", "-C", str(ROOT), "rev-list", "--count", "@{upstream}..HEAD"])
+    if unpushed.returncode != 0 or unpushed.stdout.strip() != "0":
+        raise SystemExit(f"commit {head_sha} is not pushed: push it so Cloud Build builds its image")
+
+    deadline = time.monotonic() + wait_minutes * 60
+    while True:
+        head_digest = commit_image_digest(head_sha)
+        job_digest = job_image_digest(owner)
+        if head_digest and head_digest == job_digest:
+            logger.info("cloud job runs this commit", commit=head_sha, digest=job_digest[:19])
+            return
+        if head_digest:
+            reason = f"shipwright-{owner} runs {job_digest[:19]}, not the image of {head_sha}"
+        else:
+            reason = f"no image for commit {head_sha} yet"
+        if time.monotonic() >= deadline:
+            raise SystemExit(f"{reason} after waiting {wait_minutes} minutes: check the Cloud Build")
+        logger.info("waiting for the Cloud Build", reason=reason)
+        time.sleep(IMAGE_POLL_SECONDS)
+
+
+def check_previous_stage_is_healthy(manifest: dict, stage: str) -> None:
+    """Stop the round when the stage before this one finished but its output is not worth building on."""
+    previous_stage = STAGE_ORDER[STAGE_ORDER.index(stage) - 1]
+    previous_entry = manifest["stages"][previous_stage]
+    runs = previous_entry.get("num_runs") or 0
+    infra_errors = previous_entry.get("num_infra_errors") or 0
+    if runs and infra_errors / runs > MAX_INFRA_ERROR_RATE:
+        raise SystemExit(
+            f"{previous_stage}: {infra_errors} of {runs} runs were infra errors "
+            f"(over {MAX_INFRA_ERROR_RATE:.0%}): fix the cause, or pass --force"
+        )
+    kept = previous_entry.get("kept_traces")
+    if previous_stage == "teacher" and kept is not None and kept < MIN_KEPT_TRACES:
+        raise SystemExit(f"teacher kept {kept} traces (under {MIN_KEPT_TRACES}): too little to train on, or pass --force")
 
 
 def check_budget(manifest: dict, stage: str) -> None:
@@ -230,18 +284,21 @@ def cloud_stage_arguments(stage: str, options: argparse.Namespace) -> tuple[list
             arguments.append("--no-llm")
         return arguments, [baseline_name], baseline_name
     teacher_name = teacher_dir_name(options.round)
+    skipped_run_names = list(options.skip_unsolved_from)
     arguments = [
         "teacher_runs.py", "--teacher-model", options.teacher_model, "--user-model", options.user_model,
         "--from-run", f"runs/{baseline_name}", "--trials=3", "--max-concurrency", str(options.max_concurrency),
         "--max-cost-usd", cap, "--output-dir", f"runs/{teacher_name}",
     ]
+    if skipped_run_names:
+        arguments += ["--skip-unsolved-from", *[f"runs/{name}" for name in skipped_run_names]]
     if options.dry_run:
         arguments.append("--dry-run")
-    return arguments, [baseline_name], teacher_name
+    return arguments, [baseline_name, *skipped_run_names], teacher_name
 
 
 def run_cloud_stage(stage: str, options: argparse.Namespace) -> dict:
-    check_cloud_job_runs_this_commit(options.owner)
+    check_cloud_job_runs_this_commit(options.owner, options.wait_for_image_minutes)
     script_arguments, fetch_run_dirs, output_dir_name = cloud_stage_arguments(stage, options)
     exit_code = run_cloud_job(options.owner, script_arguments, fetch_run_dirs)
     output_dir = pull_stage_output(options.owner, output_dir_name)
@@ -258,6 +315,8 @@ def run_cloud_stage(stage: str, options: argparse.Namespace) -> dict:
         "num_infra_errors": summary.get("num_infra_errors"),
         "cost_cap_hit": summary.get("cost_cap_hit"),
     }
+    if entry["num_runs"]:
+        entry["infra_error_rate"] = round((entry["num_infra_errors"] or 0) / entry["num_runs"], 3)
     if stage == "classify":
         failure_summary_path = output_dir / "failure_summary.json"
         if failure_summary_path.exists():
@@ -326,7 +385,8 @@ def print_plan(options: argparse.Namespace, manifest: dict) -> None:
         done = manifest["stages"].get(stage)
         mark = "done" if done and done.get("exit_code") == 0 else "todo"
         print(f"  {mark}  {stage:9} est ${budget.estimate_usd:5.2f}  cap ${budget.cap_usd:5.2f}  {DESCRIPTIONS[stage]}")
-    print(f"\n  total   est ${total_estimate:.2f}   cap ${total_cap:.2f}   spent so far ${manifest.get('spent_usd') or 0:.2f}")
+    print(f"\n  total   est ${total_estimate:.2f}   cap ${total_cap:.2f}   spent so far ${manifest.get('spent_usd') or 0:.2f}"
+          f" (metered ${manifest.get('spent_metered_usd') or 0:.2f}, estimated ${manifest.get('spent_estimated_usd') or 0:.2f})")
     print("\n  Tiny Aya's price on the HF router is an assumption ($0.50 in, $1.50 out per 1M tokens):")
     print("  read the real spend in your HF billing page after the baseline stage.")
 
@@ -342,6 +402,8 @@ def main() -> int:
     previous_stage = STAGE_ORDER[STAGE_ORDER.index(stage) - 1] if stage != STAGE_ORDER[0] else None
     if previous_stage and manifest["stages"].get(previous_stage, {}).get("exit_code") != 0:
         raise SystemExit(f"run {previous_stage} first: it has no finished entry in {manifest_path(options.round).name}")
+    if previous_stage and not options.force:
+        check_previous_stage_is_healthy(manifest, stage)
     check_budget(manifest, stage)
 
     if stage in ("baseline", "classify", "teacher"):
@@ -365,4 +427,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(log.run_script(main, step="run_round"))
+    sys.exit(log.run_script(main, step="run_round", meta=True))

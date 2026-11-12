@@ -74,6 +74,16 @@ def _error_status(exc: BaseException) -> Any:
     return getattr(exc, "status_code", None) or type(exc).__name__
 
 
+def _error_body(exc: BaseException) -> str | None:
+    """What the server said (the response body), when the exception carries it: a bare 400 tells us nothing."""
+    body = getattr(exc, "body", None)
+    if body is None:
+        body = getattr(getattr(exc, "response", None), "text", None)
+    if body is None:
+        return None
+    return str(body)[:500]
+
+
 def llm_call(role: str, model: str, kwargs: dict, call: Callable[[], Any], *, retries: Callable[[], int] | None = None
              ) -> Any:
     """Run one LLM call with a span and a log line. Raises what ``call`` raises."""
@@ -95,7 +105,7 @@ def llm_call(role: str, model: str, kwargs: dict, call: Callable[[], Any], *, re
         except Exception as e:
             ms = round((time.perf_counter() - start) * 1000, 1)
             logger.error(f"llm call failed: {role} {model}", role=role, latency_ms=ms, status=_error_status(e),
-                         retries=retries() if retries else 0, last_input=last_input,
+                         error_message=str(e)[:500], error_body=_error_body(e), retries=retries() if retries else 0, last_input=last_input,
                          last_output=(state or {}).get("last_output"), exc_info=True, stack_info=True)
             raise
         ms = round((time.perf_counter() - start) * 1000, 1)

@@ -14,7 +14,8 @@ specification.loader.exec_module(run_round)
 
 
 def make_options(**overrides) -> argparse.Namespace:
-    values = dict(round=2, owner="ishank", user_model="u", teacher_model="t", max_concurrency=4, dry_run=False)
+    values = dict(round=2, owner="ishank", user_model="u", teacher_model="t", max_concurrency=4, dry_run=False,
+                  skip_unsolved_from=[], force=False)
     values.update(overrides)
     return argparse.Namespace(**values)
 
@@ -50,3 +51,54 @@ def test_unmetered_stages_count_their_estimate_as_spent(tmp_path, monkeypatch):
     }}
     run_round.save_manifest(manifest, 2)
     assert manifest["spent_usd"] == 1.25
+
+
+def test_teacher_can_skip_the_tasks_earlier_teacher_runs_never_solved():
+    options = make_options(skip_unsolved_from=["r2-teacher"])
+    arguments, fetched, _ = run_round.cloud_stage_arguments("teacher", options)
+    assert arguments[arguments.index("--skip-unsolved-from") + 1] == "runs/r2-teacher"
+    assert fetched == ["r2-baseline", "r2-teacher"]
+
+
+def test_manifest_splits_metered_and_estimated_spend(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_round, "ROOT", tmp_path)
+    (tmp_path / "runs").mkdir()
+    manifest = {"stages": {
+        "baseline": {"actual_usd": 1.25, "estimate_usd": 1.5},
+        "train": {"actual_usd": None, "estimate_usd": 0.4},
+    }}
+    run_round.save_manifest(manifest, 9)
+    assert manifest["spent_metered_usd"] == 1.25 and manifest["spent_estimated_usd"] == 0.4
+    assert manifest["spent_usd"] == 1.65
+    assert manifest["stages"]["baseline"]["cost_basis"] == "metered"
+    assert manifest["stages"]["train"]["cost_basis"] == "estimated"
+
+
+def test_health_check_stops_a_round_after_too_many_infra_errors_or_too_few_kept_traces():
+    import pytest
+
+    flaky = {"stages": {"baseline": {"num_runs": 74, "num_infra_errors": 30}}}
+    with pytest.raises(SystemExit, match="infra errors"):
+        run_round.check_previous_stage_is_healthy(flaky, "classify")
+    healthy = {"stages": {"baseline": {"num_runs": 74, "num_infra_errors": 9}}}
+    run_round.check_previous_stage_is_healthy(healthy, "classify")
+    small = {"stages": {"teacher": {"num_runs": 72, "num_infra_errors": 11, "kept_traces": 4}}}
+    with pytest.raises(SystemExit, match="kept 4"):
+        run_round.check_previous_stage_is_healthy(small, "data")
+
+
+def test_image_check_waits_for_the_job_to_be_repointed(monkeypatch):
+    import subprocess
+
+    def fake_run_command(command):
+        output = {"rev-parse": "abc1234\n", "status": "", "rev-list": "0\n"}[command[3]]
+        return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+    job_digests = iter(["sha256:old", "sha256:old", "sha256:new"])
+    sleeps = []
+    monkeypatch.setattr(run_round, "run_command", fake_run_command)
+    monkeypatch.setattr(run_round, "commit_image_digest", lambda commit: "sha256:new")
+    monkeypatch.setattr(run_round, "job_image_digest", lambda owner: next(job_digests))
+    monkeypatch.setattr(run_round.time, "sleep", sleeps.append)
+    run_round.check_cloud_job_runs_this_commit("ishank", wait_minutes=20)
+    assert len(sleeps) == 2  # two polls saw the old image, the third saw the new one

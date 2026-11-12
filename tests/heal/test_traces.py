@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 
 from shipwright.llm.patches import sanitize_tool_calls
-from shipwright.heal.traces import MALFORMED_KEY, build_trace, summarize, write_jsonl
+from shipwright.heal.traces import MALFORMED_KEY, build_trace, infra_error_kind, summarize, write_jsonl
 
 TOOLS = {"get_user_details", "find_user_id_by_email"}
 
@@ -91,3 +91,17 @@ def test_parse_status_in_trace():
     assert turn["raw_output"].startswith("```json")
     assert "tool_call_parse_failed" in turn["errors"] and not turn["text_tool_call"]
     assert summarize([t])["tool_call_parse_failures"] == 1
+
+
+def test_infra_error_kind_names_the_cause():
+    kinds = {
+        "litellm.Timeout: APITimeoutError - Request timed out.": "timeout",
+        "litellm.BadRequestError: OpenAIException - Error code: 400": "bad_request_400",
+        "litellm.RateLimitError: 429": "rate_limit_429",
+        "UserMessage must have either content or tool_calls. Got UserMessage": "empty_user_reply",
+        "run stopped: spent the --max-cost-usd limit of $2.00": "cost_cap",
+        "something else": "other",
+        None: "other",
+    }
+    for error_text, expected_kind in kinds.items():
+        assert infra_error_kind(error_text) == expected_kind

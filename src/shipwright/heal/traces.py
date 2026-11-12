@@ -213,6 +213,22 @@ def _average(total: float, count: int) -> float | None:
     return None
 
 
+def infra_error_kind(error_text: str | None) -> str:
+    """A short name for why a run ended as an infra error, from tau2's error text."""
+    text = error_text or ""
+    if "Timeout" in text or "timed out" in text:
+        return "timeout"
+    if "400" in text or "BadRequest" in text:
+        return "bad_request_400"
+    if "429" in text or "RateLimit" in text:
+        return "rate_limit_429"
+    if "UserMessage must have either content" in text:
+        return "empty_user_reply"
+    if "max-cost-usd" in text or "BudgetExceeded" in text:
+        return "cost_cap"
+    return "other"
+
+
 def summarize(traces: list[dict]) -> dict:
     """Aggregate numbers over all traces."""
     run_count = len(traces)
@@ -261,6 +277,8 @@ def summarize(traces: list[dict]) -> dict:
         "num_infra_errors": len(infra_error_traces),
         "pass_rate_excluding_infra_errors": _average(passed_clean_count, clean_run_count),
         "infra_error_messages": dict(infra_error_messages.most_common()),
+        "infra_errors_by_kind": dict(Counter(infra_error_kind(trace.get("error")) for trace in infra_error_traces)),
+        "infra_error_rate": _average(len(infra_error_traces), run_count),
         "avg_reward": _average(sum(trace["reward"] or 0.0 for trace in traces), run_count),
         "tool_calls": tool_call_count,
         "malformed_tool_calls": malformed_count,

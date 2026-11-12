@@ -379,8 +379,12 @@ def finalize(*, exit_code: int | None, crashed: bool, default_dir: Path | None =
     return statuses
 
 
-def run_script(main: Callable[[], int | None], *, step: str, component: str | None = None) -> int:
-    """Run a script's ``main()`` with logging, tracing and the failure report. Returns the exit code."""
+def run_script(main: Callable[[], int | None], *, step: str, component: str | None = None,
+               meta: bool = False) -> int:
+    """Run a script's ``main()`` with logging, tracing and the failure report. Returns the exit code.
+
+    ``meta=True`` is for scripts that launch or move other runs (run_round, train_job, gate_job, pull_runs):
+    they have no run output of their own, so their log goes to ``runs/_meta/`` and stays out of the run list."""
     argv = sys.argv[1:]
     original = list(argv)
     fail_at = pop_fail_at(argv)
@@ -419,8 +423,9 @@ def run_script(main: Callable[[], int | None], *, step: str, component: str | No
         if code:
             otel_live.mark_error(sp, f"exit {code}")
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        default_parent = ROOT / "runs" / "_meta" if meta else ROOT / "runs"
         statuses = finalize(exit_code=code, crashed=crashed,
-                            default_dir=ROOT / "runs" / f"{component}-{stamp}")
+                            default_dir=default_parent / f"{component}-{stamp}")
         if code == 0 and "failed" in statuses.values():
             # e.g. every task run hit an infra error: make the job show as failed too
             logger.error("run status is failed: exit 1", statuses={str(k): v for k, v in statuses.items()})

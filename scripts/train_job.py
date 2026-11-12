@@ -135,4 +135,4 @@ def launch_job(options: argparse.Namespace, training_script_arguments: list[str]
 if __name__ == "__main__":
     from shipwright.observability import log
 
-    sys.exit(log.run_script(main, step="train"))
+    sys.exit(log.run_script(main, step="train", meta=True))
