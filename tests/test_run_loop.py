@@ -61,7 +61,11 @@ def test_the_candidate_config_of_the_next_round_points_at_its_own_adapter(tmp_pa
         "# Round 3 weight-fix candidate\nname: r3-weight\nadapter:\n  repo: x/y\n  revision: round-3\nroute: weight_fix\n")
     calls = []
     monkeypatch.setattr(run_loop, "ROOT", tmp_path)
-    monkeypatch.setattr(run_loop.subprocess, "run", lambda command, **keyword_arguments: calls.append(command))
+    def fake_run(command, **keyword_arguments):
+        calls.append(command)
+        return argparse.Namespace(returncode=1)  # `git diff --cached --quiet` says: the file changed
+
+    monkeypatch.setattr(run_loop.subprocess, "run", fake_run)
     run_loop.write_candidate_config(argparse.Namespace(round=4, from_round=3))
     written = (configs / "r4-weight.yaml").read_text()
     assert "name: r4-weight" in written and "revision: round-4" in written and "# Round 4" in written
@@ -96,3 +100,19 @@ def test_every_command_the_loop_builds_parses_in_the_script_it_calls():
     assert launch_options.dataset_revision == "round-5" and launch_options.flavor == run_loop.TRAIN_FLAVOR
     assert launch_options.launch is True
     assert training_arguments == ["--epochs", "2", "--lr", "0.0001"]  # handed to train_lora.py, not parsed here
+
+
+def test_rerunning_the_gate_step_does_not_commit_an_unchanged_config(tmp_path, monkeypatch):
+    configs = tmp_path / "configs" / "systems"
+    configs.mkdir(parents=True)
+    (configs / "r3-weight.yaml").write_text("name: r3-weight\nadapter:\n  revision: round-3\n")
+    calls = []
+
+    def fake_run(command, **keyword_arguments):
+        calls.append(command)
+        return argparse.Namespace(returncode=0)  # nothing staged: already committed
+
+    monkeypatch.setattr(run_loop, "ROOT", tmp_path)
+    monkeypatch.setattr(run_loop.subprocess, "run", fake_run)
+    run_loop.write_candidate_config(argparse.Namespace(round=4, from_round=3))
+    assert not any("commit" in command for command in calls) and not any("push" in command for command in calls)

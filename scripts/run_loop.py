@@ -294,6 +294,9 @@ def write_candidate_config(options: argparse.Namespace) -> str:
     path.write_text(new_text)
     relative_path = str(path.relative_to(ROOT))
     subprocess.run(["git", "-C", str(ROOT), "add", relative_path], check=True)
+    unchanged = subprocess.run(["git", "-C", str(ROOT), "diff", "--cached", "--quiet", "--", relative_path]).returncode == 0
+    if unchanged:  # a rerun of the gate step: the config is already committed
+        return relative_path
     # Only this file, whatever else is staged: the loop must not sweep up work in progress.
     subprocess.run(["git", "-C", str(ROOT), "commit", "-q", "-m",
                     f"loop: round {options.round} candidate config (adapter round-{options.round})", "--", relative_path],
