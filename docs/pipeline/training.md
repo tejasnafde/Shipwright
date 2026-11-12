@@ -66,6 +66,9 @@ language guidance); this rebuild was checked equal to a recorded prompt on 2026-
   `--long-mode drop` drops long runs instead.
 - Duplicates (same messages) are removed. Examples over `--max-tokens` (8192) are dropped.
 - `--replay RUN_DIR` mixes in Tiny Aya's own successful runs (`source: replay`).
+- `--tool-patches patches/ledger.jsonl` renders every example with the ledger's applied tool
+  patches, so the LoRA trains on the tool list the gated system sees (teacher runs used the
+  original descriptions; fields a run already had patched stay as they are).
 - Only runs from the train split are accepted (`run_config.json`); `--allow-split` overrides.
 - `sft_stats.json`: examples, per source, tasks, assistant turns, average and max tokens, drops.
 

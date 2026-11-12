@@ -183,3 +183,21 @@ def test_prompt_uses_applied_patches():
     kwargs, info = pt.prepare_request({"model": "m", "messages": [{"role": "user", "content": "hi"}],
                                        "tools": TOOLS})
     assert "Always call it" not in kwargs["messages"][0]["content"] and "tool_patches" not in info
+
+
+def test_build_sft_patch_prompt_is_idempotent():
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "build_sft", Path(__file__).resolve().parents[2] / "scripts" / "build_sft.py")
+    build_sft = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build_sft)
+    p = {"tool": "get_order_details", "field": "description", "new_text": "Get one order."}
+    rows = _ledger_with([p])
+    rows = tf.set_status(rows, rows[0]["id"], "applied", TOOLS)
+    prompt = {"system": "s", "tools": TOOLS}
+    once = build_sft.patch_prompt(prompt, rows)
+    assert tf.get_field(tf.tool_map(once["tools"])["get_order_details"], "description") == "Get one order."
+    assert build_sft.patch_prompt(once, rows) == once  # a run that already used the patches
+    assert build_sft.patch_prompt(prompt, None) is prompt

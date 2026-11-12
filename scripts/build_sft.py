@@ -45,6 +45,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--max-replay", type=int, default=None, help="cap on replay examples")
     parser.add_argument("--allow-split", action="store_true", help="accept runs not on the train split")
+    parser.add_argument(
+        "--tool-patches", type=Path, default=None, metavar="LEDGER",
+        help="render every example with the ledger's applied tool patches (the gate's tool list)",
+    )
 
     # Length limits.
     parser.add_argument(
@@ -129,6 +133,30 @@ def reconstruct_prompt(domain: str = "retail", seed: int = 300) -> dict:
     return {"system": system_prompt, "tools": [tool.openai_schema for tool in environment.get_tools()]}
 
 
+def patch_prompt(prompt: dict | None, rows: list[dict] | None) -> dict | None:
+    """``prompt`` with every applied patch in ``rows``; fields already patched stay as they are.
+
+    Teacher runs used the original tool descriptions, the gate uses the patched ones: render
+    the training data with the tool list the gated system sees.
+    """
+    if not prompt or not rows:
+        return prompt
+    from shipwright.heal import tool_fix
+
+    tools = tool_fix.tool_map(prompt["tools"])
+    todo = []
+    for r in rows:
+        if r.get("status") != "applied":
+            continue
+        current = tool_fix.sha256(tool_fix.get_field(tools[r["tool"]], r["field"]))
+        if current == r["sha256_before"]:
+            todo.append(r)
+        elif current != r["sha256_after"]:
+            raise ValueError(f"patch {r['id']}: {r['tool']}.{r['field']} matches neither its before nor after text")
+    patched, _ = tool_fix.apply_patches(prompt["tools"], todo)
+    return {**prompt, "tools": patched}
+
+
 def prompt_for(trace: dict, prompts_by_sha: dict, fallback_prompt: dict | None) -> dict | None:
     """The recorded prompt of a trace, or fallback_prompt if it cannot be identified."""
     prompt_shas = {turn.get("prompt_sha") for turn in trace["agent_turns"] if turn.get("prompt_sha")}
@@ -165,6 +193,7 @@ def collect(
                     rebuilt_prompt = reconstruct_prompt()
                     notes.append("some runs had no prompts.json: agent prompt rebuilt from tau2")
                 prompt = rebuilt_prompt
+            prompt = patch_prompt(prompt, build_options.patch_rows)
             trace_records = sft_data.trace_records(trace, prompt, source, build_options.long_mode)
             for record in trace_records:  # which model wrote the targets (teacher id, or Tiny Aya for replay)
                 record["model"] = writer_model
@@ -230,6 +259,12 @@ def main(argv: list[str] | None = None) -> int:
 
     token_counting_method = choose_token_counting_method(build_options)
     notes: list[str] = [f"token counting: {token_counting_method}"]
+    build_options.patch_rows = None
+    if build_options.tool_patches:
+        patch_text = build_options.tool_patches.read_text()
+        build_options.patch_rows = [json.loads(line) for line in patch_text.splitlines() if line.strip()]
+        applied_count = sum(row.get("status") == "applied" for row in build_options.patch_rows)
+        notes.append(f"tool list: {applied_count} applied patches from {build_options.tool_patches}")
 
     teacher_records = collect(build_options.teacher, "teacher", build_options, notes)
     replay_records = collect(build_options.replay, "replay", build_options, notes)
