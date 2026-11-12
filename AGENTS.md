@@ -122,10 +122,13 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   (`log.attach_run_dir`), and `status` (ok / partial / failed) into `summary.json`.
 - New external call (model, HTTP, GCS, HF Hub): wrap it in `shipwright.observability.instrument.external` (or go
   through `llm_patch`), so it gets a log line and a span.
-- 2026-11-12 (Tejas): every external call goes through the shared retry helper
-  `shipwright.observability.retry` (`call_with_retry`, `@retry`, `acall_with_retry`; policies `LLM`,
-  `LLM_USER`, `LAUNCH`). Never add a bare call or a new ad-hoc retry loop. Only exception:
-  `scripts/train_lora.py` (`hub_retry`), which runs alone in an HF Job without the package.
+- Retries: on 2026-11-11 Tejas asked that the code handle retries and transient failures so an
+  experiment is not lost to a simple exception, with a generic retry decorator "if you have to".
+  On 2026-11-12 the team (Ishank's call, delegated by Tejas) chose per-call retries, no shared helper:
+  Vertex `vertex.call_with_refresh` (401: new token, 1 retry; 429: `RATE_LIMIT_WAITS` with jitter;
+  400: `BAD_REQUEST_WAITS` 2 s / 5 s, user and judge only; timeout: `TIMEOUT_RETRIES` = 2), and
+  retry-once in the classify judge (`heal/classify.py`), `tool_fix.py` and the `scripts/classify.py`
+  token expiry (401). HF router, GCS, HF Hub and HF Jobs launch calls have no retry wrapper.
 - Long runs must be resumable and isolate failures: one task's exception is an infra error in
   the results, not a dead run; a rerun into the same `--output-dir` (on Cloud Run: `--fetch` it
   first) keeps decided runs and redoes infra errors (tau2 `auto_resume`).
@@ -296,7 +299,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - 2026-11-09 (Ishank): `pip install agenttune` fails on a CPU-only macOS machine (torch 2.11 + bitsandbytes force a source build). It installs on Linux x86_64 (CI, HF Jobs). Do not replace AgentTune with a local reimplementation.
 - 2026-11-09: AuditKIT `reliability()` takes `independent=`, while `AgentEvalRunner` takes `reset_confirmed=` (we use the runner). Verdicts are `success` / `failure` / `unknown`, not pass/fail.
 - 2026-11-09: DeepSeek V4.1 Flash on Vertex is served only on the `global` endpoint (a `us-central1` call fails). Vertex has no explicit context cache (`cachedContents`) for MaaS open models; implicit prefix caching (Preview) covers `deepseek-v4.1-flash-maas` from 4096 prompt tokens, not gpt-oss-120b. Our fixed teacher prefix (policy + tool list) is about 2.6k tokens, so hits come from the growing conversation of one run.
-- 2026-11-09: Vertex gpt-oss-120b spends reply tokens on reasoning (`reasoning_content`) first. `vertex.py` raises `max_tokens` below 1024 to 1024; `reasoning_effort: low` is accepted and now set by `route_kwargs`. 2026-11-12: Vertex calls time out after 60 s (gpt-oss) or 180 s and a timeout retries under `retry.LLM`; round 2 had calls hang up to 20 minutes. `run_round.py` defaults to `--max-concurrency 8`.
+- 2026-11-09: Vertex gpt-oss-120b spends reply tokens on reasoning (`reasoning_content`) first. `vertex.py` raises `max_tokens` below 1024 to 1024; `reasoning_effort: low` is accepted and now set by `route_kwargs`. 2026-11-12: Vertex calls time out after 60 s (gpt-oss) or 180 s and retry twice (`TIMEOUT_RETRIES`); round 2 had calls hang up to 20 minutes. `run_round.py` defaults to `--max-concurrency 8`.
 - 2026-11-09: A Vertex token lasts about 1 hour and an HF Job cannot run gcloud. `gate_job.py` passes a token minted at launch (`SHIPWRIGHT_VERTEX_TOKEN`), with no refresh: a gate job with a Vertex user model must finish within about 1 hour. 20 tasks x k=3 x 2 systems (120 tau2 runs) at `max_concurrency: 8` is the scenario this was sized for; don't raise `heldout.num_tasks` back toward 40 without also moving the user model off Vertex (an HF router model instead), or the run risks losing its user simulator partway through.
 - 2026-11-11: In tests, `agenttune.agentic` cannot be imported without torch. Load `agenttune/agentic/events.py` by file
   path and register the module in `sys.modules` before `exec_module`, or its dataclasses fail
@@ -304,7 +307,7 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 - 2026-11-11: The prompted-tools few-shot example used `#W1234567`, and the student copied it as a real order id (28 of 74 round 1 baseline traces, `invented_id` 34 of 71 failures). It now uses `<...>` placeholders (`prompted_tools.py`). Never put a real-looking id in a prompt example; any baseline or teacher run made before this change used the old prompt and is not comparable with new runs.
 - 2026-11-08: The GitHub repo is private, so an HF Job cannot clone it. `scripts/gate_job.py --launch` uploads `git archive HEAD` to the runs dataset; commit before you launch.
 
-- 2026-11-11: Vertex gpt-oss-120b (user simulator) returns 429 at 4 to 6 concurrent tau2 runs; with no retry, 15 of 74 baseline runs became infra errors. `vertex.call_with_refresh` now waits and retries a 429 up to 5 times. Some 400s from the same model remain (cause not found yet); 2026-11-12: user and judge calls also retry a 400 (`retry.LLM_USER`), and the NL judge is asked again (twice) when its reply is not JSON (tau2 `json.loads` crashed the run, 3 infra errors in round 1).
+- 2026-11-11: Vertex gpt-oss-120b (user simulator) returns 429 at 4 to 6 concurrent tau2 runs; with no retry, 15 of 74 baseline runs became infra errors. `vertex.call_with_refresh` now waits and retries a 429 up to 5 times. Some 400s from the same model remain (cause not found yet); 2026-11-12: user and judge calls retry a 400 twice (`BAD_REQUEST_WAITS`), and the NL judge is asked again (twice) when its reply is not JSON (tau2 `json.loads` crashed the run, 3 infra errors in round 1).
 - 2026-11-11: `SHIPWRIGHT_HF_TOKEN` (mitushigoyal5, fine-grained) can write the Hub but HF Jobs return
   `403 ... missing permissions: job.write` on namespace mitushigoyal5. The token needs the Jobs permissions
   (read and write) before `train_job.py --launch` or `gate_job.py --launch` can work.

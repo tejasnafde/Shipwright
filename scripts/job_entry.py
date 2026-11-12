@@ -43,7 +43,7 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from shipwright.observability import instrument, log, otel_live, report, repro, retry  # noqa: E402
+from shipwright.observability import instrument, log, otel_live, report, repro  # noqa: E402
 from shipwright.llm import vertex  # noqa: E402
 
 logger = log.get_logger("job_entry")
@@ -84,12 +84,9 @@ def upload(http_client: httpx.Client, bucket: str, object_name: str, data: bytes
     url = UPLOAD_URL.format(bucket=bucket, name=quote(object_name, safe=""))
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/octet-stream"}
     with instrument.external("gcs_upload", f"gs://{bucket}/{object_name}", bytes=len(data)) as call_record:
-        def upload_once() -> None:  # a GCS object upload is idempotent: same name, same bytes
-            response = http_client.post(url, content=data, headers=headers)
-            call_record["status"] = response.status_code
-            response.raise_for_status()
-
-        retry.call_with_retry(upload_once, what="gcs_upload")
+        response = http_client.post(url, content=data, headers=headers)
+        call_record["status"] = response.status_code
+        response.raise_for_status()
 
 
 def split_fetch(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -118,15 +115,6 @@ def fetch_dir(http_client: httpx.Client, bucket: str, prefix: str, runs_director
         raise ValueError(f"bad --fetch value {prefix!r}")
 
     headers = {"Authorization": f"Bearer {TOKENS.get()}"}
-
-    def http_get(url: str, params: dict | None = None) -> httpx.Response:
-        response = http_client.get(url, params=params, headers=headers)
-        response.raise_for_status()
-        return response
-
-    def get_json(url: str, params: dict) -> dict:
-        return http_get(url, params).json()
-
     downloaded_count = 0
     page_token = None
     with instrument.external("gcs_download", f"gs://{bucket}/{prefix}/"):
@@ -134,15 +122,17 @@ def fetch_dir(http_client: httpx.Client, bucket: str, prefix: str, runs_director
             list_parameters = {"prefix": prefix + "/", "fields": "items(name),nextPageToken"}
             if page_token:
                 list_parameters["pageToken"] = page_token
-            list_body = retry.call_with_retry(get_json, LIST_URL.format(bucket=bucket), list_parameters,
-                                              what="gcs_list")
+            list_response = http_client.get(LIST_URL.format(bucket=bucket), params=list_parameters, headers=headers)
+            list_response.raise_for_status()
+            list_body = list_response.json()
 
             for item in list_body.get("items", []):
                 relative_path = item["name"][len(prefix) + 1:]
                 if not relative_path or relative_path.endswith("/") or ".." in Path(relative_path).parts:
                     continue
                 object_url = OBJECT_URL.format(bucket=bucket, name=quote(item["name"], safe=""))
-                object_response = retry.call_with_retry(http_get, object_url, what="gcs_download")
+                object_response = http_client.get(object_url, headers=headers)
+                object_response.raise_for_status()
                 destination = runs_directory / run_directory_name / relative_path
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(object_response.content)

@@ -127,11 +127,6 @@ def make_chat(api_base: str, model: str, timeout: float = 120):
     http_client = httpx.Client(timeout=timeout)
 
     def chat(messages: list[dict]) -> str:
-        from shipwright.observability import retry
-
-        return retry.call_with_retry(once, messages, policy=retry.LLM, what=f"llm_bfcl {model}")
-
-    def once(messages: list[dict]) -> str:
         from shipwright.observability import instrument
 
         request_body = {"model": model, "messages": messages, "temperature": 0, "max_tokens": REPLY_TOKENS}

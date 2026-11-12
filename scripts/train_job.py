@@ -112,13 +112,11 @@ def launch_job(options: argparse.Namespace, training_script_arguments: list[str]
     if not token:
         print("No HF token: expected $SWITCHBOARD_SECRETS_DIR/HF_TOKEN or $HF_TOKEN.", file=sys.stderr)
         return 2
-    from shipwright.observability import instrument, retry
+    from shipwright.observability import instrument
 
     external_call_name = f"{options.flavor} {TRAIN_SCRIPT.name}"
     with instrument.external("hf_job_launch", external_call_name, timeout=options.timeout) as call_record:
-        # retry.LAUNCH: retried only when the request surely did not start a (paid) job
-        job = retry.call_with_retry(
-            run_uv_job,
+        job = run_uv_job(
             str(TRAIN_SCRIPT),
             script_args=training_script_arguments,
             flavor=options.flavor,
@@ -127,8 +125,6 @@ def launch_job(options: argparse.Namespace, training_script_arguments: list[str]
             labels={"app": "lexsi-hackathon", "round": options.revision},
             namespace=options.namespace,
             token=token,
-            policy=retry.LAUNCH,
-            what="hf_job_launch",
         )
         call_record["job_id"] = job.id
     print(f"\nLaunched job {job.id}: {getattr(job, 'url', '')}")

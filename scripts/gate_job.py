@@ -220,20 +220,18 @@ def print_plan(
 
 def upload_code_bundle(hf_api, job_options: argparse.Namespace, code_bundle_path: str, commit_sha: str) -> None:
     """git archive HEAD, uploaded to the runs dataset (the repo is private, so the job cannot clone it)."""
-    from shipwright.observability import instrument, retry
+    from shipwright.observability import instrument
 
     with tempfile.TemporaryDirectory() as temporary_directory:
         archive_path = Path(temporary_directory) / "code.tar.gz"
         pack_bundle(archive_path)
         with instrument.external("hf_hub_upload", f"datasets/{job_options.runs_repo}/{code_bundle_path}"):
-            retry.call_with_retry(
-                hf_api.upload_file,
+            hf_api.upload_file(
                 path_or_fileobj=str(archive_path),
                 path_in_repo=code_bundle_path,
                 repo_id=job_options.runs_repo,
                 repo_type="dataset",
                 commit_message=f"gate round {job_options.round}: code {commit_sha}",
-                what="hf_hub_upload",
             )
 
 
@@ -246,7 +244,7 @@ def launch_job(
     import baseline
     from huggingface_hub import HfApi, run_uv_job
     from shipwright.llm import vertex
-    from shipwright.observability import instrument, retry
+    from shipwright.observability import instrument
 
     token = baseline.load_token()
     if not token:
@@ -256,22 +254,21 @@ def launch_job(
     job_secrets = {"HF_TOKEN": token}
     if user_model_on_vertex:
         try:
-            # A fresh provider: a new token (metadata server on GCP, else gcloud), fetched with retries.
-            job_secrets["SHIPWRIGHT_VERTEX_TOKEN"] = vertex.TokenProvider().get()
+            if vertex.on_gcp():
+                job_secrets["SHIPWRIGHT_VERTEX_TOKEN"] = vertex.metadata_token()[0]
+            else:
+                job_secrets["SHIPWRIGHT_VERTEX_TOKEN"] = vertex.gcloud_token()
         except RuntimeError as token_error:
             print(f"Vertex token: {token_error}", file=sys.stderr)
             return 2
 
     hf_api = HfApi(token=token)
-    retry.call_with_retry(hf_api.create_repo, job_options.runs_repo, repo_type="dataset", exist_ok=True,
-                          private=False, what="hf_hub create_repo")
+    hf_api.create_repo(job_options.runs_repo, repo_type="dataset", exist_ok=True, private=False)
     upload_code_bundle(hf_api, job_options, code_bundle_path, commit_sha)
 
     external_call_name = f"{job_options.flavor} {GATE_SCRIPT.name}"
     with instrument.external("hf_job_launch", external_call_name, timeout=job_options.timeout) as call_record:
-        # retry.LAUNCH: retried only when the request surely did not start a (paid) job
-        job = retry.call_with_retry(
-            run_uv_job,
+        job = run_uv_job(
             str(GATE_SCRIPT),
             script_args=gate_script_arguments(job_options, code_bundle_path),
             flavor=job_options.flavor,
@@ -280,8 +277,6 @@ def launch_job(
             labels={"app": "lexsi-hackathon", "round": f"round-{job_options.round}", "step": "gate"},
             namespace=job_options.namespace,
             token=token,
-            policy=retry.LAUNCH,
-            what="hf_job_launch",
         )
         call_record["job_id"] = job.id
     print(f"\nLaunched job {job.id}: {getattr(job, 'url', '')}")

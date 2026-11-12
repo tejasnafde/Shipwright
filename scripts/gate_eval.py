@@ -546,31 +546,27 @@ def serve_and_run(
 def push(output_directory: Path, gate_options: argparse.Namespace, row_file: Path, candidate_name: str) -> None:
     from huggingface_hub import HfApi, hf_hub_download
     from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
-    from shipwright.observability import instrument, retry
+    from shipwright.observability import instrument
 
     token = os.environ.get("HF_TOKEN")
     hf_api = HfApi(token=token)
-    retry.call_with_retry(hf_api.create_repo, gate_options.runs_repo, repo_type="dataset", exist_ok=True,
-                          private=False, what="hf_hub create_repo")
+    hf_api.create_repo(gate_options.runs_repo, repo_type="dataset", exist_ok=True, private=False)
 
     path_in_repo = f"gate/round-{gate_options.round}/{candidate_name}"
     with instrument.external("hf_hub_upload", f"datasets/{gate_options.runs_repo}/{path_in_repo}"):
-        retry.call_with_retry(
-            hf_api.upload_folder,
+        hf_api.upload_folder(
             folder_path=str(output_directory),
             repo_id=gate_options.runs_repo,
             repo_type="dataset",
             path_in_repo=path_in_repo,
             commit_message=f"gate round {gate_options.round}: results",
             ignore_patterns=["**/tau2/**"],  # tau2's own results.json duplicates traces.jsonl
-            what="hf_hub_upload",
         )
 
     # Append this run's row to the dataset-level metrics.jsonl.
     try:
-        existing_metrics_path = retry.call_with_retry(
-            hf_hub_download, gate_options.runs_repo, "metrics.jsonl", repo_type="dataset", token=token,
-            what="hf_hub_download",
+        existing_metrics_path = hf_hub_download(
+            gate_options.runs_repo, "metrics.jsonl", repo_type="dataset", token=token
         )
         existing_metrics = Path(existing_metrics_path).read_text()
     except (EntryNotFoundError, RepositoryNotFoundError):
@@ -581,14 +577,12 @@ def push(output_directory: Path, gate_options: argparse.Namespace, row_file: Pat
     combined_metrics_path = output_directory / "_metrics_all.jsonl"
     combined_metrics_path.write_text(existing_metrics + separator + row_file.read_text())
     with instrument.external("hf_hub_upload", f"datasets/{gate_options.runs_repo}/metrics.jsonl"):
-        retry.call_with_retry(
-            hf_api.upload_file,
+        hf_api.upload_file(
             path_or_fileobj=str(combined_metrics_path),
             path_in_repo="metrics.jsonl",
             repo_id=gate_options.runs_repo,
             repo_type="dataset",
             commit_message=f"metrics.jsonl: gate round {gate_options.round}",
-            what="hf_hub_upload",
         )
     print(f"pushed to https://huggingface.co/datasets/{gate_options.runs_repo}/tree/main/{path_in_repo}")
 

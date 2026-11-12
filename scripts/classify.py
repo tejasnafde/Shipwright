@@ -108,7 +108,7 @@ def make_chat(token: str | None, model: str):
         }
         return http_client.post(url, headers=make_headers(), json=request_body)
 
-    def once(messages: list[dict]) -> str:
+    def chat(messages: list[dict]) -> str:
         from shipwright.observability import instrument
 
         with instrument.external("llm_judge", model, role="judge") as call_record:
@@ -123,11 +123,6 @@ def make_chat(token: str | None, model: str):
             response_body = response.json()
             call_record.update(instrument.usage_fields(response_body))
             return response_body["choices"][0]["message"].get("content") or ""
-
-    def chat(messages: list[dict]) -> str:
-        from shipwright.observability import retry
-
-        return retry.call_with_retry(once, messages, policy=retry.LLM_USER, what=f"llm_judge {model}")
 
     return chat
 

@@ -385,29 +385,6 @@ Research artifact for the Lexsi AI Safety and Alignment Hackathon. Non-commercia
 """
 
 
-def hub_retry(fn, *args, **kwargs):
-    """Hub calls after a paid training run must not be lost to a transient error.
-
-    The one exception to "use shipwright.observability.retry": this PEP 723 script runs alone in
-    an HF Job, without the shipwright package. Same rule as retry.DEFAULT: 5 tries, backoff from
-    2 s with jitter, only 408/409/425/429/5xx and connection or timeout errors."""
-    import random
-    import time
-
-    for attempt in range(1, 6):
-        try:
-            return fn(*args, **kwargs)
-        except Exception as e:  # noqa: BLE001
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            transient = status in (408, 409, 425, 429, 500, 502, 503, 504) or (
-                status is None and any(n in type(e).__name__ for n in ("Timeout", "Connection")))
-            if attempt == 5 or not transient:
-                raise
-            wait = min(60.0, 2.0 * 2 ** (attempt - 1) * (0.5 + random.random()))
-            print(f"retry {fn.__name__}: attempt {attempt}, wait {wait:.1f}s, {type(e).__name__}", flush=True)
-            time.sleep(wait)
-
-
 def check_rows_match_records(agenttune_rows: list[dict], records: list[dict]) -> None:
     """The rows AgentTune will train on must be the student's prompts, unchanged."""
     assert len(agenttune_rows) == len(records)
@@ -420,10 +397,9 @@ def push_adapter(training_options: argparse.Namespace, adapter_directory: Path, 
     from huggingface_hub import HfApi
 
     hf_api = HfApi(token=os.environ.get("HF_TOKEN"))
-    hub_retry(hf_api.create_repo, training_options.output_repo, exist_ok=True, private=False)
-    hub_retry(hf_api.create_branch, training_options.output_repo, branch=training_options.revision, exist_ok=True)
-    hub_retry(
-        hf_api.upload_folder,
+    hf_api.create_repo(training_options.output_repo, exist_ok=True, private=False)
+    hf_api.create_branch(training_options.output_repo, branch=training_options.revision, exist_ok=True)
+    hf_api.upload_folder(
         folder_path=str(adapter_directory),
         repo_id=training_options.output_repo,
         revision=training_options.revision,

@@ -210,26 +210,22 @@ def push(output_directory: Path, repo: str, revision: str) -> None:
     token = baseline.load_token()
     if not token:
         raise SystemExit("No HF token for --push.")
-    from shipwright.observability import instrument, retry
-
     hf_api = HfApi(token=token)
-    retry.call_with_retry(hf_api.create_repo, repo, repo_type="dataset", exist_ok=True, private=False,
-                          what="hf_hub create_repo")
+    hf_api.create_repo(repo, repo_type="dataset", exist_ok=True, private=False)
     if revision != "main":
-        retry.call_with_retry(hf_api.create_branch, repo, repo_type="dataset", branch=revision, exist_ok=True,
-                              what="hf_hub create_branch")
+        hf_api.create_branch(repo, repo_type="dataset", branch=revision, exist_ok=True)
+
+    from shipwright.observability import instrument
 
     for file_name in ("sft.jsonl", "sft_stats.json"):
         with instrument.external("hf_hub_upload", f"datasets/{repo}@{revision}/{file_name}"):
-            retry.call_with_retry(
-                hf_api.upload_file,
+            hf_api.upload_file(
                 path_or_fileobj=str(output_directory / file_name),
                 path_in_repo=file_name,
                 repo_id=repo,
                 repo_type="dataset",
                 revision=revision,
                 commit_message=f"SFT data ({output_directory.name})",
-                what="hf_hub_upload",
             )
     print(f"Pushed to https://huggingface.co/datasets/{repo}/tree/{revision}")
 

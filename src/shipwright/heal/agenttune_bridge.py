@@ -185,14 +185,11 @@ def make_classifier(model_name: str, api_base: str | None = None):
             """A non-vertex id runs AgentTune's own method. A ``vertex/`` id needs a bearer
             token per call (AgentTune's method passes no api_key), so this does the same
             request and parsing with ``shipwright.llm.vertex.route_kwargs`` and one retry on 401."""
-            from shipwright.observability import instrument, retry
+            from shipwright.observability import instrument
 
             if not vertex.is_vertex_model(self.model_name):
-                async def theirs() -> ClassifiedFailure:
-                    with instrument.external("llm_classifier", self.model_name, role="classifier"):
-                        return await super(ShipwrightFailureClassifier, self)._classify_single(failure)
-
-                return await retry.acall_with_retry(theirs, policy=retry.LLM, what=f"llm_classifier {self.model_name}")
+                with instrument.external("llm_classifier", self.model_name, role="classifier"):
+                    return await super()._classify_single(failure)
             import litellm
 
             request_options = {
@@ -201,8 +198,7 @@ def make_classifier(model_name: str, api_base: str | None = None):
                 "response_format": {"type": "json_object"},
             }
             token_provider = vertex.provider()
-
-            async def classify_once() -> dict:
+            try:
                 with instrument.external("llm_classifier", self.model_name, role="classifier") as call_record:
                     call_record["retries"] = 0
                     try:
@@ -214,11 +210,7 @@ def make_classifier(model_name: str, api_base: str | None = None):
                         call_record["retries"] = 1
                         response = await litellm.acompletion(**vertex.route_kwargs(request_options, token_provider))
                     call_record.update(instrument.usage_fields(response))
-                return json.loads(response.choices[0].message.content)  # a non-JSON reply is retried
-
-            try:
-                parsed_reply = await retry.acall_with_retry(classify_once, policy=retry.LLM_USER,
-                                                            what=f"llm_classifier {self.model_name}")
+                parsed_reply = json.loads(response.choices[0].message.content)
                 root_cause = parsed_reply.get("root_cause", "")
                 if root_cause not in self.ROOT_CAUSES:
                     root_cause = "incomplete_reasoning"

@@ -106,8 +106,6 @@ def test_call_with_refresh_retries_once_on_401():
 
 
 def test_call_with_refresh_waits_and_retries_on_429():
-    from shipwright.observability import retry
-
     tokens = vertex.TokenProvider(fetch=lambda: "tok")
     waits, attempts = [], []
 
@@ -121,7 +119,7 @@ def test_call_with_refresh_waits_and_retries_on_429():
         return "ok"
 
     assert vertex.call_with_refresh(call, {"model": TEACHER, "messages": []}, tokens, sleep=waits.append) == "ok"
-    assert len(waits) == 2
+    assert len(waits) == 2 and waits[0] >= vertex.RATE_LIMIT_WAITS[0]
 
     def always(**kw):
         raise RateLimitError()
@@ -129,12 +127,10 @@ def test_call_with_refresh_waits_and_retries_on_429():
     waits.clear()
     with pytest.raises(RateLimitError):
         vertex.call_with_refresh(always, {"model": TEACHER, "messages": []}, tokens, sleep=waits.append)
-    assert len(waits) == retry.LLM.attempts - 1
+    assert len(waits) == len(vertex.RATE_LIMIT_WAITS)
 
 
-def test_call_with_refresh_retries_a_timeout_then_raises():
-    from shipwright.observability import retry
-
+def test_call_with_refresh_retries_a_timeout_twice_then_raises():
     tokens = vertex.TokenProvider(fetch=lambda: "tok")
     attempts = []
 
@@ -147,8 +143,7 @@ def test_call_with_refresh_retries_a_timeout_then_raises():
             raise APITimeoutError()
         return "ok"
 
-    no_wait = lambda seconds: None  # noqa: E731
-    assert vertex.call_with_refresh(hangs_once, {"model": USER, "messages": []}, tokens, sleep=no_wait) == "ok"
+    assert vertex.call_with_refresh(hangs_once, {"model": USER, "messages": []}, tokens) == "ok"
 
     attempts.clear()
 
@@ -157,8 +152,8 @@ def test_call_with_refresh_retries_a_timeout_then_raises():
         raise APITimeoutError()
 
     with pytest.raises(APITimeoutError):
-        vertex.call_with_refresh(always_hangs, {"model": USER, "messages": []}, tokens, sleep=no_wait)
-    assert len(attempts) == retry.LLM.attempts
+        vertex.call_with_refresh(always_hangs, {"model": USER, "messages": []}, tokens)
+    assert len(attempts) == 1 + vertex.TIMEOUT_RETRIES
 
 
 def test_route_kwargs_sets_timeout_and_low_reasoning_for_gpt_oss_only():
@@ -324,29 +319,10 @@ def test_metadata_token_request_and_parse():
     assert vertex.metadata_token(fake_get) == ("ya29.meta", 3599.0)
     assert seen["url"] == vertex.METADATA_TOKEN_URL
     assert seen["headers"] == {"Metadata-Flavor": "Google"}
-    with pytest.raises(RuntimeError, match="HTTP 404"):  # raised as is, for the retry helper
+    with pytest.raises(RuntimeError, match="metadata server"):
         vertex.metadata_token(lambda *a, **k: _Resp({}, status=404))
     with pytest.raises(RuntimeError, match="no access_token"):
         vertex.metadata_token(lambda *a, **k: _Resp({"expires_in": 10}))
-
-
-def test_token_provider_retries_a_transient_fetch_error(monkeypatch):
-    from shipwright.observability import retry
-
-    monkeypatch.setattr(retry.time, "sleep", lambda s: None)
-    calls = []
-
-    class ReadTimeout(Exception):
-        pass
-
-    def fetch():
-        calls.append(1)
-        if len(calls) == 1:
-            raise ReadTimeout()
-        return "tok"
-
-    assert vertex.TokenProvider(fetch=fetch).get() == "tok"
-    assert len(calls) == 2
 
 
 def test_on_gcp_selects_metadata_over_gcloud(monkeypatch):
@@ -380,22 +356,32 @@ def test_token_with_expiry_refreshes_before_it_expires():
     assert tokens.get() == "m3" and tokens.fetches == 3
 
 
-def test_call_with_refresh_retries_400_only_for_the_user_policy():
-    from shipwright.observability import retry
-
+def test_call_with_refresh_retries_400_only_when_asked():
     tokens = vertex.TokenProvider(fetch=lambda: "tok")
-    waits = []
+    waits, attempts = [], []
 
     class BadRequestError(Exception):
         status_code = 400
 
+    def flaky(**kw):
+        attempts.append(1)
+        if len(attempts) < 2:
+            raise BadRequestError()
+        return "ok"
+
+    kwargs = {"model": vertex.USER_MODEL, "messages": []}
+    assert vertex.call_with_refresh(flaky, kwargs, tokens, sleep=waits.append,
+                                    bad_request_waits=vertex.BAD_REQUEST_WAITS) == "ok"
+    assert len(waits) == 1
+
     def always(**kw):
         raise BadRequestError()
 
-    kwargs = {"model": vertex.USER_MODEL, "messages": []}
+    waits.clear()
     with pytest.raises(BadRequestError):
-        vertex.call_with_refresh(always, kwargs, tokens, sleep=waits.append, policy=retry.LLM_USER)
-    assert len(waits) == retry.LLM_USER.attempts - 1
+        vertex.call_with_refresh(always, kwargs, tokens, sleep=waits.append,
+                                 bad_request_waits=vertex.BAD_REQUEST_WAITS)
+    assert len(waits) == len(vertex.BAD_REQUEST_WAITS)
 
     waits.clear()
     with pytest.raises(BadRequestError):  # the agent and teacher get no 400 retry
