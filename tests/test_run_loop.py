@@ -1,0 +1,69 @@
+"""The loop's decisions: what a round costs, when it may start, what a rerun skips, and the recipe it keeps."""
+
+import argparse
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "scripts"))
+specification = importlib.util.spec_from_file_location("run_loop", ROOT / "scripts" / "run_loop.py")
+run_loop = importlib.util.module_from_spec(specification)
+sys.modules["run_loop"] = run_loop
+specification.loader.exec_module(run_loop)
+
+
+def test_a_step_that_does_not_fit_in_the_budget_is_refused():
+    manifest = {"stages": {"candidate_train": {"actual_usd": 0.6}}}
+    run_loop.check_fits_in_budget(manifest, "classify", budget_usd=5.0)
+    with pytest.raises(SystemExit, match="passes the budget"):
+        run_loop.check_fits_in_budget(manifest, "gate", budget_usd=1.2)
+    with pytest.raises(SystemExit, match="passes the budget"):  # earlier rounds' spend counts
+        run_loop.check_fits_in_budget(manifest, "classify", budget_usd=2.0, spent_in_earlier_rounds=1.4)
+
+
+def test_a_round_needs_its_estimate_or_a_little_more_than_the_last_one_cost():
+    assert run_loop.cost_of_a_full_round(None) == pytest.approx(2.15)
+    assert run_loop.cost_of_a_full_round(1.0) == pytest.approx(2.15)
+    assert run_loop.cost_of_a_full_round(3.0) == pytest.approx(3.3)
+
+
+def test_a_rerun_skips_finished_steps_unless_told_to_redo_them():
+    manifest = {"stages": {"data": {"exit_code": 0}, "train": {"exit_code": 1}}}
+    options = argparse.Namespace(redo=[])
+    assert run_loop.step_is_done(manifest, "data", options)
+    assert not run_loop.step_is_done(manifest, "train", options)  # failed: run again
+    assert not run_loop.step_is_done(manifest, "classify", options)  # never run
+    assert not run_loop.step_is_done(manifest, "data", argparse.Namespace(redo=["data"]))
+
+
+def test_the_chosen_recipe_is_kept_in_the_manifest_so_a_rerun_uses_the_same_one():
+    decision = {
+        "checks": [{"name": "bfcl", "passed": False}],
+        "metrics_current": {"label_rates": {}}, "metrics_candidate": {"label_rates": {}},
+    }
+    manifest: dict = {"stages": {}}
+    options = argparse.Namespace(from_round=99)  # no manifest for round 99: the default recipe is the start
+    first = run_loop.next_recipe_for(manifest, options, decision)
+    assert first.epochs == 2.0 and manifest["recipe"]["learning_rate"] == 1e-4
+    again = run_loop.next_recipe_for(manifest, options, {"checks": []})  # even a different decision
+    assert again.epochs == 2.0 and again.reasons == first.reasons
+
+
+def test_the_candidate_config_of_the_next_round_points_at_its_own_adapter(tmp_path, monkeypatch):
+    configs = tmp_path / "configs" / "systems"
+    configs.mkdir(parents=True)
+    (configs / "r3-weight.yaml").write_text(
+        "# Round 3 weight-fix candidate\nname: r3-weight\nadapter:\n  repo: x/y\n  revision: round-3\nroute: weight_fix\n")
+    calls = []
+    monkeypatch.setattr(run_loop, "ROOT", tmp_path)
+    monkeypatch.setattr(run_loop.subprocess, "run", lambda command, **keyword_arguments: calls.append(command))
+    run_loop.write_candidate_config(argparse.Namespace(round=4, from_round=3))
+    written = (configs / "r4-weight.yaml").read_text()
+    assert "name: r4-weight" in written and "revision: round-4" in written and "# Round 4" in written
+    commit = next(command for command in calls if "commit" in command)
+    assert commit[-2:] == ["--", "configs/systems/r4-weight.yaml"]  # only its own file is committed

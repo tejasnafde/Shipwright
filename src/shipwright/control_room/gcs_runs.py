@@ -82,6 +82,18 @@ def list_remote_runs(owner: str) -> list[str]:
 ORCHESTRATOR_PREFIXES = ("run_round-", "train_job-", "gate_job-", "pull_runs-", "promote-")
 
 
+def push_run(owner: str, run_directory: Path) -> None:
+    """Copy a local run dir to gs://<bucket>/<owner>/<name>, so a Cloud Run job can --fetch it."""
+    binary = gcloud_binary()
+    if binary is None:
+        raise RuntimeError("gcloud not found: install it or set SHIPWRIGHT_GCLOUD")
+    copy = subprocess.run(
+        _gcloud_command(binary, "cp", "-r", str(run_directory), f"{BUCKET}/{owner}/"),
+        capture_output=True, text=True, timeout=1800)
+    if copy.returncode != 0:
+        raise RuntimeError(f"gcloud cp of {run_directory} failed: {copy.stderr.strip()[-300:]}")
+
+
 def pull_runs(
     owners: list[str],
     runs_directory: Path,

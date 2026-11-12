@@ -333,7 +333,8 @@ def local_run_name(run_name: str) -> str:
 def cloud_stage_arguments(stage: str, options: argparse.Namespace) -> tuple[list[str], list[str], str]:
     """(script arguments, run dirs to fetch first as "owner/dir", run dir this stage writes)."""
     cap = str(BUDGETS[stage].cap_usd)
-    baseline_name = baseline_dir_name(options.round)
+    # The loop classifies the candidate's own run on train tasks (options.failure_source) instead of a baseline.
+    baseline_name = getattr(options, "failure_source", None) or baseline_dir_name(options.round)
     if stage == "baseline":
         arguments = [
             "baseline.py", "--task-split", "train", "--num-tasks", "0", "--trials", "1",

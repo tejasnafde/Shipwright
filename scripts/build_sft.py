@@ -43,6 +43,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="use only teacher run dirs whose agent_model is exactly this (pooling runs of other teachers,"
         " whose licenses we have not checked, would put their outputs in the training data)",
     )
+    parser.add_argument(
+        "--boost-from", type=Path, default=None,
+        help="a classified run of the candidate on train tasks (failures.jsonl): the teacher examples of the tasks it"
+        " failed are repeated --boost times in the data, so the next adapter learns from its own failures",
+    )
+    parser.add_argument("--boost", type=int, default=1, help="with --boost-from: copies of each failed task's examples")
     parser.add_argument("--max-replay", type=int, default=None, help="cap on replay examples")
     parser.add_argument("--allow-split", action="store_true", help="accept runs not on the train split")
     parser.add_argument(
@@ -202,6 +208,16 @@ def collect(
     return records
 
 
+def failed_task_ids(candidate_run: Path) -> list[str]:
+    """Task ids of the failed runs in a classified run (failures.jsonl), the ones with a fix (not no_fix)."""
+    task_ids: list[str] = []
+    for failure in read_json_lines(candidate_run / "failures.jsonl"):
+        task_id = str(failure["task_id"])
+        if failure.get("route") != "no_fix" and task_id not in task_ids:
+            task_ids.append(task_id)
+    return task_ids
+
+
 def push(output_directory: Path, repo: str, revision: str) -> None:
     from huggingface_hub import HfApi
 
@@ -276,6 +292,17 @@ def main(argv: list[str] | None = None) -> int:
     kept_records, dropped_counts = sft_data.filter_records(deduplicated_records, build_options.max_tokens)
     dropped_counts["duplicates"] = record_count_before_dedupe - len(deduplicated_records)
 
+    boosted_task_ids: list[str] = []
+    examples_before_boost = len(kept_records)
+    if build_options.boost_from and build_options.boost > 1:
+        boosted_task_ids = failed_task_ids(build_options.boost_from)
+        boosted_records = [record for record in kept_records if str(record.get("task_id")) in boosted_task_ids]
+        kept_records = kept_records + boosted_records * (build_options.boost - 1)
+        notes.append(
+            f"boost x{build_options.boost}: {len(boosted_task_ids)} tasks the candidate failed,"
+            f" {len(boosted_records)} examples repeated"
+        )
+
     with open(output_directory / "sft.jsonl", "w") as sft_file:
         for record in kept_records:
             sft_file.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -290,6 +317,9 @@ def main(argv: list[str] | None = None) -> int:
             "teacher_runs": [str(path) for path in build_options.teacher],
             "replay_runs": [str(path) for path in build_options.replay],
             "notes": notes,
+            "boost": build_options.boost if boosted_task_ids else 1,
+            "boosted_tasks": boosted_task_ids,
+            "examples_before_boost": examples_before_boost,
         },
     )
     (output_directory / "sft_stats.json").write_text(json.dumps(statistics, indent=2))

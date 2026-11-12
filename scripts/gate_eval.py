@@ -89,6 +89,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-tasks", type=int, default=None, help="override heldout.num_tasks (debug only)")
 
     # The mode: exactly one of --in-job, --local-dry-run, or --current-run with --candidate-run.
+    parser.add_argument(
+        "--train-eval", action="store_true",
+        help="no gate: run only the candidate on --task-ids of the train split (k = --trials) and push the traces. The"
+        " failures of the deployed or latest candidate on train tasks are the next round's corrective data",
+    )
+    parser.add_argument("--task-ids", nargs="*", default=None, help="with --train-eval: the train task ids to run")
+    parser.add_argument("--trials", type=int, default=1, help="with --train-eval: trials per task")
     parser.add_argument("--in-job", action="store_true")
     parser.add_argument("--code-bundle", default=None, help="path in --runs-repo of the code tarball (job mode)")
     parser.add_argument("--bootstrapped", action="store_true", help=argparse.SUPPRESS)
@@ -171,12 +178,18 @@ def baseline_cmd(
     from shipwright.heal.systems import agent_model_id, baseline_args
 
     held_out = gate_config["heldout"]
+    if gate_options.train_eval:
+        task_split, task_ids, trials = "train", gate_options.task_ids, gate_options.trials
+    else:
+        task_split = held_out["task_split"]
+        task_ids = heldout_task_ids(gate_config, gate_options.num_tasks)
+        trials = gate_config["k"]
     command = [
         sys.executable, str(ROOT / "scripts" / "baseline.py"),
         "--domain", held_out["domain"],
-        "--task-split", held_out["task_split"],
-        "--task-ids", *heldout_task_ids(gate_config, gate_options.num_tasks),
-        "--trials", str(gate_config["k"]),
+        "--task-split", task_split,
+        "--task-ids", *task_ids,
+        "--trials", str(trials),
         "--seed", str(gate_config["seed"]),
         "--agent-model", agent_model_id(system),
         "--agent-temperature", str(gate_config.get("agent_temperature", 0.0)),
@@ -496,10 +509,11 @@ def run_server_plan(
                     log_path=run_directory / "baseline.log",
                 )
                 bfcl_result = None
-                try:
-                    bfcl_result = run_bfcl(gate_config, system, run_directory, gate_options)
-                except Exception as bfcl_error:  # noqa: BLE001 - recorded; the gate rejects without BFCL
-                    print(f"BFCL failed for {system_name}: {bfcl_error}", file=sys.stderr)
+                if not gate_options.train_eval:
+                    try:
+                        bfcl_result = run_bfcl(gate_config, system, run_directory, gate_options)
+                    except Exception as bfcl_error:  # noqa: BLE001 - recorded; the gate rejects without BFCL
+                        print(f"BFCL failed for {system_name}: {bfcl_error}", file=sys.stderr)
                 status_by_system[system_name] = {
                     "baseline_exit": baseline_exit_code,
                     "bfcl": bfcl_result,
@@ -518,6 +532,8 @@ def serve_and_run(
     from shipwright.heal.systems import serve_plan
 
     serve_mode = (gate_config.get("serve") or {}).get("mode", "lora")
+    if gate_options.train_eval:
+        systems = {"candidate": systems["candidate"]}  # no current system: there is no comparison
     system_by_name = {system["name"]: (role, system) for role, system in systems.items()}
     all_systems = list(systems.values())
     status_by_system: dict[str, dict] = {}
@@ -549,7 +565,7 @@ def serve_and_run(
 
 # ---------------------------------------------------------------- push
 
-def push(output_directory: Path, gate_options: argparse.Namespace, row_file: Path, candidate_name: str) -> None:
+def push(output_directory: Path, gate_options: argparse.Namespace, row_file: Path | None, candidate_name: str) -> None:
     from huggingface_hub import HfApi, hf_hub_download
     from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
     from shipwright.observability import instrument
@@ -565,9 +581,13 @@ def push(output_directory: Path, gate_options: argparse.Namespace, row_file: Pat
             repo_id=gate_options.runs_repo,
             repo_type="dataset",
             path_in_repo=path_in_repo,
-            commit_message=f"gate round {gate_options.round}: results",
+            commit_message=f"{'train-eval' if gate_options.train_eval else 'gate'} round {gate_options.round}: results",
             ignore_patterns=["**/tau2/**"],  # tau2's own results.json duplicates traces.jsonl
         )
+
+    if row_file is None:  # a train-eval run has no gate row
+        print(f"pushed to https://huggingface.co/datasets/{gate_options.runs_repo}/tree/main/{path_in_repo}")
+        return
 
     # Append this run's row to the dataset-level metrics.jsonl.
     try:
@@ -736,6 +756,13 @@ def evaluate_systems(gate_options: argparse.Namespace) -> int:
         except Exception as serve_error:  # noqa: BLE001 - still decide (reject) and publish the logs
             print(f"serving or running failed: {serve_error}", file=sys.stderr)
             status_by_system = {"_error": str(serve_error)[:1000]}
+
+    if gate_options.train_eval:
+        (output_directory / "run_status.json").write_text(json.dumps(status_by_system, indent=1, default=str))
+        if gate_options.in_job and not gate_options.no_push:
+            push(output_directory, gate_options, None, f"{systems['candidate']['name']}-train")
+        print(f"\nWrote {output_directory}")
+        return 0
 
     metrics_by_role = collect_metrics(output_directory, gate_config, systems, status_by_system)
     (output_directory / "run_status.json").write_text(json.dumps(status_by_system, indent=1, default=str))

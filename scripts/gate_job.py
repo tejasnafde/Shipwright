@@ -61,6 +61,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "gate.yaml")
     parser.add_argument("--target-label", nargs="*", default=None, help="override the candidate's targets")
     parser.add_argument("--serve-mode", choices=("lora", "merged"), default=None)
+    parser.add_argument(
+        "--train-eval", action="store_true",
+        help="no gate: run only the candidate on --task-ids of the train split and push the traces (the next round's"
+        " failures; scripts/run_round.py loop uses it)",
+    )
+    parser.add_argument("--task-ids", nargs="*", default=None, help="with --train-eval")
+    parser.add_argument("--trials", type=int, default=1, help="with --train-eval")
 
     # The HF Job.
     parser.add_argument("--flavor", default="a100-large")
@@ -131,6 +138,8 @@ def gate_script_arguments(job_options: argparse.Namespace, code_bundle_path: str
         script_arguments += ["--target-label", *job_options.target_label]
     if job_options.serve_mode:
         script_arguments += ["--serve-mode", job_options.serve_mode]
+    if job_options.train_eval:
+        script_arguments += ["--train-eval", "--trials", str(job_options.trials), "--task-ids", *job_options.task_ids]
     return script_arguments
 
 
@@ -158,7 +167,10 @@ def print_plan(
     from shipwright.heal.systems import served_name
 
     held_out = gate_config["heldout"]
-    total_runs = 2 * held_out["num_tasks"] * gate_config["k"]
+    if job_options.train_eval:
+        total_runs = len(job_options.task_ids) * job_options.trials  # only the candidate, no gate
+    else:
+        total_runs = 2 * held_out["num_tasks"] * gate_config["k"]
     if user_model_on_vertex:
         user_cost_per_run = USER_COST_PER_RUN["vertex"]
     else:
@@ -300,6 +312,8 @@ def main(argv: list[str] | None = None) -> int:
     commit_sha = code_sha()
     code_bundle_path = f"gate/round-{job_options.round}/code/shipwright-{commit_sha}.tar.gz"
 
+    if job_options.train_eval and not job_options.task_ids:
+        raise SystemExit("--train-eval needs --task-ids")
     print_plan(job_options, gate_config, systems, code_bundle_path, commit_sha, user_model_on_vertex)
     if not job_options.launch:
         print("\nPlan only. Nothing was uploaded or launched. Add --launch to submit the job.")
