@@ -3,6 +3,9 @@
 # dependencies = [
 #     "agenttune==1.1.3",
 #     "huggingface_hub>=1.0",
+#     "transformers==5.22.2",
+#     "trl==1.7.1",
+#     "peft==0.21.2",
 # ]
 # ///
 """Train a LoRA adapter on Tiny Aya Global with AgentTune, from the SFT dataset on the Hub.
@@ -316,7 +319,7 @@ class MaskedSFTFactory:
             num_train_epochs=options.epochs,
             learning_rate=options.lr,
             lr_scheduler_type="cosine",
-            warmup_ratio=0.05,
+            warmup_steps=0.05,  # a float below 1 is a share of the training steps (transformers 5 dropped warmup_ratio)
             per_device_train_batch_size=options.batch_size,
             gradient_accumulation_steps=options.grad_accum,
             gradient_checkpointing=True,
