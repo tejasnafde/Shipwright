@@ -79,3 +79,33 @@ def test_a_tool_call_with_a_sentence_before_it_becomes_exactly_one_block():
     assert corrections.canonical_reply(mixed) == (
         '```json\n{"name": "find_user_id_by_name_zip", "arguments": {"zip": "19122"}}\n```')
     assert corrections.canonical_reply("  Anything else I can do?  ") == "Anything else I can do?"
+
+
+def guarded_trace():
+    """A run with the guards on: the repeated lookup was rejected, so the history holds it once, and the rejected reply
+    sits in the turn's guard_rejections."""
+    messages = looping_trace()["messages"][:6] + [tau2_message("assistant", "Your order #W1 is pending.")]
+    rejected = '```json\n{"name": "get_order_details", "arguments": {"order_id": "#W1"}}\n```'
+    agent_turns = [{"message_index": 6, "guard_rejections": [{"rule": "repeated_call", "raw_text": rejected}]}]
+    return {"task_id": "8", "simulation_id": "s8", "passed": False, "termination_reason": "user_stop",
+            "messages": messages, "agent_turns": agent_turns}
+
+
+def test_a_reply_the_guards_rejected_is_a_wrong_turn_at_the_state_the_student_was_in():
+    wrong = corrections.find_wrong_turns(guarded_trace())
+    assert [turn.rule for turn in wrong] == ["repeated_call"]
+    assert len(wrong[0].conversation_before) == 6  # up to the turn, not including the reply the guards let through
+    assert not corrections.reply_is_acceptable(
+        wrong[0].conversation_before, '```json\n{"name": "get_order_details", "arguments": {"order_id": "#W1"}}\n```')
+
+
+def test_a_long_conversation_is_trimmed_to_the_budget_not_dropped():
+    trace = looping_trace()
+    filler = "x " * 6000  # three of these pass 8192 tokens
+    for _ in range(3):  # a long middle of the conversation, as in a looping run
+        trace["messages"].insert(2, tau2_message("user", filler))
+        trace["messages"].insert(2, tau2_message("assistant", "Let me check."))
+    wrong = corrections.find_wrong_turns(trace)[0]
+    row = corrections.correction_row(wrong, PROMPT, "Your order is pending.", "teacher")
+    assert corrections.count_messages(row["messages"]) <= corrections.CONTEXT_LIMIT
+    assert row["messages"][-1] == {"role": "assistant", "content": "Your order is pending."}
