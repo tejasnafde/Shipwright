@@ -264,6 +264,7 @@ loads `heal_loop.py` (which needs only AgentTune's contracts) directly.
   (tau2 is not edited). Each must match its `before` sha256, so a conflict fails at start.
   Fields changed by LLM patches are shown in full in the tool list. Active patch ids go to
   `run_config.json` and `summary.json`.
+- Does the proposer find the guard fixes a person wrote? Checked 2026-11-13: `docs/pipeline/tool_fix.md`.
 
 ## Tool guards (the "add validation" half of the tool fix, no GPU)
 
