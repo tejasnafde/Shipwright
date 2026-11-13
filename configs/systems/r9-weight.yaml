@@ -1,0 +1,24 @@
+# Round 9 candidate: a fresh LoRA (from the base model, 2 epochs, lr 1e-4) on shipwright-sft@round-9: the pooled DeepSeek
+# teacher passes (238 rows, with 43 new runs on the tasks the round 8 candidate failed), 300 general function-calling rows,
+# and 100 on-policy corrections of the round 8 candidate's own train-pool failures (scripts/build_corrections.py on
+# runs/r9-cand-train, mostly a repeated lookup answered in words instead). Tool guards on, as in round 8.
+name: r9-weight
+model: CohereLabs/tiny-aya-global
+adapter:
+  repo: mitushigoyal5/shipwright-lora
+  revision: round-9
+route: weight_fix
+targets:
+- invented_id
+- tool_example_copied
+- loop
+- tool_error_ignored
+- unknown_tool
+- malformed_args
+- wrong_tool
+- bad_arguments
+- wrong_order
+- skipped_policy_step
+- invented_answer
+- premature_transfer
+tool_guards: true
