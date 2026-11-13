@@ -401,6 +401,8 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   (c) Tiny Aya's fixed prompt (policy + tool list) is 3,404 of 8,192 tokens; a product listing is up to about 1k tokens, so 3 lookups fill the window (14% of turns trimmed). 92 of the 149 `repeated_call` rejections are `get_product_details`, 114 of them in turns where nothing was trimmed: the model's habit, not forgetting. The guard's fallback text ("I have already looked that up ... How would you like me to proceed?") reached the customer in 32 of 60 runs and was the last agent message in 9.
   (d) The round 7 corrections were built from `r4-cand-train` (the round 4 adapter's failures), not from the adapter being corrected: not on-policy, so not a real DAgger step. 12 of the 20 runs that wrote and still failed used a different write tool than the task needed (a policy decision, weights not harness).
 
+- 2026-11-13 gate 8 (the round 7 adapter with the item-id repair and the repeat reminder) was lost to a job timeout, $1.00 and no result: I set `--timeout 40m` to cap the spend at the approved $1, but a gate needs about 45 to 50 minutes of wall time (vLLM load, BFCL, 120 runs; gates 6 and 7 ran 31 to 33 minutes of running time when the router was quick). A timeout ends the job with nothing pushed. Never size a job's timeout to a budget: keep the 60 minute `GATE_TIMEOUT` and enforce the budget with `scripts/spend_watchdog.py`, or approve the larger figure.
+
 ## Keep this file correct
 
 This file corrects itself through you. **`AGENTS.md` is the only file that carries facts, traps
