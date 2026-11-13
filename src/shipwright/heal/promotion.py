@@ -43,12 +43,15 @@ def deployed_system(ledger_rows: list[dict]) -> dict:
     if not in_force:
         return {"name": "base", "model": BASE_MODEL, "route": "none"}
     latest = in_force[-1]
-    return {
+    system = {
         "name": f"promoted-r{latest['round']}",
         "model": BASE_MODEL,
         "adapter": latest["adapter"],
         "route": "weight_fix",
     }
+    if latest.get("tool_guards"):  # a candidate gated with the guards on is deployed with them
+        system["tool_guards"] = True
+    return system
 
 
 def append_row(ledger_path: Path, row: dict) -> dict:
@@ -71,6 +74,7 @@ def promote(ledger_path: Path, gate_decision: dict, decision_file: str) -> dict:
         "round": gate_decision["round"],
         "candidate": candidate["name"],
         "adapter": candidate["adapter"],
+        "tool_guards": bool(candidate.get("tool_guards")),
         "decision_file": decision_file,
     })
 
