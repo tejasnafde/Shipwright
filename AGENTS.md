@@ -421,6 +421,8 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 
 - 2026-11-13 (offline replay of the 133 trimmed requests of gate 8 on the real tokenizer, `runs/gate-r8/r8-weight`): runs that lose history 16 recorded, 11 with `context.shorten_old_tool_results` + `shorten_old_replies` (committed), 9 if a `get_product_details` listing is also shortened the moment it arrives. The check allows about 4 (base: 1). Shortening is not enough alone: the rest are 34 to 74 message conversations (over budget by a median 1.5k tokens, up to 8k). A gate for result shortening alone would very likely still fail `non_target`; what is left is fewer lookups per task (weights and data) or a smaller fixed prompt (3k of the 8k window; changing it means retraining).
 
+- 2026-11-13 (falsified, do not build): a lookup-streak guard ("you have looked up enough, answer the customer") to stop the `context_overflow` chains. Longest run of read-only calls with no customer turn: passing teacher runs 4 to 9 (all teacher harvests), passing candidate runs 6 to 7, gate 8 overflow runs 5 to 8. It cannot separate them: a limit of 6 or 7 cuts passing runs. Long lookup chains are real work here; the problem is the 8k window, so the lever is capacity (compaction of observations, a smaller fixed prompt), not stopping lookups. Also: `build_corrections` only treats a guard violation as a wrong turn, so correction rounds give no data for a long chain that no guard rejects.
+
 ## Keep this file correct
 
 This file corrects itself through you. **`AGENTS.md` is the only file that carries facts, traps
