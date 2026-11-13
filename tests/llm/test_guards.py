@@ -282,10 +282,29 @@ def test_a_real_product_id_or_an_unknown_id_is_left_alone():
     messages = order_and_listing_messages()
     assert guards.repaired_call(messages, guards.ToolCall("get_product_details", {"product_id": "P2"})) is None
     assert guards.repaired_call(messages, guards.ToolCall("get_product_details", {"product_id": "999"})) is None
-    assert guards.repaired_call(messages, guards.ToolCall("get_order_details", {"order_id": "222"})) is None
+    assert guards.repaired_call(messages, guards.ToolCall("get_order_details", {"order_id": "#W1"})) is None
+    assert guards.repaired_call(messages, guards.ToolCall("get_order_details", {"order_id": "999"})) is None
 
 
 def test_the_repeat_warning_carries_the_earlier_result():
     messages = order_and_listing_messages()
     violation = guards.check_repeated_call(messages, guards.ToolCall("get_product_details", {"product_id": "P2"}))
     assert violation is not None and '"variants"' in violation.message and violation.rule == "repeated_call"
+
+
+def test_the_same_rule_covers_every_lookup_tool_and_needs_the_tool_to_be_in_the_list():
+    messages = order_and_listing_messages()
+    # an order id given to the product lookup, and an item id given to the order lookup
+    assert guards.repaired_call(messages, guards.ToolCall("get_product_details", {"product_id": "#W1"})) == \
+        guards.ToolCall("get_order_details", {"order_id": "#W1"})
+    assert guards.repaired_call(messages, guards.ToolCall("get_order_details", {"order_id": "222"})) == \
+        guards.ToolCall("get_item_details", {"item_id": "222"})
+    # the replacement must be a tool the agent was shown
+    only_product = {"get_product_details", "get_order_details"}
+    assert guards.repaired_call(messages, guards.ToolCall("get_product_details", {"product_id": "222"}), only_product) is None
+
+
+def test_tool_names_are_read_from_the_system_prompt_lines():
+    prompt = "POLICY\n\nYou can use these tools:\nget_item_details(item_id: str) - x\ncalculate(expression: str) - y\n\nTo call a tool"
+    assert guards.tool_names_in_prompt([{"role": "system", "content": prompt}]) == {"get_item_details", "calculate"}
+    assert guards.tool_names_in_prompt([{"role": "user", "content": "hi"}]) is None

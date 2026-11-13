@@ -174,10 +174,11 @@ def trace_fields(response: Any) -> dict:
     return provider_fields.get(TRACE_FIELD) or {}
 
 
-def repair_tool_call(conversation: list[dict], response: Any, repairs: list[dict]) -> None:
+def repair_tool_call(conversation: list[dict], response: Any, repairs: list[dict],
+                     available_tools: set[str] | None = None) -> None:
     """Rewrite the reply's tool call in place when guards.repaired_call has a fix for it; note it in ``repairs``."""
     call = proposed_tool_call(response)
-    fixed = guards.repaired_call(conversation, call) if call else None
+    fixed = guards.repaired_call(conversation, call, available_tools) if call else None
     if fixed is None:
         return
     function = response.choices[0].message.tool_calls[0].function
@@ -198,7 +199,8 @@ def ask_again_until_policy_ok(conversation: list[dict], request_kwargs: dict, re
     rejections = []
     repairs = []
     retry_messages = list(request_kwargs["messages"])
-    repair_tool_call(conversation, response, repairs)
+    available_tools = guards.tool_names_in_prompt(retry_messages)
+    repair_tool_call(conversation, response, repairs, available_tools)
     for _ in range(guards.MAX_GUARD_RETRIES):
         call = proposed_tool_call(response)
         if call is None:
@@ -214,7 +216,7 @@ def ask_again_until_policy_ok(conversation: list[dict], request_kwargs: dict, re
         retry_kwargs = dict(request_kwargs)
         retry_kwargs["messages"] = fitted_messages
         response = ask_model(retry_kwargs)
-        repair_tool_call(conversation, response, repairs)
+        repair_tool_call(conversation, response, repairs, available_tools)
 
     if rejections or repairs:
         final_call = proposed_tool_call(response)

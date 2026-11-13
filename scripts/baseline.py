@@ -344,6 +344,7 @@ def write_run_config(
     from shipwright.llm import prompted_tools
 
     run_config["tool_list_version"] = prompted_tools.TOOL_LIST_VERSION
+    run_config["observation_version"] = prompted_tools.OBSERVATION_VERSION
     (run_directory / "run_config.json").write_text(json.dumps(run_config, indent=2))
 
 

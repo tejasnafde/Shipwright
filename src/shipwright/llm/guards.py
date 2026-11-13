@@ -371,20 +371,65 @@ def check_repeated_call(messages: list[dict], call: ToolCall) -> GuardViolation 
     return None
 
 
-def repaired_call(messages: list[dict], call: ToolCall) -> ToolCall | None:
+LOOKUP_TOOL = re.compile(r"^get_(\w+)_details$")
+
+
+def id_kinds(messages: list[dict]) -> dict[str, set[str]]:
+    """Every id value in the earlier tool results -> the kinds it was seen as ("item", "product", "order", "user" ...):
+    from a key ending in _id, from the keys of a product's variants (item ids) and from a user's list of orders."""
+    kinds: dict[str, set[str]] = {}
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key.endswith("_id") and isinstance(value, (str, int)):
+                    kinds.setdefault(str(value), set()).add(key[: -len("_id")])
+                if key == "variants" and isinstance(value, dict):
+                    for item_id in value:
+                        kinds.setdefault(str(item_id), set()).add("item")
+                if key == "orders" and isinstance(value, list):
+                    for order_id in value:
+                        kinds.setdefault(str(order_id), set()).add("order")
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    for earlier in earlier_calls(messages):
+        result = result_json(earlier.result)
+        if result:
+            walk(result)
+    return kinds
+
+
+def tool_names_in_prompt(messages: list[dict]) -> set[str] | None:
+    """The tools the agent was shown (the "name(arguments) - what it does" lines of the system prompt), or None."""
+    system_text = next((message["content"] for message in messages if message.get("role") == "system"), "")
+    names = set(re.findall(r"^(\w+)\(", system_text, flags=re.MULTILINE))
+    return names or None
+
+
+def repaired_call(messages: list[dict], call: ToolCall, available_tools: set[str] | None = None) -> ToolCall | None:
     """A tool call fixed before it runs, or None when it needs no fix.
 
-    get_product_details given the id of an item (a variant seen in an order or a product listing earlier) is a request
-    for that item's details: that is get_item_details. Gate 7: all 59 "Product not found" errors of the candidate were
-    this (the base makes 8, with made-up names), 5 runs ended at the tool-error limit, and the prompt already says the
-    two ids differ. An id that is neither a known item nor a known product is left to the made-up-id guard."""
-    if call.name != "get_product_details":
+    A lookup tool get_<kind>_details given an id that the conversation has only seen as another kind of id is a request for
+    that other kind: get_product_details("<an item id>") becomes get_item_details, and the same for orders and users. The
+    replacement tool must be one the agent was shown (``available_tools``). Gate 7: all 59 "Product not found" errors of
+    the candidate were an item id given to get_product_details (the base makes 8, with made-up names), 5 runs ended at the
+    tool-error limit, and the prompt already says the two ids differ. An id the conversation has never seen is left to the
+    made-up-id guard."""
+    match = LOOKUP_TOOL.match(call.name)
+    if not match:
         return None
-    product_id = str(call.arguments.get("product_id") or "")
-    product_by_item = product_of_items(messages)
-    known_product_ids = {product_id_of_item for product_id_of_item, _ in product_by_item.values()}
-    if product_id in product_by_item and product_id not in known_product_ids:
-        return ToolCall(name="get_item_details", arguments={"item_id": product_id})
+    kind = match.group(1)
+    value = call.arguments.get(f"{kind}_id")
+    seen_as = id_kinds(messages).get(str(value)) if value is not None else None
+    if not seen_as or kind in seen_as:
+        return None
+    for other_kind in sorted(seen_as):
+        tool = f"get_{other_kind}_details"
+        if available_tools is None or tool in available_tools:
+            return ToolCall(name=tool, arguments={f"{other_kind}_id": str(value)})
     return None
 
 

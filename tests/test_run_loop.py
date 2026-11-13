@@ -266,3 +266,13 @@ def test_a_real_litellm_reply_with_an_item_id_is_rewritten_in_place():
     assert function.name == "get_item_details" and json.loads(function.arguments) == {"item_id": "222"}
     trace = patched.choices[0].message.provider_specific_fields[patches.TRACE_FIELD]
     assert trace["guard_repairs"] == [{"from": "get_product_details", "to": "get_item_details", "arguments": {"item_id": "222"}}]
+
+
+def test_each_round_of_corrections_trains_on_the_earlier_rounds_too(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_loop, "ROOT", tmp_path)
+    for round_number, rows in ((7, ['{"a": 1}', '{"b": 2}']), (8, ['{"b": 2}', '{"c": 3}'])):  # one row is in both
+        directory = tmp_path / "runs" / f"r{round_number}-corrections"
+        directory.mkdir(parents=True)
+        (directory / "corrections.jsonl").write_text("\n".join(rows) + "\n")
+    combined = run_loop.combined_corrections(argparse.Namespace(round=8))
+    assert len(combined.read_text().splitlines()) == 3

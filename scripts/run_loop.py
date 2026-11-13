@@ -61,7 +61,7 @@ GATE_FLAVOR, GATE_TIMEOUT = run_round.GATE_FLAVOR, "60m"
 HF_PRICES = {"a10g-large": 1.50, "l40sx1": 1.80, "a100-large": 2.50}
 # What each step is expected to cost (round 3: the gate 0.75, training 0.62, the classify stage 0.05).
 STEP_ESTIMATES = {"candidate_train": 0.6, "classify": 0.05, "corrections": 0.3, "data": 0.0, "train": 1.2,
-                  "bfcl_screen": 0.25, "gate": 0.9}
+                  "bfcl_screen": 0.25, "gate": 1.1}
 CORRECTIONS_COST_CAP_USD = 0.4
 STEPS = list(STEP_ESTIMATES)
 BFCL_SCREEN_TIMEOUT = "30m"
@@ -114,6 +114,8 @@ def fetch_gate_decision(round_number: int) -> dict:
 
 
 def previous_recipe(round_number: int) -> recipe_module.Recipe:
+    """The recipe the round's candidate was made with: its manifest if the loop ran it, else inferred from its system config
+    (the guards flag) and the manifest of the round that trained its adapter (a gate run by hand has no manifest)."""
     manifest_path = run_round.manifest_path(round_number)
     if manifest_path.exists():
         saved = json.loads(manifest_path.read_text()).get("recipe")
@@ -121,7 +123,19 @@ def previous_recipe(round_number: int) -> recipe_module.Recipe:
             recipe = recipe_module.recipe_from_dict(saved)
             recipe.reasons = []
             return recipe
-    return recipe_module.Recipe()
+    import yaml
+
+    config_path = ROOT / "configs" / "systems" / f"{candidate_name(round_number)}.yaml"
+    if not config_path.exists():
+        return recipe_module.Recipe()
+    system = yaml.safe_load(config_path.read_text())
+    revision = str((system.get("adapter") or {}).get("revision") or "")
+    trained_in = int(revision.removeprefix("round-")) if revision.removeprefix("round-").isdigit() else None
+    recipe = recipe_module.Recipe()
+    if trained_in is not None and trained_in != round_number:
+        recipe = previous_recipe(trained_in)
+    recipe.tool_guards = bool(system.get("tool_guards"))
+    return recipe
 
 
 def adapter_revision_of(round_number: int) -> str:
@@ -351,6 +365,24 @@ def build_general_replay(per_category: int) -> Path:
     return output_directory / "replay.jsonl"
 
 
+def combined_corrections(options: argparse.Namespace) -> Path:
+    """This round's corrections plus those of every earlier round on disk, in one file: each round of corrections trains on
+    the earlier ones too (the adapter is retrained from the base model every time), so a lesson is not forgotten."""
+    combined = corrections_directory(options) / "all_corrections.jsonl"
+    seen_rows: set[str] = set()
+    lines: list[str] = []
+    for round_number in range(options.round, 0, -1):
+        path = ROOT / "runs" / f"r{round_number}-corrections" / "corrections.jsonl"
+        if not path.exists():
+            continue
+        for line in path.read_text().splitlines():
+            if line.strip() and line not in seen_rows:
+                seen_rows.add(line)
+                lines.append(line)
+    combined.write_text("\n".join(lines) + "\n")
+    return combined
+
+
 def step_data(options: argparse.Namespace, chosen: recipe_module.Recipe) -> dict:
     output_directory = ROOT / "runs" / run_round.sft_dir_name(options.round)
     command = [sys.executable, str(ROOT / "scripts" / "build_sft.py"), "--output-dir", str(output_directory),
@@ -359,7 +391,7 @@ def step_data(options: argparse.Namespace, chosen: recipe_module.Recipe) -> dict
     if chosen.general_replay:
         command += ["--general-replay", str(build_general_replay(chosen.general_replay))]
     if chosen.corrections:
-        command += ["--corrections", str(corrections_directory(options) / "corrections.jsonl")]
+        command += ["--corrections", str(combined_corrections(options))]
     for name in options.pool:
         command += ["--teacher", str(ROOT / "runs" / run_round.local_run_name(name))]
     exit_code = subprocess.run(command).returncode
@@ -654,7 +686,11 @@ def next_recipe_for(manifest: dict, options: argparse.Namespace, previous_decisi
     """The recipe, kept in the manifest once chosen so a rerun uses the same one."""
     if manifest.get("recipe"):
         return recipe_module.recipe_from_dict(manifest["recipe"])
-    chosen = recipe_module.next_recipe(previous_decision, previous_recipe(options.from_round))
+    try:
+        earlier_decision = fetch_gate_decision(options.from_round - 1)
+    except Exception:  # noqa: BLE001 - no earlier gate on the Hub: the comparison is skipped
+        earlier_decision = None
+    chosen = recipe_module.next_recipe(previous_decision, previous_recipe(options.from_round), earlier_decision)
     manifest["recipe"] = recipe_module.recipe_to_dict(chosen)
     return chosen
 
