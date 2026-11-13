@@ -9,7 +9,9 @@ over, we truncate the latest message with a "[truncated N chars]" marker.
 
 from __future__ import annotations
 
+import json
 import math
+import re
 import threading
 from typing import Callable
 
@@ -77,12 +79,92 @@ def _merge_same_role(messages: list[dict]) -> list[dict]:
     return merged_messages
 
 
+# "Tool result for <tool>: <json>" is how convert_messages shows a tool result to the student. Keep the newest few as
+# they are: the agent is working from them.
+TOOL_RESULT = re.compile(r"Tool result for (\w+): (\{.*\})")
+RESULTS_KEPT_WHOLE = 2
+
+
+def shortened_result(tool_name: str, result: dict) -> dict:
+    """The same tool result with the parts the agent does not act on left out.
+
+    A product listing is up to about 1k tokens and half of it is variants that cannot be ordered; with a prompt that
+    already takes 3.4k of the 8.2k window, three lookups used to push the customer's details out (gate 7: 10 of 60
+    runs lost history, gate 8: 14). Only an older result is shortened, and only when the request is over budget."""
+    if tool_name == "get_product_details" and isinstance(result.get("variants"), dict):
+        available = {item_id: {"options": variant.get("options"), "price": variant.get("price")}
+                     for item_id, variant in result["variants"].items() if variant.get("available")}
+        return {"name": result.get("name"), "product_id": result.get("product_id"), "available_variants": available,
+                "unavailable_variants": len(result["variants"]) - len(available), "shortened": True}
+    if tool_name == "get_order_details" and "items" in result:
+        return {**{key: result.get(key) for key in ("order_id", "user_id", "status", "items", "payment_history")},
+                "shortened": True}
+    if tool_name == "get_user_details" and "payment_methods" in result:
+        return {"user_id": result.get("user_id"), "name": result.get("name"), "orders": result.get("orders"),
+                "payment_methods": list(result["payment_methods"]), "shortened": True}
+    return result
+
+
+def shorten_old_tool_results(messages: list[dict], budget: int) -> tuple[list[dict], int]:
+    """Shorten tool results, oldest first and never the newest RESULTS_KEPT_WHOLE, until the messages fit.
+    Returns (messages, how many results were shortened)."""
+    spots = [(index, match) for index, message in enumerate(messages) if message["role"] == "user"
+             for match in TOOL_RESULT.finditer(message["content"])]
+    shortened_count = 0
+    messages = [dict(message) for message in messages]
+    for index, match in spots[:-RESULTS_KEPT_WHOLE] if RESULTS_KEPT_WHOLE else spots:
+        if count_messages(messages) <= budget:
+            break
+        try:
+            result = json.loads(match.group(2))
+        except ValueError:
+            continue
+        if not isinstance(result, dict) or result.get("shortened"):
+            continue
+        replacement = shortened_result(match.group(1), result)
+        if replacement is result:
+            continue
+        text = f"Tool result for {match.group(1)}: " + json.dumps(replacement, separators=(",", ":"), ensure_ascii=False)
+        content = messages[index]["content"]
+        messages[index]["content"] = content.replace(match.group(0), text, 1)
+        shortened_count += 1
+    return messages, shortened_count
+
+
+OLD_REPLY_CHARS = 350
+REPLIES_KEPT_WHOLE = 2
+
+
+def shorten_old_replies(messages: list[dict], budget: int) -> tuple[list[dict], int]:
+    """Cut the agent's older replies to their first OLD_REPLY_CHARS characters (oldest first, never the newest
+    REPLIES_KEPT_WHOLE), until the messages fit. A tool call (a ```json block) is never cut: the next turn reads it as
+    the agent's own history. Gate 8: the agent's replies were 27% of the requests that still did not fit."""
+    replies = [index for index, message in enumerate(messages)
+               if message["role"] == "assistant" and "```json" not in message["content"]
+               and len(message["content"]) > OLD_REPLY_CHARS]
+    messages = [dict(message) for message in messages]
+    shortened_count = 0
+    for index in replies[:-REPLIES_KEPT_WHOLE] if REPLIES_KEPT_WHOLE else replies:
+        if count_messages(messages) <= budget:
+            break
+        messages[index]["content"] = messages[index]["content"][:OLD_REPLY_CHARS] + " [shortened]"
+        shortened_count += 1
+    return messages, shortened_count
+
+
 def fit_messages(messages: list[dict], budget: int | None = None) -> tuple[list[dict], dict]:
     """Return (messages that fit the budget, info about what was trimmed)."""
     budget = prompt_budget() if budget is None else budget
-    info = {"prompt_tokens_est": count_messages(messages), "dropped_messages": 0,
+    info = {"prompt_tokens_est": count_messages(messages), "dropped_messages": 0, "results_shortened": 0,
             "truncated_chars": 0, "token_count_method": count_method(), "budget": budget}
     if info["prompt_tokens_est"] <= budget:
+        return messages, info
+    messages, info["results_shortened"] = shorten_old_tool_results(messages, budget)
+    if count_messages(messages) > budget:
+        messages, replies_shortened = shorten_old_replies(messages, budget)
+        info["results_shortened"] += replies_shortened
+    if count_messages(messages) <= budget:
+        info["prompt_tokens_est"] = count_messages(messages)
         return messages, info
 
     head = 0

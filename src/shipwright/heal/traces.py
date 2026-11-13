@@ -142,6 +142,8 @@ def _build_agent_turn(
         "prompt_tokens_est": shipwright_fields.get("prompt_tokens_est"),
         "prompt_sha": shipwright_fields.get("prompt_sha"),
         "context_dropped_messages": shipwright_fields.get("dropped_messages", 0),
+        "context_results_shortened": shipwright_fields.get("results_shortened", 0),
+        "guard_repairs": shipwright_fields.get("guard_repairs") or [],
         "context_truncated_chars": shipwright_fields.get("truncated_chars", 0),
         "context_trimmed": was_context_trimmed,
         "reasoning": raw_message.get("reasoning_content") or raw_message.get("reasoning"),
