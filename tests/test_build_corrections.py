@@ -109,3 +109,27 @@ def test_a_long_conversation_is_trimmed_to_the_budget_not_dropped():
     row = corrections.correction_row(wrong, PROMPT, "Your order is pending.", "teacher")
     assert corrections.count_messages(row["messages"]) <= corrections.CONTEXT_LIMIT
     assert row["messages"][-1] == {"role": "assistant", "content": "Your order is pending."}
+
+
+def test_a_failed_call_is_skipped_and_saved_answers_are_not_paid_for_again():
+    saved = {}
+    calls = []
+
+    def flaky_teacher(model, messages):
+        calls.append(messages)
+        if len(calls) == 2:
+            raise RuntimeError("429")
+        return "Your order is pending.", {"prompt_tokens": 1000, "completion_tokens": 10}
+
+    def save(key, answer):
+        saved[key] = answer
+
+    traces = [looping_trace(), {**looping_trace(), "simulation_id": "s9"}]
+    rows, stats = corrections.build_corrections(traces, lambda trace: PROMPT, flaky_teacher, "m", 1.0, 5,
+                                                saved_answers={}, save_answer=save)
+    assert stats.teacher_errors == 1 and len(rows) == 3 and len(saved) == 3
+
+    calls.clear()
+    rows_again, stats_again = corrections.build_corrections(traces, lambda trace: PROMPT, flaky_teacher, "m", 1.0, 5,
+                                                            saved_answers=dict(saved), save_answer=save)
+    assert stats_again.answers_reused == 3 and len(calls) == 1 and len(rows_again) == 4  # only the failed turn is asked

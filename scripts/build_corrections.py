@@ -35,6 +35,8 @@ from shipwright.llm.context import CONTEXT_LIMIT, count_messages, fit_messages  
 from shipwright.llm.prompted_tools import convert_messages, format_tool_call, parse_tool_call  # noqa: E402
 from shipwright.observability import log  # noqa: E402
 
+logger = log.get_logger("build_corrections")
+
 TEACHER_REPLY_TOKENS = 4096
 TEACHER_TEMPERATURE = 0.3
 
@@ -146,6 +148,8 @@ class CorrectionStats:
     accepted: dict[str, int] = field(default_factory=dict)
     rejected: int = 0
     too_long: int = 0
+    teacher_errors: int = 0  # calls that still failed after vertex.call_with_refresh's retries: skipped, not fatal
+    answers_reused: int = 0  # answers paid for by an earlier, interrupted run (asked.jsonl)
     cost_usd: float = 0.0
     stopped_on_budget: bool = False
 
@@ -155,6 +159,17 @@ def call_cost(model: str, usage: dict) -> float:
     return (usage["prompt_tokens"] * price[0] + usage["completion_tokens"] * price[2]) / 1_000_000
 
 
+def answer_key(wrong_turn: WrongTurn) -> str:
+    """Names one wrong turn across runs of this script: the run and how far into it the turn is."""
+    return f"{wrong_turn.simulation_id}:{len(wrong_turn.conversation_before)}"
+
+
+@dataclass
+class SavedAnswer:
+    reply_text: str
+    usage: dict
+
+
 def build_corrections(
     traces: list[dict],
     prompt_for_trace: Callable[[dict], dict],
@@ -162,7 +177,12 @@ def build_corrections(
     teacher_model: str,
     max_cost_usd: float,
     per_rule_limit: int = 2,
+    saved_answers: dict[str, SavedAnswer] | None = None,
+    save_answer: Callable[[str, SavedAnswer], None] | None = None,
 ) -> tuple[list[dict], CorrectionStats]:
+    """``saved_answers`` are the teacher's answers from an earlier run that stopped midway (round 9: a 429 after 30 minutes
+    lost every answer): they are used again, not paid for again. ``save_answer`` is called right after each paid answer."""
+    saved_answers = saved_answers if saved_answers is not None else {}
     rows: list[dict] = []
     stats = CorrectionStats()
     for trace in traces:
@@ -174,8 +194,22 @@ def build_corrections(
             if stats.cost_usd >= max_cost_usd:
                 stats.stopped_on_budget = True
                 continue
-            reply_text, usage = ask_teacher(teacher_model, student_view(prompt, wrong_turn.conversation_before))
-            stats.cost_usd += call_cost(teacher_model, usage)
+            key = answer_key(wrong_turn)
+            if key in saved_answers:
+                answer = saved_answers[key]
+                stats.answers_reused += 1
+            else:
+                try:
+                    reply_text, usage = ask_teacher(teacher_model, student_view(prompt, wrong_turn.conversation_before))
+                except Exception as call_error:  # noqa: BLE001 - one failed call must not lose the answers already paid for
+                    stats.teacher_errors += 1
+                    logger.warning("teacher call failed, wrong turn skipped", key=key, error=str(call_error)[:200])
+                    continue
+                answer = SavedAnswer(reply_text, usage)
+                if save_answer is not None:
+                    save_answer(key, answer)
+            reply_text = answer.reply_text
+            stats.cost_usd += call_cost(teacher_model, answer.usage)
             if not reply_is_acceptable(wrong_turn.conversation_before, reply_text):
                 stats.rejected += 1
                 continue
@@ -205,17 +239,30 @@ def main() -> int:
         shas = {turn.get("prompt_sha") for turn in trace.get("agent_turns") or [] if turn.get("prompt_sha")}
         return prompts[next(iter(shas))] if len(shas) == 1 and next(iter(shas)) in prompts else only_prompt
 
-    rows, stats = build_corrections(traces, prompt_for_trace, ask_vertex_teacher, options.teacher_model,
-                                    options.max_cost_usd, options.per_rule_limit)
     output_directory = options.output_dir or (ROOT / "runs" / f"corrections-{options.failures.name}")
     output_directory.mkdir(parents=True, exist_ok=True)
+    asked_path = output_directory / "asked.jsonl"
+    saved_answers: dict[str, SavedAnswer] = {}
+    if asked_path.exists():
+        for line in asked_path.read_text().splitlines():
+            if line.strip():
+                saved = json.loads(line)
+                saved_answers[saved["key"]] = SavedAnswer(saved["reply_text"], saved["usage"])
+
+    def save_answer(key: str, answer: SavedAnswer) -> None:
+        with open(asked_path, "a") as asked_file:
+            asked_file.write(json.dumps({"key": key, "reply_text": answer.reply_text, "usage": answer.usage}, ensure_ascii=False) + "\n")
+
+    rows, stats = build_corrections(traces, prompt_for_trace, ask_vertex_teacher, options.teacher_model,
+                                    options.max_cost_usd, options.per_rule_limit, saved_answers, save_answer)
     with open(output_directory / "corrections.jsonl", "w") as corrections_file:
         for row in rows:
             corrections_file.write(json.dumps(row, ensure_ascii=False) + "\n")
     summary = {
         "failures_run": str(options.failures), "teacher_model": options.teacher_model, "rows": len(rows),
         "wrong_turns_found": stats.wrong_turns_found, "accepted": stats.accepted, "rejected_by_the_guards": stats.rejected,
-        "too_long": stats.too_long, "cost_usd": round(stats.cost_usd, 4), "max_cost_usd": options.max_cost_usd,
+        "too_long": stats.too_long, "teacher_errors": stats.teacher_errors, "answers_reused": stats.answers_reused,
+        "cost_usd": round(stats.cost_usd, 4), "max_cost_usd": options.max_cost_usd,
         "stopped_on_budget": stats.stopped_on_budget,
     }
     (output_directory / "corrections_stats.json").write_text(json.dumps(summary, indent=2))
