@@ -36,8 +36,15 @@ runs; the exact ids go into `gate_inputs.json` and `metrics.jsonl`.
 | agenttune_gate | AgentTune `DeploymentGate.evaluate_decision` approves, on >= 54 paired held-out runs |
 
 Rates use valid runs as the denominator. Infra-error runs are excluded everywhere and
-counted in `num_infra_errors`. Labels come from `scripts/classify.py`; `classify.classifier_model:
-null` means AgentTune's detector and our rule labels only (deterministic, free).
+counted in `num_infra_errors`. Labels come from `scripts/classify.py`, the same way for both
+systems: our rules, AgentTune's detector and, since 2026-11-13, AgentTune's `FailureClassifier`
+(`classify.classifier_model`, Vertex gpt-oss, one call per failed run, about $0.10 a gate).
+`--no-llm` or `classifier_model: null` keeps rules only (free). Each system's `label_coverage` in
+`gate_decision.json` counts failed runs labelled by rules, by AgentTune only, still unlabelled,
+and failed classifier calls (`agenttune_errors`).
+
+Re-score two finished run dirs offline (Vertex only, no GPU, about $0.05 for about 100 failures):
+`gate_eval.py --round N --current-run DIR --candidate-run DIR --target-label ... --reclassify --output-dir DIR`.
 
 ## AgentTune DeploymentGate and AuditKIT together
 

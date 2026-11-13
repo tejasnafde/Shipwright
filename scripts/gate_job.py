@@ -255,7 +255,7 @@ def launch_job(
     job_options: argparse.Namespace,
     code_bundle_path: str,
     commit_sha: str,
-    user_model_on_vertex: bool,
+    needs_vertex_token: bool,
 ) -> int:
     import baseline
     from huggingface_hub import HfApi, run_uv_job
@@ -268,7 +268,7 @@ def launch_job(
         return 2
 
     job_secrets = {"HF_TOKEN": token}
-    if user_model_on_vertex:
+    if needs_vertex_token:
         try:
             if vertex.on_gcp():
                 job_secrets["SHIPWRIGHT_VERTEX_TOKEN"] = vertex.metadata_token()[0]
@@ -319,10 +319,18 @@ def main(argv: list[str] | None = None) -> int:
     if job_options.train_eval and not job_options.task_ids:
         raise SystemExit("--train-eval needs --task-ids")
     print_plan(job_options, gate_config, systems, code_bundle_path, commit_sha, user_model_on_vertex)
+    # The gate classifies both systems' failures with AgentTune's classifier (Vertex): the job needs a token for it too.
+    classifier_model = (gate_config.get("classify") or {}).get("classifier_model")
+    classifier_on_vertex = vertex.is_vertex_model(classifier_model or "")
+    if classifier_on_vertex:
+        print(
+            f"classify:  AgentTune FailureClassifier, {classifier_model} on Vertex, about $0.10"
+            " (one call per failed run, both systems; Vertex token minted at launch, about 1 h)"
+        )
     if not job_options.launch:
         print("\nPlan only. Nothing was uploaded or launched. Add --launch to submit the job.")
         return 0
-    return launch_job(job_options, code_bundle_path, commit_sha, user_model_on_vertex)
+    return launch_job(job_options, code_bundle_path, commit_sha, user_model_on_vertex or classifier_on_vertex)
 
 
 if __name__ == "__main__":

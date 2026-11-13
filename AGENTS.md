@@ -94,6 +94,17 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
   before any attempt to authenticate). The label list is unchanged: `premature_transfer` was already a judge label.
   Reason: it was the most common round 1 failure (37 of 59 valid runs transferred, 18 as the very first tool call)
   and no rule counted it, so no candidate could target it.
+- 2026-11-13, frozen-value change (`configs/gate.yaml` `classify.classifier_model`, not a threshold): the gate
+  classifies every failed run of BOTH systems with AgentTune's `FailureClassifier` (`agenttune_bridge.make_classifier`,
+  Vertex `gpt-oss-120b-maas`, about $0.10 a gate), mapped into the frozen label list; rule labels are kept and still
+  decide the fault layer. Why: gate 8 failed only `non_target` (0.68 vs 0.08), and 28 of the candidate's 46 failures
+  were `unclassified` (22 never made a write call). The base fails the same way, but there the run also carries a
+  tool-error label; once the candidate fixed tool errors, the same failure showed up unlabelled and counted as a new
+  kind. That is a label gap, not a regression, and a rules-only gate also left AgentTune's classifier off the main
+  path. All thresholds are unchanged. `gate_decision.json` records per system `label_coverage` (rules, agenttune,
+  unlabelled, agenttune_errors). `gate_eval.py --no-llm` (and `--local-dry-run`) keep rules only. The token is minted
+  at launch (about 1 h): a late classify can fail, so read `agenttune_errors` before trusting `non_target`. Gates
+  before this one are not comparable on `target`/`non_target`. The final number is still reported once, on the hidden split.
 
 ## Baseline harness
 

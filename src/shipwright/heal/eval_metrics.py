@@ -319,6 +319,27 @@ def label_rates(failures: list[dict], valid_ids: set[str], num_valid: int) -> di
     return {label: run_count / num_valid for label, run_count in run_counts_by_label.most_common()}
 
 
+def label_coverage(failures: list[dict], valid_ids: set[str]) -> dict[str, int]:
+    """Who labelled each failed valid run: our rules (or AgentTune's loop detector), only
+    AgentTune's classifier, or nobody (``unclassified``). ``agenttune_errors``: classifier calls
+    that failed (the run keeps its rule labels, or stays unlabelled)."""
+    coverage = {"rules": 0, "agenttune": 0, "unlabelled": 0, "agenttune_errors": 0}
+    for failure in failures:
+        if str(failure.get("simulation_id")) not in valid_ids:
+            continue
+        detector_labelled = any(
+            hit.get("failure_type") == "loop_collapse" for hit in failure.get("agenttune_failures") or []
+        )
+        if "unclassified" in (failure.get("labels") or []):
+            coverage["unlabelled"] += 1
+        elif failure.get("rule_hits") or detector_labelled or failure.get("source") == "judge":
+            coverage["rules"] += 1
+        elif failure.get("agenttune_root_cause"):
+            coverage["agenttune"] += 1
+        coverage["agenttune_errors"] += int(bool(failure.get("agenttune_error")))
+    return coverage
+
+
 def tool_counts(traces: list[dict]) -> dict:
     """Tool calls, failed tool calls (malformed, unknown tool, or a tool error result),
     prompted-JSON parse failures and agent turns, over the given traces."""
@@ -401,6 +422,7 @@ def compute_metrics(run: dict, k: int, system: str | None = None) -> dict:
         "per_task": pass_scores["per_task"],
         "failure_rate": _ratio(failed_valid_count, len(valid_traces)),
         "label_rates": label_rates(failures, valid_ids, len(valid_traces)),
+        "label_coverage": label_coverage(failures, valid_ids),
         "tool_calls": counts["tool_calls"],
         "tool_call_errors": counts["errors"],
         "tool_call_error_rate": _ratio(counts["errors"], counts["tool_calls"]),

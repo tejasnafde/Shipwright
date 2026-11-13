@@ -19,6 +19,11 @@ Three modes:
                      a fake BFCL model. No vLLM, no network, no token. Exercises the pipeline.
   --current-run DIR --candidate-run DIR
                      Offline: decide from two run dirs that already have failures.jsonl.
+                     With --reclassify, classify both again first (the config's classifier).
+
+Failures of both systems are classified the same way: our rules, plus AgentTune's
+FailureClassifier when classify.classifier_model is set (a Vertex call per failed run).
+--no-llm (and --local-dry-run) keep rules only.
 
 Outputs (output dir): <system>/ run dirs (traces.jsonl, failures.jsonl, bfcl.json, ...),
 metrics_current.json, metrics_candidate.json, gate_decision.json, gate_inputs.json and
@@ -107,6 +112,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--local-dry-run", action="store_true")
     parser.add_argument("--current-run", type=Path, default=None)
     parser.add_argument("--candidate-run", type=Path, default=None)
+    parser.add_argument("--no-llm", action="store_true", help="classify by rules only (offline, CI)")
+    parser.add_argument(
+        "--reclassify", action="store_true", help="with --current-run: classify both run dirs again first"
+    )
     return parser
 
 
@@ -210,11 +219,11 @@ def baseline_cmd(
     return command
 
 
-def classify_cmd(gate_config: dict, run_directory: Path) -> list[str]:
-    """The classify.py command line: LLM classifier if the config names one, else rules only."""
+def classify_cmd(gate_config: dict, run_directory: Path, no_llm: bool = False) -> list[str]:
+    """The classify.py command line: AgentTune's classifier if the config names one, else rules only."""
     classifier_model = (gate_config.get("classify") or {}).get("classifier_model")
     command = [sys.executable, str(ROOT / "scripts" / "classify.py"), str(run_directory)]
-    if classifier_model:
+    if classifier_model and not no_llm:
         return command + ["--classifier-model", classifier_model]
     return command + ["--no-llm"]
 
@@ -676,6 +685,10 @@ def decide_from_existing_runs(gate_options: argparse.Namespace) -> int:
     run_directories = {"current": gate_options.current_run, "candidate": gate_options.candidate_run}
     metrics_by_role = {}
     for role, run_directory in run_directories.items():
+        if gate_options.reclassify:
+            command = classify_cmd(gate_config, run_directory, gate_options.no_llm)
+            if run(command, log_path=run_directory / "classify.log") != 0:
+                raise SystemExit(f"classify failed for {run_directory} (see its classify.log)")
         metrics = metrics_for(run_directory, gate_config, run_directory.name, None)
         metrics_by_role[role] = metrics or missing_metrics(run_directory.name, "no metrics")
 
@@ -696,6 +709,7 @@ def collect_metrics(
     gate_config: dict,
     systems: dict,
     status_by_system: dict,
+    no_llm: bool = False,
 ) -> dict[str, dict]:
     """Classify each system's run and compute its metrics; a failed system gets missing_metrics."""
     metrics_by_role = {}
@@ -708,7 +722,7 @@ def collect_metrics(
         if baseline_exit_code != 0 or not (run_directory / "traces.jsonl").exists():
             metrics_by_role[role] = missing_metrics(system_name, f"tau2 run failed (exit {baseline_exit_code})")
             continue
-        classify_exit_code = run(classify_cmd(gate_config, run_directory), log_path=run_directory / "classify.log")
+        classify_exit_code = run(classify_cmd(gate_config, run_directory, no_llm), log_path=run_directory / "classify.log")
         if classify_exit_code != 0:
             metrics_by_role[role] = missing_metrics(system_name, "classify failed")
             continue
@@ -775,7 +789,8 @@ def evaluate_systems(gate_options: argparse.Namespace) -> int:
         print(f"\nWrote {output_directory}")
         return 0
 
-    metrics_by_role = collect_metrics(output_directory, gate_config, systems, status_by_system)
+    no_llm = gate_options.no_llm or gate_options.local_dry_run
+    metrics_by_role = collect_metrics(output_directory, gate_config, systems, status_by_system, no_llm)
     (output_directory / "run_status.json").write_text(json.dumps(status_by_system, indent=1, default=str))
     decide_and_write(output_directory, gate_config, gate_options.round, metrics_by_role, recorded_systems, targets)
 

@@ -20,7 +20,9 @@ max_concurrency: 8
 # argument of scripts/gate_job.py and scripts/gate_eval.py (--user-model).
 
 classify:
-  classifier_model: null  # litellm id for AgentTune's FailureClassifier. null: AgentTune detector + rules only (free).
+  # AgentTune's FailureClassifier on every failed run of both systems (2026-11-13, AGENTS.md
+  # "Evaluation rules"). Not a threshold. null or gate_eval.py --no-llm: detector + rules only (free).
+  classifier_model: vertex/openai/gpt-oss-120b-maas
 
 thresholds:
   min_valid_runs: 54              # per system, absolute floor (90% of 20 tasks x k=3)
