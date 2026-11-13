@@ -1,0 +1,22 @@
+# Round 8 candidate: the round 7 adapter gated again with two harness changes (no training).
+# Why: gate 7 failed pass_k and non_target; 59 of 83 tool errors were get_product_details(<item id>) (now rerouted to get_item_details) and the repeat guard now shows the earlier result.
+name: r8-weight
+model: CohereLabs/tiny-aya-global
+adapter:
+  repo: mitushigoyal5/shipwright-lora
+  revision: round-7
+route: weight_fix
+targets:
+- invented_id
+- tool_example_copied
+- loop
+- tool_error_ignored
+- unknown_tool
+- malformed_args
+- wrong_tool
+- bad_arguments
+- wrong_order
+- skipped_policy_step
+- invented_answer
+- premature_transfer
+tool_guards: true
