@@ -120,6 +120,21 @@ def system_configs_are_valid() -> Check:
     return fail(name, "; ".join(bad)) if bad else ok(name)
 
 
+def round_configs_are_valid() -> Check:
+    """configs/rounds/*.yaml (scripts/run_round.py all): a cap a GPU job could pass, or a short gate timeout, fails here
+    before the cloud execution starts."""
+    name = "every round config is valid"
+    import yaml
+
+    from shipwright.heal import round_chain
+
+    bad = []
+    for path in sorted((ROOT / "configs" / "rounds").glob("*.yaml")):
+        problems = round_chain.validate_config(yaml.safe_load(path.read_text()))
+        bad += [f"{path.name}: {problem}" for problem in problems]
+    return fail(name, "; ".join(bad)) if bad else ok(name)
+
+
 def adapter_exists(revision: str) -> Check:
     name = f"the adapter {ADAPTER_REPO}@{revision} is on the Hub"
     from huggingface_hub import HfApi
@@ -241,7 +256,7 @@ def vllm_starts_on_a_gpu(adapter_revision: str) -> Check:
 
 
 FREE_CHECKS: list[Callable[[], Check]] = [
-    git_is_clean_and_pushed, hf_token_scopes, vertex_token, gcloud_project, runs_dataset_reachable, system_configs_are_valid,
+    git_is_clean_and_pushed, hf_token_scopes, vertex_token, gcloud_project, runs_dataset_reachable, system_configs_are_valid, round_configs_are_valid,
     launchers_accept_the_loops_commands, guards_behave, sft_rows_render_with_the_real_template,
 ]
 

@@ -7,6 +7,8 @@
   .venv/bin/python scripts/run_round.py data --round 2 ...                                # free
   .venv/bin/python scripts/run_round.py train --round 2 ... [--launch]                    # HF GPU job
   .venv/bin/python scripts/run_round.py gate --round 2 ... [--launch]                     # HF GPU job
+  .venv/bin/python scripts/run_round.py all --config configs/rounds/default.yaml [--launch | --dry-run]
+                                                     # every stage in one Cloud Run execution (scripts/run_round_all.py)
 
 Stages run in that order. Each one:
   - checks that the Cloud Run job runs the image built from this commit (cloud stages),
@@ -536,6 +538,11 @@ def print_plan(options: argparse.Namespace, manifest: dict) -> None:
 
 
 def main() -> int:
+    if sys.argv[1:2] == ["all"]:  # the whole round in one Cloud Run execution: scripts/run_round_all.py
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import run_round_all
+
+        return run_round_all.main(sys.argv[2:])
     options = parse_options()
     manifest = load_manifest(options)
     if options.stage == "plan":

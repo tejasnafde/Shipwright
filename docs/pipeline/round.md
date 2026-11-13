@@ -1,5 +1,55 @@
 # One round, end to end (`scripts/run_round.py`)
 
+## The one command (2026-11-13)
+
+```sh
+.venv/bin/python scripts/run_round.py all --config configs/rounds/default.yaml             # plan: free
+.venv/bin/python scripts/run_round.py all --config configs/rounds/default.yaml --dry-run   # offline, free (CI runs it)
+.venv/bin/python scripts/run_round.py all --config configs/rounds/default.yaml --launch    # spends: one Cloud Run execution
+```
+
+`--launch` checks that the job runs the image of HEAD (commit and push first), then starts ONE execution of
+`shipwright-<owner>` and returns. That execution runs every stage itself, with nobody watching: baseline, classify,
+teacher, data, train (HF Job, polled), gate (HF Job, polled), then `scripts/promote.py` on an approval. No code push
+is needed between stages: the candidate's system config is written into the image's tree, and the gate bundle is a tar
+of that tree. A real chain refuses to run on a laptop.
+
+**The config** (`configs/rounds/<name>.yaml`) pins the round number, owner, seed, every model, trials, concurrency,
+the SFT repo and teacher pool, training flavor, timeout and hyperparameters, the gate flavor and timeout, the stop
+rules and a spend cap per stage and in total. `git_sha` pins the commit: the chain refuses another image. The manifest
+records the config as run, the code sha, the image and the sha256 of `configs/splits.yaml` and `configs/gate.yaml`.
+`scripts/doctor.py` validates every round config (a GPU worst case over its cap, a gate timeout under 60 minutes).
+
+**What it decides** (`src/shipwright/heal/round_chain.py`):
+
+- A stage starts only if its cap plus everything spent so far fits in `spend.total`. GPU caps must cover price x
+  timeout of the dearest flavor it may fall back to.
+- A failed stage (exit code, a crash, an HF job that ended in ERROR, over 25% infra errors) is tried once more into
+  the same output dir: tau2 `auto_resume` keeps the decided runs. Both tries count against the cap.
+- Not retried, the round stops: under 40 SFT examples, AgentTune's RetrainingTrigger says no.
+- Final status: `promoted`, `rejected`, `stopped` (stage and reason), `over_budget`, `exhausted`, `handoff`.
+
+**Outputs**, round N: `runs/rN-round/` holds `round.json` (the manifest, also written to `runs/round-N.json`),
+`gate_decision.json`, `metrics.jsonl` (the gate's row), `next_round.json` on a refusal (failed checks, the next
+recipe, and the `run_loop.py` command that gets the candidate's failures on the train tasks; held-out failures are
+never training data), and `ledger.jsonl` + `current.yaml` on a promotion. In the cloud the image is thrown away:
+commit those two files from `gs://lexsi-hackathon-runs/<owner>/rN-round/`. The chain summary is
+`runs/chain-rN/chain.json`. Every stage's run dir is uploaded as soon as it finishes; the same command resumes a dead
+execution (it fetches `rN-round` and the finished stages' dirs).
+
+**`--rounds N`** runs rounds back to back until the first promotion or the total cap. After a refusal the deployed
+system stays the base, and the refusal's recipe (`heal/recipe.py`) decides the next round: guards only means the same
+adapter is gated again; more general examples means data, train and gate again on the first round's baseline and
+teacher passes; corrections stop the chain (`handoff`): they need the candidate's own run on the train tasks, which
+`scripts/run_loop.py` does.
+
+**Cost per round with the defaults:** baseline about $1.50, classify $0.05, teacher $1.60, train about $1.00 (L40S),
+gate about $1.00 (GPU about $0.75 plus the simulator), so about $5.2; the caps allow at most $8 (`spend.total`).
+The Cloud Run execution itself (1 CPU, 2 GiB, 3 to 4 hours) is about $0.30 of GCP budget. The Cloud Run job's
+`HF_TOKEN` secret must have the Jobs write permission, or the train stage fails twice at launch and stops.
+
+## One stage at a time
+
 One command per stage, in order. Each stage has a cost estimate and a hard cap, and writes its result
 to `runs/round-N.json` (run dir, exit code, estimate, actual cost, `cost_basis`: metered or estimated). Read the manifest, not the console.
 
