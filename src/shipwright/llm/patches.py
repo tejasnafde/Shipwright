@@ -174,6 +174,18 @@ def trace_fields(response: Any) -> dict:
     return provider_fields.get(TRACE_FIELD) or {}
 
 
+def repair_tool_call(conversation: list[dict], response: Any, repairs: list[dict]) -> None:
+    """Rewrite the reply's tool call in place when guards.repaired_call has a fix for it; note it in ``repairs``."""
+    call = proposed_tool_call(response)
+    fixed = guards.repaired_call(conversation, call) if call else None
+    if fixed is None:
+        return
+    function = response.choices[0].message.tool_calls[0].function
+    function.name = fixed.name
+    function.arguments = json.dumps(fixed.arguments)
+    repairs.append({"from": call.name, "to": fixed.name, "arguments": fixed.arguments})
+
+
 def ask_again_until_policy_ok(conversation: list[dict], request_kwargs: dict, response: Any,
                               ask_model: Callable[[dict], Any]) -> Any:
     """Tool-call guards (shipwright.llm.guards): while the agent's tool call breaks a policy check,
@@ -184,7 +196,9 @@ def ask_again_until_policy_ok(conversation: list[dict], request_kwargs: dict, re
     replies are recorded in the reply's trace fields (``guard_rejections``), not in the history.
     """
     rejections = []
+    repairs = []
     retry_messages = list(request_kwargs["messages"])
+    repair_tool_call(conversation, response, repairs)
     for _ in range(guards.MAX_GUARD_RETRIES):
         call = proposed_tool_call(response)
         if call is None:
@@ -200,12 +214,14 @@ def ask_again_until_policy_ok(conversation: list[dict], request_kwargs: dict, re
         retry_kwargs = dict(request_kwargs)
         retry_kwargs["messages"] = fitted_messages
         response = ask_model(retry_kwargs)
+        repair_tool_call(conversation, response, repairs)
 
-    if rejections:
+    if rejections or repairs:
         final_call = proposed_tool_call(response)
         final_violation = guards.first_violation(conversation, final_call) if final_call else None
         fields = dict(trace_fields(response))
         fields["guard_rejections"] = rejections
+        fields["guard_repairs"] = repairs
         message = response.choices[0].message
         if final_violation is not None and final_violation.fallback_reply:
             # Still the same bad call after being asked again: say the fallback to the customer instead of running it.

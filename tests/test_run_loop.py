@@ -246,3 +246,23 @@ def test_a_real_litellm_reply_can_be_turned_into_the_fallback_text():
     final_message = patched.choices[0].message
     assert final_message.tool_calls is None and "already looked that up" in final_message.content
     assert guards.GUARDS  # the rule list is the one the loop's doctor checks
+
+
+def test_a_real_litellm_reply_with_an_item_id_is_rewritten_in_place():
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message, ModelResponse
+
+    from shipwright.llm import patches
+
+    message = Message(content=None, tool_calls=[ChatCompletionMessageToolCall(
+        id="x", type="function", function=Function(name="get_product_details", arguments='{"product_id": "222"}'))])
+    response = ModelResponse(choices=[{"index": 0, "finish_reason": "tool_calls", "message": message}], model="m")
+    earlier = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "b", "type": "function", "function": {
+            "name": "get_product_details", "arguments": '{"product_id": "P2"}'}}]},
+        {"role": "tool", "tool_call_id": "b", "content": '{"name": "Shelf", "product_id": "P2", "variants": {"222": {"item_id": "222"}}}'}]
+    patched = patches.ask_again_until_policy_ok(earlier, {"messages": []}, response, lambda request: response)
+    function = patched.choices[0].message.tool_calls[0].function
+    assert function.name == "get_item_details" and json.loads(function.arguments) == {"item_id": "222"}
+    trace = patched.choices[0].message.provider_specific_fields[patches.TRACE_FIELD]
+    assert trace["guard_repairs"] == [{"from": "get_product_details", "to": "get_item_details", "arguments": {"item_id": "222"}}]

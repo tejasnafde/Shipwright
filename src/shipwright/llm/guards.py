@@ -30,6 +30,9 @@ AFFIRMATIVE_ANSWER = re.compile(
 # How often the agent is asked again after a violation. After that the call runs as written,
 # so a guard that is wrong for one task can slow the agent down but never block it for good.
 MAX_GUARD_RETRIES = 2
+# The earlier result is repeated in the retry message: in the long conversations it sits far up, behind a bulky
+# product listing (about 1k tokens), and the model asks for it again instead of reading it (gate 7: 149 repeats).
+RESULT_REMINDER_CHARS = 1200
 
 # Off by default: a run turns the guards on with scripts/baseline.py --tool-guards (a system config
 # with ``tool_guards: true`` passes it), so the gate can compare a system with and without them.
@@ -358,13 +361,30 @@ def check_repeated_call(messages: list[dict], call: ToolCall) -> GuardViolation 
             if not changed_since:
                 return GuardViolation(
                     rule="repeated_call",
-                    message=(f"You already made this exact call ({call.name}) and its result is in the conversation "
-                             f"above. Do not call it again. Use that result: tell the customer what you found and "
-                             f"what you can do, or take the next step."),
+                    message=(f"You already made this exact call ({call.name}). Its result was: "
+                             f"{earlier.result[:RESULT_REMINDER_CHARS]} Do not call it again. Use that result: tell the "
+                             f"customer what you found and what you can do, or take the next step."),
                     fallback_reply=("I have already looked that up and have the details. How would you like me to "
                                     "proceed?"),
                 )
             return None
+    return None
+
+
+def repaired_call(messages: list[dict], call: ToolCall) -> ToolCall | None:
+    """A tool call fixed before it runs, or None when it needs no fix.
+
+    get_product_details given the id of an item (a variant seen in an order or a product listing earlier) is a request
+    for that item's details: that is get_item_details. Gate 7: all 59 "Product not found" errors of the candidate were
+    this (the base makes 8, with made-up names), 5 runs ended at the tool-error limit, and the prompt already says the
+    two ids differ. An id that is neither a known item nor a known product is left to the made-up-id guard."""
+    if call.name != "get_product_details":
+        return None
+    product_id = str(call.arguments.get("product_id") or "")
+    product_by_item = product_of_items(messages)
+    known_product_ids = {product_id_of_item for product_id_of_item, _ in product_by_item.values()}
+    if product_id in product_by_item and product_id not in known_product_ids:
+        return ToolCall(name="get_item_details", arguments={"item_id": product_id})
     return None
 
 

@@ -254,3 +254,38 @@ def test_a_stubborn_repeat_is_replaced_by_the_fallback_text_instead_of_running()
     assert message.tool_calls is None and "already looked that up" in message.content
     fields = message.provider_specific_fields[TRACE_FIELD]
     assert fields["guard_replaced_with_text"] == "repeated_call" and fields["guard_allowed_after_retries"] is None
+
+
+def order_and_listing_messages():
+    """An order whose item 111 is of product P1, and a product listing of P2 with variant 222."""
+    return [
+        {"role": "user", "content": "email a@b.c"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "a", "type": "function", "function": {
+            "name": "get_order_details", "arguments": '{"order_id": "#W1"}'}}]},
+        {"role": "tool", "tool_call_id": "a", "content": json.dumps({"order_id": "#W1", "items": [
+            {"name": "Camera", "product_id": "P1", "item_id": "111"}]})},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "b", "type": "function", "function": {
+            "name": "get_product_details", "arguments": '{"product_id": "P2"}'}}]},
+        {"role": "tool", "tool_call_id": "b", "content": json.dumps({"name": "Shelf", "product_id": "P2", "variants": {
+            "222": {"item_id": "222", "available": True}}})},
+    ]
+
+
+def test_an_item_id_given_to_get_product_details_becomes_get_item_details():
+    messages = order_and_listing_messages()
+    for item_id in ("222", "111"):  # a variant from a listing, an item from an order
+        fixed = guards.repaired_call(messages, guards.ToolCall("get_product_details", {"product_id": item_id}))
+        assert fixed == guards.ToolCall("get_item_details", {"item_id": item_id})
+
+
+def test_a_real_product_id_or_an_unknown_id_is_left_alone():
+    messages = order_and_listing_messages()
+    assert guards.repaired_call(messages, guards.ToolCall("get_product_details", {"product_id": "P2"})) is None
+    assert guards.repaired_call(messages, guards.ToolCall("get_product_details", {"product_id": "999"})) is None
+    assert guards.repaired_call(messages, guards.ToolCall("get_order_details", {"order_id": "222"})) is None
+
+
+def test_the_repeat_warning_carries_the_earlier_result():
+    messages = order_and_listing_messages()
+    violation = guards.check_repeated_call(messages, guards.ToolCall("get_product_details", {"product_id": "P2"}))
+    assert violation is not None and '"variants"' in violation.message and violation.rule == "repeated_call"
