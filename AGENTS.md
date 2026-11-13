@@ -423,6 +423,8 @@ Traps: `FailureDetector` resumes from `<audit>.offset` (we delete it), and `agen
 
 - 2026-11-13 (falsified, do not build): a lookup-streak guard ("you have looked up enough, answer the customer") to stop the `context_overflow` chains. Longest run of read-only calls with no customer turn: passing teacher runs 4 to 9 (all teacher harvests), passing candidate runs 6 to 7, gate 8 overflow runs 5 to 8. It cannot separate them: a limit of 6 or 7 cuts passing runs. Long lookup chains are real work here; the problem is the 8k window, so the lever is capacity (compaction of observations, a smaller fixed prompt), not stopping lookups. Also: `build_corrections` only treats a guard violation as a wrong turn, so correction rounds give no data for a long chain that no guard rejects.
 
+- 2026-11-13 (capacity needed, offline replay of gate 8's 133 trimmed requests, arrival + old-result shortening on): extra window of 0 / 400 / 800 / 1200 / 1600 / 2400 tokens leaves 9 / 9 / 6 / 5 / 4 / 1 runs losing history (the check allows about 4). Fixed prompt is 2,688 tokens: task policy 1,514 (tau2's own text) + tool list and instructions 1,174. Trimming tool docs and the 700-token reply reserve might give 500 to 900, so capacity alone gets to about 6; the rest needs the student to use fewer lookups (training).
+
 ## Keep this file correct
 
 This file corrects itself through you. **`AGENTS.md` is the only file that carries facts, traps
