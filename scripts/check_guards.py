@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from shipwright.heal.sft_data import trace_to_openai  # noqa: E402
 from shipwright.llm import guards  # noqa: E402
+from shipwright.heal.traces import read_traces  # noqa: E402
 
 
 @dataclass
@@ -46,14 +47,6 @@ def parse_options(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--examples", type=int, default=3, help="example rejections to print per group")
     return parser.parse_args(argv)
 
-
-def read_traces(run_directory: Path) -> list[dict]:
-    traces = []
-    with open(run_directory / "traces.jsonl") as trace_file:
-        for line in trace_file:
-            if line.strip():
-                traces.append(json.loads(line))
-    return traces
 
 
 def tasks_passed(run_directories: list[Path]) -> set[str]:

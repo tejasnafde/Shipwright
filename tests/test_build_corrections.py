@@ -1,6 +1,5 @@
 """Corrective examples: which turns are wrong, what a kept reply is, and that the budget cap holds."""
 
-import json
 import sys
 from pathlib import Path
 

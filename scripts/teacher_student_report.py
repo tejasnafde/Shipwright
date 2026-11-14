@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from shipwright.heal.eval_metrics import pass_metrics, reliability_rows  # noqa: E402
-from shipwright.llm.patches import SIMULATOR_LEAK_MARKERS  # noqa: E402
+from shipwright.heal.traces import has_simulator_leak, read_traces  # noqa: E402
 
 INFRA_ERROR = "infrastructure_error"
 BOOTSTRAP_SAMPLES = 2000
@@ -51,7 +51,7 @@ class SystemRuns:
 
 def parse_options(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--teacher", type=Path, required=True, help="teacher run dir (run_round.py ceiling)")
+    parser.add_argument("--teacher", type=Path, required=True, help="teacher run dir (shipwright stage ceiling)")
     parser.add_argument("--base", type=Path, required=True, help="base student run dir (gate's current side)")
     parser.add_argument("--student", type=Path, required=True, help="trained student run dir (gate's candidate side)")
     parser.add_argument("--k", type=int, default=3)
@@ -61,14 +61,6 @@ def parse_options(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def read_traces(run_directory: Path) -> list[dict]:
-    traces = []
-    with open(run_directory / "traces.jsonl") as trace_file:
-        for line in trace_file:
-            if line.strip():
-                traces.append(json.loads(line))
-    return traces
-
 
 def message_list(trace: dict) -> list[dict]:
     messages = trace.get("messages") or []
@@ -77,15 +69,6 @@ def message_list(trace: dict) -> list[dict]:
         messages = ast.literal_eval(messages)
     return messages
 
-
-def has_simulator_leak(trace: dict) -> bool:
-    for message in message_list(trace):
-        if message.get("role") != "user":
-            continue
-        content = message.get("content") or ""
-        if any(marker in content for marker in SIMULATOR_LEAK_MARKERS):
-            return True
-    return False
 
 
 def is_passed(trace: dict) -> bool:

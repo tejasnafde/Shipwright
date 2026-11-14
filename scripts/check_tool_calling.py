@@ -13,8 +13,8 @@ from pathlib import Path
 
 import httpx
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from baseline import HF_ROUTER, load_token  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from shipwright import cloud  # noqa: E402
 
 TOOL = {
     "type": "function",
@@ -35,7 +35,7 @@ def main() -> int:
     parser.add_argument("--model", default="CohereLabs/tiny-aya-global:cohere")
     options = parser.parse_args()
 
-    token = load_token()
+    token = cloud.hf_token()
     if not token:
         print("No HF token found.", file=sys.stderr)
         return 2
@@ -52,7 +52,7 @@ def main() -> int:
         "max_tokens": 200,
     }
     response = httpx.post(
-        f"{HF_ROUTER}/chat/completions",
+        f"{cloud.HF_ROUTER}/chat/completions",
         headers={"Authorization": f"Bearer {token}"},
         json=request_body,
         timeout=60,

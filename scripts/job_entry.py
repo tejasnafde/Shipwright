@@ -34,7 +34,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.parse import quote
 
 import json
 
@@ -43,15 +42,13 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from shipwright.observability import instrument, log, otel_live, report, repro  # noqa: E402
-from shipwright.llm import vertex  # noqa: E402
+from shipwright import cloud  # noqa: E402
+from shipwright.observability import log, otel_live, report, repro  # noqa: E402
 
 logger = log.get_logger("job_entry")
 
-DEFAULT_BUCKET = "lexsi-hackathon-runs"
-UPLOAD_URL = "https://storage.googleapis.com/upload/storage/v1/b/{bucket}/o?uploadType=media&name={name}"
-LIST_URL = "https://storage.googleapis.com/storage/v1/b/{bucket}/o"
-OBJECT_URL = "https://storage.googleapis.com/storage/v1/b/{bucket}/o/{name}?alt=media"
+def gcs_token() -> str:
+    return cloud.bearer_token()
 
 
 def run_dirs(runs_directory: Path) -> dict[str, float]:
@@ -76,17 +73,8 @@ def changed_dirs(mtimes_before: dict[str, float], mtimes_after: dict[str, float]
     return sorted(changed_names)
 
 
-TOKENS = vertex.TokenProvider(fetch=vertex.metadata_token)
-
-
 def upload(http_client: httpx.Client, bucket: str, object_name: str, data: bytes) -> None:
-    token = TOKENS.get()
-    url = UPLOAD_URL.format(bucket=bucket, name=quote(object_name, safe=""))
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/octet-stream"}
-    with instrument.external("gcs_upload", f"gs://{bucket}/{object_name}", bytes=len(data)) as call_record:
-        response = http_client.post(url, content=data, headers=headers)
-        call_record["status"] = response.status_code
-        response.raise_for_status()
+    cloud.upload_object(http_client, bucket, object_name, data, gcs_token())
 
 
 def split_fetch(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -108,42 +96,7 @@ def split_fetch(argv: list[str]) -> tuple[list[str], list[str]]:
 
 def fetch_dir(http_client: httpx.Client, bucket: str, prefix: str, runs_directory: Path) -> int:
     """Download ``gs://bucket/<prefix>/`` (``owner/run-dir``) into ``runs/<run-dir>/``. Returns the file count."""
-    if prefix.startswith(bucket + "/"):
-        prefix = prefix[len(bucket) + 1:]
-    run_directory_name = prefix.rsplit("/", 1)[-1]
-    if not run_directory_name or run_directory_name in (".", ".."):
-        raise ValueError(f"bad --fetch value {prefix!r}")
-
-    headers = {"Authorization": f"Bearer {TOKENS.get()}"}
-    downloaded_count = 0
-    page_token = None
-    with instrument.external("gcs_download", f"gs://{bucket}/{prefix}/"):
-        while True:
-            list_parameters = {"prefix": prefix + "/", "fields": "items(name),nextPageToken"}
-            if page_token:
-                list_parameters["pageToken"] = page_token
-            list_response = http_client.get(LIST_URL.format(bucket=bucket), params=list_parameters, headers=headers)
-            list_response.raise_for_status()
-            list_body = list_response.json()
-
-            for item in list_body.get("items", []):
-                relative_path = item["name"][len(prefix) + 1:]
-                if not relative_path or relative_path.endswith("/") or ".." in Path(relative_path).parts:
-                    continue
-                object_url = OBJECT_URL.format(bucket=bucket, name=quote(item["name"], safe=""))
-                object_response = http_client.get(object_url, headers=headers)
-                object_response.raise_for_status()
-                destination = runs_directory / run_directory_name / relative_path
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(object_response.content)
-                downloaded_count += 1
-
-            page_token = list_body.get("nextPageToken")
-            if not page_token:
-                break
-    if not downloaded_count:
-        raise FileNotFoundError(f"nothing under gs://{bucket}/{prefix}/")
-    return downloaded_count
+    return cloud.fetch_dir(http_client, bucket, prefix, runs_directory, gcs_token())
 
 
 def fetch_earlier_runs(bucket: str, fetch_prefixes: list[str], runs_directory: Path) -> str | None:
@@ -231,7 +184,7 @@ def main(argv: list[str]) -> int:
     if not owner:
         print("OWNER is not set (tejas, ishank, mitushi or main).", file=sys.stderr)
         return 2
-    bucket = os.environ.get("SHIPWRIGHT_RUNS_BUCKET") or DEFAULT_BUCKET
+    bucket = cloud.bucket()
     script_path = find_script(argv)
     if script_path is None:
         return 2

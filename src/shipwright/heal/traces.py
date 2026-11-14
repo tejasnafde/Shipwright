@@ -319,7 +319,51 @@ def summarize(traces: list[dict]) -> dict:
     }
 
 
+def read_jsonl(path: Path) -> list[dict]:
+    """Every non-empty line of a JSONL file (traces.jsonl, failures.jsonl, sft.jsonl, ...)."""
+    return [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
+
+
+def read_traces(run_directory: Path) -> list[dict]:
+    return read_jsonl(Path(run_directory) / "traces.jsonl")
+
+
+def has_simulator_leak(trace: dict) -> bool:
+    """A user-simulator turn that wrote past its own turn (``patches.SIMULATOR_LEAK_MARKERS``): the conversation may have
+    been ended by the simulator, not by the agent (AGENTS.md, 2026-11-14)."""
+    from shipwright.llm.patches import SIMULATOR_LEAK_MARKERS
+
+    messages = trace.get("messages") or []
+    if isinstance(messages, str):
+        import ast
+
+        messages = ast.literal_eval(messages)
+    for message in messages:
+        if isinstance(message, dict) and message.get("role") == "user":
+            content = message.get("content") or ""
+            if any(marker in content for marker in SIMULATOR_LEAK_MARKERS):
+                return True
+    return False
+
+
 def write_jsonl(path: Path, records: Iterable[dict[str, Any]]) -> None:
     with open(path, "w") as jsonl_file:
         for record in records:
             jsonl_file.write(json.dumps(record, default=str) + "\n")
+
+
+def teacher_pass_rates(teacher_run_directories: list[Path]) -> dict[str, float]:
+    """Task id -> share of decided (not infra error) trials that passed, pooled over the earlier teacher runs."""
+    decided_trials: dict[str, int] = {}
+    passed_trials: dict[str, int] = {}
+    for run_directory in teacher_run_directories:
+        with open(run_directory / "traces.jsonl") as traces_file:
+            for line in traces_file:
+                trace = json.loads(line)
+                if trace.get("termination_reason") == "infrastructure_error":
+                    continue
+                task_id = str(trace["task_id"])
+                decided_trials[task_id] = decided_trials.get(task_id, 0) + 1
+                if trace.get("passed"):
+                    passed_trials[task_id] = passed_trials.get(task_id, 0) + 1
+    return {task_id: passed_trials.get(task_id, 0) / count for task_id, count in decided_trials.items()}

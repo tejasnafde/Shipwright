@@ -6,16 +6,15 @@ spends money: it only reads from the bucket. A run dir already in runs/ is never
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-BUCKET = "gs://lexsi-hackathon-runs"
-PROJECT = "lexsi-hackathon"
-OWNERS = ("tejas", "ishank", "mitushi", "main")
-HOMEBREW_GCLOUD = "/opt/homebrew/share/google-cloud-sdk/bin/gcloud"
+from shipwright import cloud
+
+BUCKET = f"gs://{cloud.DEFAULT_BUCKET}"
+OWNERS = cloud.OWNERS
 NOT_RUN_DIRS = ("jobs",)  # <owner>/jobs/ holds execution logs, not a run dir
 
 
@@ -28,31 +27,11 @@ class PullResult:
 
 
 def gcloud_binary() -> str | None:
-    explicit = os.environ.get("SHIPWRIGHT_GCLOUD")
-    if explicit:
-        return explicit
-    found = shutil.which("gcloud")
-    if found:
-        return found
-    if Path(HOMEBREW_GCLOUD).exists():
-        return HOMEBREW_GCLOUD
-    return None
-
-
-def gcloud_config(binary: str) -> str:
-    """$SHIPWRIGHT_GCLOUD_CONFIG, else `lexsi` if that config exists on this machine, else `personal`."""
-    from_env = os.environ.get("SHIPWRIGHT_GCLOUD_CONFIG")
-    if from_env:
-        return from_env
-    listed = subprocess.run([binary, "config", "configurations", "list", "--format=value(name)"],
-                            capture_output=True, text=True, timeout=60)
-    if "lexsi" in listed.stdout.split():
-        return "lexsi"
-    return "personal"
+    return cloud.gcloud_binary()
 
 
 def _gcloud_command(binary: str, *storage_arguments: str) -> list[str]:
-    return [binary, f"--configuration={gcloud_config(binary)}", f"--project={PROJECT}", "storage", *storage_arguments]
+    return [binary, f"--configuration={cloud.gcloud_config(binary)}", f"--project={cloud.PROJECT}", "storage", *storage_arguments]
 
 
 def list_remote_runs(owner: str) -> list[str]:
@@ -79,7 +58,7 @@ def list_remote_runs(owner: str) -> list[str]:
 
 # Logs of scripts that launch or move other runs (they call log.run_script(meta=True) on a laptop). Pulled into
 # runs/_meta/, so they do not clutter the run list.
-ORCHESTRATOR_PREFIXES = ("run_round-", "train_job-", "gate_job-", "pull_runs-", "promote-")
+ORCHESTRATOR_PREFIXES = ("loop-", "train_job-", "gate_job-", "pull_runs-")
 
 
 def push_run(owner: str, run_directory: Path) -> None:

@@ -15,26 +15,25 @@ personal; never ADC), and only small files: anything over ``max_bytes`` is skipp
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_BUCKET = "lexsi-hackathon-runs"
 SMALL = 5_000_000
 Runner = Callable[[list[str]], subprocess.CompletedProcess]
 
 
 def bucket() -> str:
-    return os.environ.get("SHIPWRIGHT_RUNS_BUCKET") or DEFAULT_BUCKET
+    from shipwright import cloud
+
+    return cloud.bucket()
 
 
 def gcloud(*args: str) -> list[str]:
-    from shipwright.llm import vertex
+    from shipwright import cloud
 
-    config = os.environ.get("SHIPWRIGHT_GCLOUD_CONFIG") or vertex.DEFAULT_GCLOUD_CONFIG
-    return [vertex.gcloud_binary(), f"--configuration={config}", f"--project={vertex.project()}", *args]
+    return cloud.gcloud_command(*args)
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:

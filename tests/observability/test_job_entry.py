@@ -119,7 +119,7 @@ def test_fetch_downloads_run_dir_before_the_script(tmp_path, monkeypatch):
 
     real_client = httpx.Client
     monkeypatch.setattr(job_entry.httpx, "Client", lambda **kw: real_client(transport=httpx.MockTransport(handler)))
-    monkeypatch.setattr(job_entry.TOKENS, "get", lambda: "tok")
+    monkeypatch.setattr(job_entry, "gcs_token", lambda: "tok")
     monkeypatch.setattr(job_entry, "ROOT", tmp_path)
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "reads.py").write_text(

@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from shipwright.llm import context  # noqa: E402
 from shipwright.heal import sft_data  # noqa: E402
+from shipwright.heal.traces import has_simulator_leak  # noqa: E402
 
 DEFAULT_REPO = "mitushigoyal5/shipwright-sft"
 
@@ -99,16 +100,6 @@ def check_train_split(run_directory: Path, task_split: str | None, allow_split: 
             f"{run_directory}: task_split is {task_split!r}, not 'train'. Never train on held-out tasks."
         )
 
-
-def has_simulator_leak(trace: dict) -> bool:
-    from shipwright.llm.patches import SIMULATOR_LEAK_MARKERS
-
-    for message in trace.get("messages") or []:
-        if isinstance(message, dict) and message.get("role") == "user":
-            content = message.get("content") or ""
-            if any(marker in content for marker in SIMULATOR_LEAK_MARKERS):
-                return True
-    return False
 
 
 def load_run(run_directory: Path, allow_split: bool) -> tuple[list[dict], dict]:
@@ -254,9 +245,9 @@ def failed_task_ids(candidate_run: Path) -> list[str]:
 def push(output_directory: Path, repo: str, revision: str) -> None:
     from huggingface_hub import HfApi
 
-    import baseline
+    from shipwright import cloud
 
-    token = baseline.load_token()
+    token = cloud.hf_token()
     if not token:
         raise SystemExit("No HF token for --push.")
     hf_api = HfApi(token=token)
@@ -281,11 +272,11 @@ def push(output_directory: Path, repo: str, revision: str) -> None:
 
 def choose_token_counting_method(build_options: argparse.Namespace) -> str:
     """"tokenizer" if the student's tokenizer loads, else the chars "estimate"."""
-    import baseline
+    from shipwright import cloud
 
     if build_options.estimate_tokens:
         return "estimate"
-    if context.load_tokenizer(context.STUDENT_REPO, baseline.load_token()):
+    if context.load_tokenizer(context.STUDENT_REPO, cloud.hf_token()):
         return "tokenizer"
     return "estimate"
 

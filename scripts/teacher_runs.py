@@ -52,6 +52,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "src"))
 
 import baseline  # noqa: E402
+from shipwright.heal.traces import teacher_pass_rates  # noqa: E402
 
 DEFAULT_FROM_RUN = ROOT / "runs" / "baseline-20261108-214337"
 # The teacher's reasoning counts against max_tokens; 700 (the student's budget) is too small.
@@ -74,23 +75,6 @@ def failed_task_ids(run_directory: Path, routes: tuple[str, ...] = DEFAULT_ROUTE
             if failure.get("route") in routes and task_id not in task_ids:
                 task_ids.append(task_id)
     return task_ids
-
-
-def teacher_pass_rates(teacher_run_directories: list[Path]) -> dict[str, float]:
-    """Task id -> share of decided (not infra error) trials that passed, pooled over the earlier teacher runs."""
-    decided_trials: dict[str, int] = {}
-    passed_trials: dict[str, int] = {}
-    for run_directory in teacher_run_directories:
-        with open(run_directory / "traces.jsonl") as traces_file:
-            for line in traces_file:
-                trace = json.loads(line)
-                if trace.get("termination_reason") == "infrastructure_error":
-                    continue
-                task_id = str(trace["task_id"])
-                decided_trials[task_id] = decided_trials.get(task_id, 0) + 1
-                if trace.get("passed"):
-                    passed_trials[task_id] = passed_trials.get(task_id, 0) + 1
-    return {task_id: passed_trials.get(task_id, 0) / count for task_id, count in decided_trials.items()}
 
 
 def solved_task_ids(teacher_run_directories: list[Path]) -> set[str]:

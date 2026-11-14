@@ -30,15 +30,13 @@ from pathlib import Path
 from typing import Any
 
 from shipwright.heal.traces import INFRA_ERROR
+from shipwright.heal.traces import read_jsonl
 
 PASS_KEY = "tau2_pass"
 DIAGNOSTIC_SCORERS = ["tool_call_f1", "tool_call_validity", "redundant_tool_calls"]
 
 
 # ---------------------------------------------------------------- loading
-
-def _jsonl(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
 def load_run(run_dir: Path) -> dict:
@@ -62,8 +60,8 @@ def load_run(run_dir: Path) -> dict:
             tools = next(iter(prompts_by_sha.values())).get("tools") or []
     return {
         "run_dir": str(run_dir),
-        "traces": _jsonl(run_dir / "traces.jsonl"),
-        "failures": _jsonl(failures_path),
+        "traces": read_jsonl(run_dir / "traces.jsonl"),
+        "failures": read_jsonl(failures_path),
         "run_config": run_config,
         "tools": tools,
     }

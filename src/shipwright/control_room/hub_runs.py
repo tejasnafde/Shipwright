@@ -11,7 +11,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-RUNS_REPO = "mitushigoyal5/shipwright-runs"
+from shipwright.cloud import RUNS_REPO
 
 
 def pull_gate_results(round_number: int, runs_directory: Path, candidate: str | None = None) -> Path:

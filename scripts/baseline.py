@@ -34,9 +34,12 @@ from shipwright.observability import log  # noqa: E402
 
 logger = log.get_logger("baseline")
 
-HF_ROUTER = "https://router.huggingface.co/v1"
+from shipwright import cloud  # noqa: E402
+from shipwright.llm.vertex import ROUTER_USER_MODEL  # noqa: E402
+
+HF_ROUTER = cloud.HF_ROUTER
 DEFAULT_AGENT = "openai/CohereLabs/tiny-aya-global:cohere"
-DEFAULT_USER = "openai/openai/gpt-oss-120b:cerebras"
+DEFAULT_USER = ROUTER_USER_MODEL
 
 
 @dataclass
@@ -54,19 +57,6 @@ class RunResult:
     run_directory: Path
     traces: list[dict]
     summary: dict
-
-
-def load_token() -> str | None:
-    secrets_directory = os.environ.get("SWITCHBOARD_SECRETS_DIR")
-    if secrets_directory:
-        token_path = Path(secrets_directory) / "HF_TOKEN"
-        try:
-            token = token_path.read_text().strip()
-            if token:
-                return token
-        except OSError:
-            pass
-    return os.environ.get("HF_TOKEN") or None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -233,7 +223,7 @@ def configure_credentials(run_options: argparse.Namespace) -> tuple[bool, str | 
 
     agent_is_not_on_hf_router = agent_uses_vertex or bool(run_options.agent_api_base)
     needs_hf_token = not (user_uses_vertex and agent_is_not_on_hf_router)
-    hf_token = load_token()
+    hf_token = cloud.hf_token()
     if needs_hf_token and not hf_token:
         logger.error("No HF token: expected $SWITCHBOARD_SECRETS_DIR/HF_TOKEN or $HF_TOKEN.")
         return False, None

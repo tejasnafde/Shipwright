@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from shipwright.heal import tool_fix as tool_fix_module  # noqa: E402
+from shipwright.heal.traces import read_jsonl  # noqa: E402
 from shipwright.llm.vertex import JUDGE_MODEL  # noqa: E402
 
 DEFAULT_LEDGER = ROOT / "patches" / "ledger.jsonl"
@@ -34,9 +35,6 @@ def domain_tools(domain: str) -> list[dict]:
 
     return [tool.openai_schema for tool in registry.get_env_constructor(domain)().get_tools()]
 
-
-def read_jsonl(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -95,11 +93,11 @@ def propose_patches(options: argparse.Namespace, ledger: list[dict], tools: list
 
     chat = None
     if not options.no_llm:
-        from baseline import load_token
+        from shipwright import cloud
         from classify import make_chat
 
         try:
-            chat = make_chat(load_token(), options.model)
+            chat = make_chat(cloud.hf_token(), options.model)
         except RuntimeError as token_error:
             print(f"{token_error} Use --no-llm, or provide the token.", file=sys.stderr)
             return 2

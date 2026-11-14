@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from baseline import HF_ROUTER, load_token  # noqa: E402
+from shipwright import cloud  # noqa: E402
 from shipwright.llm import vertex  # noqa: E402
 from shipwright.heal.agenttune_bridge import classify_traces, make_classifier  # noqa: E402
 from shipwright.heal.classify import summarize_failures, tool_example_values  # noqa: E402
@@ -95,7 +95,7 @@ def make_chat(token: str | None, model: str):
     """A chat function for the judge or the patch proposer: HF router, or Vertex for vertex/ ids."""
     from shipwright.llm import vertex
 
-    url, request_model, make_headers = vertex.endpoint(model, token, HF_ROUTER)
+    url, request_model, make_headers = vertex.endpoint(model, token, cloud.HF_ROUTER)
     http_client = httpx.Client(timeout=120)
 
     def post_chat_request(messages: list[dict]) -> httpx.Response:
@@ -169,7 +169,7 @@ def main() -> int:
     judge_chat = None
     if options.judge and not options.no_llm:
         try:
-            judge_chat = make_chat(load_token(), options.judge_model)
+            judge_chat = make_chat(cloud.hf_token(), options.judge_model)
         except RuntimeError as token_error:
             print(f"{token_error} Use --no-llm, or provide the token.", file=sys.stderr)
             return 2
