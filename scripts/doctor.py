@@ -265,6 +265,69 @@ def observation_format_and_repair_behave() -> Check:
     return ok(name)
 
 
+def state_reminders_behave() -> Check:
+    """The per-turn status note (llm/reminders.py): says the customer is not identified before a lookup, names the user id after
+    one, repeats the last tool error, and goes into the request only, never into the conversation it was built from."""
+    name = "the state reminders behave on a fixed conversation"
+    from shipwright.llm import reminders
+
+    customer_turn = {"role": "user", "content": "hi, I want to return an order"}
+    before_lookup = reminders.status_note([customer_turn])
+    if before_lookup is None or "not identified" not in before_lookup:
+        return fail(name, f"no 'not identified' note before a lookup: {before_lookup}")
+    lookup = {"role": "assistant", "content": None, "tool_calls": [{"id": "a", "type": "function", "function": {
+        "name": "find_user_id_by_email", "arguments": '{"email": "a@b.c"}'}}]}
+    after_lookup = reminders.status_note([customer_turn, lookup, {"role": "tool", "tool_call_id": "a", "content": "sara_doe_1"}])
+    if after_lookup is None or "sara_doe_1" not in after_lookup:
+        return fail(name, f"the user id is not named after a lookup: {after_lookup}")
+    failed = reminders.status_note([customer_turn, lookup, {"role": "tool", "tool_call_id": "a", "content": "Error: user not found"}])
+    if failed is None or "Error: user not found" not in failed:
+        return fail(name, f"the last tool error is not repeated: {failed}")
+    request = [{"role": "system", "content": "policy"}, dict(customer_turn)]
+    extended = reminders.add_to_request(request, before_lookup)
+    if request[-1]["content"] != "hi, I want to return an order" or before_lookup not in extended[-1]["content"]:
+        return fail(name, "the note leaked into the original messages or did not reach the request")
+    return ok(name)
+
+
+def observation_v3_compacts_records() -> Check:
+    """Observation format 3: an order record arrives without empty fields and with a one-line address, every id and price kept."""
+    name = "observation format 3 compacts an order record"
+    import json as json_module
+
+    from shipwright.llm import prompted_tools
+
+    if prompted_tools.OBSERVATION_VERSION != 3:
+        return fail(name, f"OBSERVATION_VERSION is {prompted_tools.OBSERVATION_VERSION}, this check expects 3 (update it with the format)")
+    order = {"order_id": "#W1", "user_id": "u1", "status": "delivered", "fulfillments": [], "notes": None,
+             "address": {"address1": "1 Main St", "address2": "", "city": "Austin", "country": "USA", "state": "TX", "zip": "78701"},
+             "items": [{"name": "Shelf", "product_id": "P2", "item_id": "111", "price": 1.5, "options": {"c": "red"}}]}
+    shown = prompted_tools.observation_text("get_order_details", json_module.dumps(order))
+    parsed = json_module.loads(shown)
+    if "fulfillments" in parsed or "notes" in parsed or isinstance(parsed.get("address"), dict):
+        return fail(name, f"empty fields or a multi-line address survived: {shown[:200]}")
+    for kept in ("#W1", "u1", "delivered", "111", "1.5", "Austin"):
+        if kept not in shown:
+            return fail(name, f"{kept} was lost from the shown record: {shown[:200]}")
+    return ok(name)
+
+
+def one_command_round_runs_offline() -> Check:
+    """scripts/run_round.py all on the round 10 config with fake models and fake HF jobs (nothing is billed): the config's recipe
+    block, the reminders switch on the candidate, the stage chain and the promote step all run once. Takes about 15 seconds."""
+    name = "run_round.py all runs the round 10 config offline"
+    command = [sys.executable, str(ROOT / "scripts" / "run_round.py"), "all", "--config", "configs/rounds/r10-fixes.yaml",
+               "--dry-run", "--rounds", "1"]
+    completed = subprocess.run(command, capture_output=True, text=True, cwd=ROOT)
+    chain_file = ROOT / "runs" / "dry-chain-r10" / "chain.json"
+    if completed.returncode != 0 or not chain_file.exists():
+        return fail(name, (completed.stderr or completed.stdout)[-300:])
+    chain = json.loads(chain_file.read_text())
+    if chain.get("status") != "promoted":
+        return fail(name, f"the dry chain ended {chain.get('status')}: {chain.get('reason')}")
+    return ok(name)
+
+
 def bfcl_replay_is_disjoint_from_the_gate() -> Check:
     name = "the BFCL replay set does not overlap the gate's samples"
     completed = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", str(ROOT / "tests" / "test_bfcl_replay.py")],
@@ -288,7 +351,8 @@ def vllm_starts_on_a_gpu(adapter_revision: str) -> Check:
 
 FREE_CHECKS: list[Callable[[], Check]] = [
     git_is_clean_and_pushed, hf_token_scopes, vertex_token, gcloud_project, runs_dataset_reachable, system_configs_are_valid, round_configs_are_valid,
-    launchers_accept_the_loops_commands, guards_behave, observation_format_and_repair_behave, sft_rows_render_with_the_real_template,
+    launchers_accept_the_loops_commands, guards_behave, observation_format_and_repair_behave, state_reminders_behave, observation_v3_compacts_records,
+    one_command_round_runs_offline, sft_rows_render_with_the_real_template,
 ]
 
 
