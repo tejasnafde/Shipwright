@@ -178,6 +178,18 @@ def test_empty_user_reply_is_detected():
     assert not patches.is_empty_reply(reply("Hi"))
 
 
+def test_leaked_simulator_turn_is_cut():
+    leaked = reply("Yes, go ahead.<|end|><|start|>assistant<|channel|>analysis<|message|>Done. ###STOP###")
+    assert patches.cut_leaked_turn(leaked)
+    assert leaked.choices[0].message.content == "Yes, go ahead."
+    clean = reply("Yes, go ahead. ###STOP###")
+    assert not patches.cut_leaked_turn(clean)
+    assert clean.choices[0].message.content == "Yes, go ahead. ###STOP###"
+    only_leak = reply("<|channel|>analysis<|message|>###STOP###")
+    patches.cut_leaked_turn(only_leak)
+    assert patches.is_empty_reply(only_leak)  # then asked again, like any empty reply
+
+
 def test_dry_run_with_guards_records_rejections(tmp_path):
     pytest.importorskip("tau2")
     output_directory = tmp_path / "guarded"

@@ -97,6 +97,28 @@ def is_empty_reply(response: Any) -> bool:
     return not (has_text or has_tool_call)
 
 
+# gpt-oss as the user simulator (seen on Vertex) sometimes writes past its own turn: its reply holds
+# "<|end|><|start|>assistant<|channel|>analysis..." and goes on to play both sides, often ending with
+# "###STOP###". tau2 then ends the conversation right after the customer says "yes, go ahead",
+# before the agent can act (round 3 ceiling: 16 of 31 teacher failures). Keep only the text before
+# the first such marker.
+SIMULATOR_LEAK_MARKERS = ("<|end|>", "<|start|>", "<|channel|>", "<|message|>", "<|return|>")
+
+
+def cut_leaked_turn(response: Any) -> bool:
+    """Cut a user-simulator reply at the first chat-format marker. True if something was cut."""
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return False
+    message = choices[0].message
+    content = getattr(message, "content", None) or ""
+    positions = [content.find(marker) for marker in SIMULATOR_LEAK_MARKERS if marker in content]
+    if not positions:
+        return False
+    message.content = content[:min(positions)].rstrip()
+    return True
+
+
 def is_json_reply(response: Any) -> bool:
     """True when every choice's content parses as JSON (what tau2's NL judge expects)."""
 
@@ -328,6 +350,7 @@ def install(
                     if is_json_reply(response):
                         break
                 elif is_user_simulator_call:
+                    cut_leaked_turn(response)
                     if not is_empty_reply(response):
                         break
                 else:
