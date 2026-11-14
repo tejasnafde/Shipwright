@@ -1,7 +1,7 @@
 """What the control room needs to know about a round, without Streamlit: which run dirs belong to it, what the
 gate said in plain words, and how two systems did on each task.
 
-A round is one pass of the loop. Its dirs follow the naming of scripts/run_round.py and scripts/run_loop.py:
+A round is one pass of the loop. Its dirs follow the naming of the loop (shipwright.loop.config.run_name):
 
   before   rN-baseline            the base student on the training tasks (a loop round, N >= 4, starts from
            rN-cand-train          the previous adapter on the training tasks instead)

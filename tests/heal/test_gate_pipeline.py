@@ -14,7 +14,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import gate_eval  # noqa: E402
 import gate_job  # noqa: E402
-import train_job  # noqa: E402
 
 BASE = {"name": "base", "model": "CohereLabs/tiny-aya-global"}
 
@@ -134,10 +133,12 @@ def test_bfcl_rejects_parallel_categories():
 
 # ---------------------------------------------------------------- scripts
 
-def test_train_job_prices():
+def test_gpu_prices():
+    from shipwright import cloud
+
     for flavor, price in {"a10g-large": 1.50, "l40sx1": 1.80, "a100-large": 2.50, "rtx-pro-6000": 2.75}.items():
-        assert train_job.PRICES[flavor] == price
-    assert train_job.estimate_cost("a100-large", "2h") == (2.50, 5.0)
+        assert cloud.GPU_PRICES[flavor] == price
+    assert cloud.worst_case_gpu_usd("a100-large", "2h") == 5.0
 
 
 def test_gate_job_plan_only(capsys):
@@ -145,7 +146,7 @@ def test_gate_job_plan_only(capsys):
                         "--candidate", "configs/systems/r1-weight.yaml", "--user-model", "openai/u"])
     out = capsys.readouterr().out
     assert rc == 0
-    assert "a100-large at $2.50/h" in out and "max cost:  $5.00" in out
+    assert "a10g-large at $1.50/h, timeout 60m, max GPU cost $1.50" in out
     assert "Nothing was uploaded or launched" in out
     assert "tiny-aya-r1-weight" in out
 
@@ -214,17 +215,23 @@ def test_gate_job_bundle_without_git(tmp_path, monkeypatch):
     """In the Cloud Run image there is no .git: the bundle is a tar of the same paths, the sha from the env."""
     import tarfile
 
+    from shipwright import cloud
+    from shipwright.loop import jobs
+
     (tmp_path / "src" / "pkg").mkdir(parents=True)
     (tmp_path / "src" / "pkg" / "a.py").write_text("x = 1\n")
     (tmp_path / "src" / "pkg" / "__pycache__").mkdir()
     (tmp_path / "src" / "pkg" / "__pycache__" / "a.pyc").write_bytes(b"0")
     (tmp_path / "pyproject.toml").write_text("[project]\n")
-    monkeypatch.setattr(gate_job, "ROOT", tmp_path)
+    system = tmp_path / "r9-weight.yaml"
+    system.write_text("name: r9-weight\n")
+    monkeypatch.setattr(jobs, "ROOT", tmp_path)
+    monkeypatch.setattr(cloud, "ROOT", tmp_path)
     monkeypatch.setenv("SHIPWRIGHT_GIT_SHA", "abcdef0123456")
-    assert not gate_job.has_git() and gate_job.code_sha() == "abcdef0"
+    assert cloud.in_the_image() and jobs.code_sha() == "abcdef0"
     tar = tmp_path / "code.tar.gz"
-    gate_job.pack_bundle(tar)
+    jobs.pack_bundle(tar, [system])
     with tarfile.open(tar) as tf:
         names = tf.getnames()
-    assert "src/pkg/a.py" in names and "pyproject.toml" in names
+    assert "src/pkg/a.py" in names and "pyproject.toml" in names and "configs/systems/generated/r9-weight.yaml" in names
     assert not any("__pycache__" in n for n in names)

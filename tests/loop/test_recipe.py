@@ -1,4 +1,4 @@
-from shipwright.heal.recipe import Recipe, needs_training, next_recipe
+from shipwright.loop.recipe import Recipe, needs_training, next_recipe
 
 
 def decision(failed: list[str], current: dict | None = None, candidate: dict | None = None, pass_1: float = 0.1) -> dict:
@@ -64,7 +64,7 @@ def test_the_loop_stops_when_a_round_of_corrections_did_not_improve_the_gate():
 
 
 def test_the_loop_stops_after_the_most_rounds_of_corrections_even_if_it_improves():
-    from shipwright.heal.recipe import MAX_CORRECTION_ROUNDS
+    from shipwright.loop.recipe import MAX_CORRECTION_ROUNDS
 
     recipe = next_recipe(decision(["non_target"], pass_1=0.5), Recipe(tool_guards=True, corrections_rounds=MAX_CORRECTION_ROUNDS),
                          decision(["non_target", "pass_k"], pass_1=0.1))
@@ -72,7 +72,7 @@ def test_the_loop_stops_after_the_most_rounds_of_corrections_even_if_it_improves
 
 
 def test_an_old_manifest_with_only_the_corrections_flag_counts_one_round():
-    from shipwright.heal.recipe import recipe_from_dict
+    from shipwright.loop.recipe import recipe_from_dict
 
     assert recipe_from_dict({"corrections": True}).corrections_rounds == 1
     assert recipe_from_dict({}).corrections_rounds == 0

@@ -1,12 +1,12 @@
 # Round 10 (2026-11-14, Mitushi): round 9's recipe without the corrections, plus the day's fixes in the harness: the
 # user-simulator leak cut, observation version 3, a 512-token reply reserve, the "short replies" line, and a candidate
 # with tool guards and per-turn status reminders. The leaky teacher passes of rounds 1 to 3 are filtered out of the data.
-# scripts/run_round.py all --config configs/rounds/r10-fixes.yaml
+# shipwright run --config configs/rounds/r10-fixes.yaml --launch
 # Everything a rerun needs is here. The manifest (runs/r<round>-round/round.json) records this file resolved, with the
 # code sha, the image and the hashes of the frozen gate and split files. Copy the file to change anything.
 
 round: 10                 # the first round of this chain; pick a number no earlier round used (runs/round-N.json, the Hub)
-rounds: 1                 # rounds back to back (--rounds overrides); the chain stops at the first promotion
+rounds: 1                 # rounds back to back (--rounds overrides); the loop stops at the first promotion
 owner: mitushi            # Cloud Run job shipwright-<owner>, run dirs in gs://lexsi-hackathon-runs/<owner>/
 git_sha: null             # null: the image's commit, recorded. Set it to reproduce a run: the chain refuses another commit.
 seed: 300                 # baseline, teacher and training (the gate's seeds are frozen in configs/gate.yaml)
@@ -29,6 +29,8 @@ baseline:                 # the deployed system on the train tasks
 teacher:                  # the teacher replays the baseline's tool_fix and weight_fix failures
   trials: 3
   max_concurrency: 10
+  # Optional, lists of earlier teacher runs ("owner/dir"): skip_unsolved_from, skip_solved_from, or the harvest
+  # only_solved_from (+ min_teacher_rate: 0.5 for the gap tasks, and trials: 5). Default: none, every failed task.
 
 data:
   repo: mitushigoyal5/shipwright-sft                         # dataset repo; the branch is round-<round>
@@ -42,6 +44,11 @@ data:
     - ishank/r2-teacher
     - ishank/r3-teacher
     - tejas/r9-teacher
+
+candidate_train:          # a corrections round: the refused candidate on the train tasks the teacher can solve
+  flavors: [a10g-large, l40sx1]
+  timeout: 40m
+  trials: 1
 
 train:
   output_repo: mitushigoyal5/shipwright-lora                 # the adapter's branch is round-<round>
@@ -59,6 +66,8 @@ gate:
     state_reminders: true
   flavors: [a10g-large, l40sx1]
   timeout: 60m            # never shorter: a gate needs 45 to 50 minutes of wall time
+  screen_bfcl: true       # BFCL alone on the candidate first (about 8 minutes): the gate is paid for only if it can pass
+  screen_timeout: 30m
   api_usd: 0.6            # the user simulator calls of 120 runs, on top of the GPU
 
 recipe:                   # the first round's recipe (src/shipwright/heal/recipe.py): what rounds 3 to 9 learned
@@ -73,10 +82,13 @@ stop:
 
 spend:                    # caps in USD; a stage starts only if its cap plus what is spent fits in total
   baseline: 2.0
+  candidate_train: 1.5    # worst case l40sx1 $1.80/h x 40m = $1.20
   classify: 0.3
   teacher: 2.0
+  corrections: 0.4
   data: 0.0
   train: 2.0              # worst case a100-large $2.50/h x 45m = $1.88
+  bfcl_screen: 1.0        # worst case l40sx1 $1.80/h x 30m = $0.90
   gate: 3.0               # worst case l40sx1 $1.80/h x 1h + $0.60 of simulator = $2.40
   total: 8.0
 

@@ -256,8 +256,6 @@ def test_trigger_reward_drift_needs_a_baseline():
     st = ab.retrain_status(weight_rows(1), {}, {"dominance_ratio": 1.1, "novel_type_min_count": 5},
                            baseline_rewards=[1.0, 1.0, 0.0, 1.0], rewards=[0.0, 0.0, 0.0, 0.0])
     assert st["should_train"] and st["reason"] == "reward_drift"
-
-
 def test_round_status_script(tmp_path):
     import sys
 

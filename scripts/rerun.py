@@ -100,7 +100,7 @@ def is_offline(script: str, argv: list[str]) -> bool:
         return "--launch" not in argv
     if script == "build_sft.py":
         return "--push" not in argv
-    if script in ("why.py", "rerun.py", "round_status.py", "otel_to_traces.py"):
+    if script in ("why.py", "rerun.py", "otel_to_traces.py", "loop.py", "doctor.py"):
         return True
     offline_flag = OFFLINE_SAFE.get(script)
     return bool(offline_flag) and offline_flag in argv

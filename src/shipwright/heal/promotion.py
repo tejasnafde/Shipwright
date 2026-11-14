@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 BASE_MODEL = "CohereLabs/tiny-aya-global"
+SERVING_SWITCHES = ("tool_guards", "state_reminders")
 
 
 def read_ledger(ledger_path: Path) -> list[dict]:
@@ -49,8 +50,10 @@ def deployed_system(ledger_rows: list[dict]) -> dict:
         "adapter": latest["adapter"],
         "route": "weight_fix",
     }
-    if latest.get("tool_guards"):  # a candidate gated with the guards on is deployed with them
-        system["tool_guards"] = True
+    # A candidate is deployed with the serving switches it was gated with (the guards, the per-turn reminders).
+    for switch in SERVING_SWITCHES:
+        if latest.get(switch):
+            system[switch] = True
     return system
 
 
@@ -74,7 +77,7 @@ def promote(ledger_path: Path, gate_decision: dict, decision_file: str) -> dict:
         "round": gate_decision["round"],
         "candidate": candidate["name"],
         "adapter": candidate["adapter"],
-        "tool_guards": bool(candidate.get("tool_guards")),
+        **{switch: bool(candidate.get(switch)) for switch in SERVING_SWITCHES},
         "decision_file": decision_file,
     })
 

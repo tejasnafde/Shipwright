@@ -12,7 +12,7 @@ classes; it does not replace them:
   ``agenttune.agentic.heal_loop.as_sync_classifier``. ``AGENTTUNE_ROOT_CAUSE_MAP`` maps its
   root cause to our label list and fault layer.
 - RETRAIN TRIGGER: ``SelfHealLoop`` with a ``RetrainingTrigger`` (buffer + 6 conditions +
-  2 safety gates) decides if a weight-fix round trains (``scripts/round_status.py``).
+  2 safety gates) decides if a weight-fix round trains (the loop's train stage, ``scripts/round_status.py``).
 - GATE: ``agenttune_gate_check`` calls ``DeploymentGate.evaluate_decision`` on the paired
   held-out runs. It cannot approve by default: fewer than ``min_test_samples`` cases rejects.
 
@@ -40,6 +40,7 @@ from agenttune.decide.closed_loop.failure_detector import FailureDetector
 from agenttune.decide.closed_loop.retraining_trigger import RetrainingTrigger, TriggerConfig
 
 from shipwright.llm import vertex
+from shipwright.heal.traces import read_jsonl
 from shipwright.heal.classify import RULE_LAYERS, compact_trace, expected_actions, route
 
 # AgentTune FailureClassifier.ROOT_CAUSES -> (our label, fault layer). AgentTune has no
@@ -597,7 +598,33 @@ def agenttune_gate_check(
     }
 
 
+
+def retrain_status_for_run(run_directory: Path, sft_path: Path | None, heal_config_path: Path,
+                           reward_baseline: Path | None = None) -> dict:
+    """``retrain_status`` for a classified run dir (failures.jsonl) and an SFT file: a failure has a correction when the
+    SFT data holds an example of its task. Writes and returns ``round_status.json``. The train stage of the loop and
+    scripts/round_status.py both call this."""
+    import yaml
+
+    heal_config = yaml.safe_load(Path(heal_config_path).read_text())
+    corrections: dict[str, list[dict]] = {}
+    if sft_path is not None and Path(sft_path).exists():
+        for example in read_jsonl(Path(sft_path)):
+            corrections.setdefault(str(example.get("task_id")), example["messages"])
+    baseline_rewards = None
+    rewards = None
+    if reward_baseline is not None:
+        baseline_rewards = [float(t["reward"]) for t in read_jsonl(Path(reward_baseline) / "traces.jsonl") if t.get("reward") is not None]
+        rewards = [float(t["reward"]) for t in read_jsonl(Path(run_directory) / "traces.jsonl") if t.get("reward") is not None]
+    status = retrain_status(read_jsonl(Path(run_directory) / "failures.jsonl"), corrections,
+                            heal_config.get("retrain_trigger"), baseline_rewards=baseline_rewards, rewards=rewards)
+    status.update(run_dir=str(run_directory), sft=str(sft_path) if sft_path else None,
+                  config_status=heal_config.get("status"))
+    (Path(run_directory) / "round_status.json").write_text(json.dumps(status, indent=2, default=str))
+    return status
+
+
 __all__ = [
     "AGENTTUNE_ROOT_CAUSE_MAP", "agenttune_gate_check", "classify_traces", "detect", "make_classifier",
-    "merge_classification", "retrain_status", "trace_audit_records", "write_audit_log",
+    "merge_classification", "retrain_status", "retrain_status_for_run", "trace_audit_records", "write_audit_log",
 ]

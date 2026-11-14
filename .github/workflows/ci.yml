@@ -42,9 +42,9 @@ jobs:
       - name: Offline dry run
         run: .venv/bin/python scripts/baseline.py --dry-run --num-tasks 2 --output-dir runs/ci-dry
 
-      - name: One-command round, offline (fake models, fake HF jobs, two rounds: reject then promote)
+      - name: The whole loop, offline (fake models, fake HF jobs, two rounds: reject then promote)
         run: |
-          .venv/bin/python scripts/run_round.py all --config configs/rounds/default.yaml --dry-run --rounds 2
+          .venv/bin/shipwright run --config configs/rounds/default.yaml --dry-run --rounds 2
           .venv/bin/python - <<'PY'
           import json
           chain = json.load(open("runs/dry-chain-r10/chain.json"))

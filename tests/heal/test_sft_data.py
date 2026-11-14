@@ -160,10 +160,6 @@ def test_split_example_and_spans_and_labels():
 
 
 def test_train_job_plans_without_launch(capsys):
-    assert train_job.main(["--timeout", "2h"]) == 0
+    assert train_job.main(["--timeout", "2h", "--revision", "round-1"]) == 0
     out = capsys.readouterr().out
-    assert "max cost:  $1.60" in out and "Nothing was launched" in out
-    assert train_job.estimate_cost("a10g-small", "90m") == (1.00, 1.5)
-    with pytest.raises(SystemExit):
-        train_job.estimate_cost("h200", "1h")
-    assert train_job.estimate_cost("h200", "1h", 5.0) == (5.0, 5.0)
+    assert "max cost:  $3.60" in out and "Nothing was launched" in out

@@ -18,6 +18,9 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http>=1.30",  # only used when OTEL_EXPORTER_OTLP_ENDPOINT is set
 ]
 
+[project.scripts]
+shipwright = "shipwright.loop.cli:main"   # the one command: doctor, plan, run, stage, status, show, rollback, promote
+
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 # control-room, the read-only demo UI (infra/space/) - no GPU, no agenttune/auditkit,

@@ -383,7 +383,7 @@ def run_script(main: Callable[[], int | None], *, step: str, component: str | No
                meta: bool = False) -> int:
     """Run a script's ``main()`` with logging, tracing and the failure report. Returns the exit code.
 
-    ``meta=True`` is for scripts that launch or move other runs (run_round, train_job, gate_job, pull_runs):
+    ``meta=True`` is for scripts that launch or move other runs (loop, train_job, gate_job, pull_runs):
     they have no run output of their own, so their log goes to ``runs/_meta/`` and stays out of the run list."""
     argv = sys.argv[1:]
     original = list(argv)

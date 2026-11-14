@@ -1,11 +1,11 @@
 """Is this machine and account ready to run the loop? Checks every integration the loop relies on, before any money is spent.
 
-    .venv/bin/python scripts/doctor.py                 # free: accounts, tokens, configs, data, every command the loop builds
-    .venv/bin/python scripts/doctor.py --cloud         # also a vLLM start on an HF GPU with the adapter (about $0.1)
+    shipwright doctor            # free: accounts, tokens, configs, data, every command the loop builds
+    shipwright doctor --cloud    # also a vLLM start on an HF GPU with the adapter (about $0.1)
 
 Every check below exists because the thing it checks broke a real run (AGENTS.md, "Known traps"): a token without the Jobs
-scope, a training row the chat template rejects, a launcher that does not take an option, vLLM that needs a compiler. The loop
-(scripts/run_loop.py) runs the free checks before its first step and stops if one fails. Each check says what it saw, so a
+scope, a training row the chat template rejects, a launcher that does not take an option, vLLM that needs a compiler. `shipwright
+run --launch` runs the free checks before it starts the cloud execution and starts nothing if one fails. Each check says what it saw, so a
 red line names its own fix.
 """
 
@@ -23,8 +23,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-RUNS_REPO = "mitushigoyal5/shipwright-runs"
-ADAPTER_REPO = "mitushigoyal5/shipwright-lora"
+from shipwright import cloud  # noqa: E402
+
+RUNS_REPO = cloud.RUNS_REPO
+ADAPTER_REPO = cloud.LORA_REPO
 
 
 @dataclass
@@ -60,11 +62,7 @@ def git_is_clean_and_pushed() -> Check:
 def hf_token_scopes() -> Check:
     """The token can read and launch Jobs (a missing job.write cost a day) and call the router."""
     name = "HF token: Jobs and router"
-    import os
-
-    import baseline
-
-    token = baseline.load_token() or os.environ.get("HF_TOKEN")
+    token = cloud.hf_token()
     if not token:
         return fail(name, "no HF token: put HF_TOKEN in .env or set SWITCHBOARD_SECRETS_DIR")
     from huggingface_hub import HfApi
@@ -101,7 +99,7 @@ def gcloud_project() -> Check:
     from shipwright.control_room import gcs_runs
 
     try:
-        gcs_runs.list_remote_runs("ishank")
+        gcs_runs.list_remote_runs(cloud.OWNERS[1])
     except Exception as error:  # noqa: BLE001
         return fail(name, f"{type(error).__name__}: {str(error)[:200]}")
     return ok(name)
@@ -121,16 +119,16 @@ def system_configs_are_valid() -> Check:
 
 
 def round_configs_are_valid() -> Check:
-    """configs/rounds/*.yaml (scripts/run_round.py all): a cap a GPU job could pass, or a short gate timeout, fails here
-    before the cloud execution starts."""
+    """configs/rounds/*.yaml: a cap a GPU job could pass, or a short gate timeout, fails here before the cloud execution
+    starts."""
     name = "every round config is valid"
     import yaml
 
-    from shipwright.heal import round_chain
+    from shipwright.loop import config as config_module
 
     bad = []
     for path in sorted((ROOT / "configs" / "rounds").glob("*.yaml")):
-        problems = round_chain.validate_config(yaml.safe_load(path.read_text()))
+        problems = config_module.validate(yaml.safe_load(path.read_text()))
         bad += [f"{path.name}: {problem}" for problem in problems]
     return fail(name, "; ".join(bad)) if bad else ok(name)
 
@@ -158,33 +156,29 @@ def runs_dataset_reachable() -> Check:
 
 
 def launchers_accept_the_loops_commands() -> Check:
-    """Each launcher script parses the exact command the loop builds for it (plan only, nothing launches)."""
+    """The by-hand launchers parse the commands the docs give, and the gate command names the bundled system configs (plan
+    only, nothing launches)."""
     name = "the launcher commands parse"
-    import argparse as argparse_module
-
-    import run_loop
+    import gate_job
     import train_job
+
+    from shipwright.loop import jobs
 
     problems = []
     try:
-        chosen = run_loop.recipe_module.Recipe(epochs=2.0, learning_rate=1e-4)
-        command = run_loop.train_command(argparse_module.Namespace(round=99), chosen)
-        train_job.parse_args(command[2:])
+        train_job.parse_args(["--dataset-revision", "round-99", "--revision", "round-99", "--", "--epochs", "2"])
     except SystemExit as error:
         problems.append(f"train_job: {error}")
-    plans = [
-        ["--round", "99", "--current", "configs/systems/base.yaml", "--candidate", "configs/systems/r5-weight.yaml",
-         "--user-model", run_loop.run_round.GATE_USER_MODEL, "--flavor", "l40sx1", "--timeout", "60m"],
-        ["--round", "99", "--current", "configs/systems/base.yaml", "--candidate", "configs/systems/r5-weight.yaml",
-         "--user-model", run_loop.run_round.GATE_USER_MODEL, "--bfcl-screen", "--flavor", "l40sx1", "--timeout", "30m"],
-        ["--round", "99", "--current", "configs/systems/base.yaml", "--candidate", "configs/systems/r5-weight.yaml",
-         "--user-model", run_loop.run_round.GATE_USER_MODEL, "--train-eval", "--trials", "1", "--task-ids", "0", "1",
-         "--flavor", "l40sx1", "--timeout", "40m"],
-    ]
-    for plan in plans:
-        completed = subprocess.run([sys.executable, str(ROOT / "scripts" / "gate_job.py"), *plan], capture_output=True, text=True)
-        if completed.returncode != 0:
-            problems.append(f"gate_job {' '.join(plan[7:9])}: {(completed.stderr or completed.stdout)[-200:]}")
+    base = ["--round", "99", "--current", "configs/systems/base.yaml", "--candidate", "configs/systems/r8-weight.yaml",
+            "--user-model", "openai/openai/gpt-oss-120b:deepinfra"]
+    for extra in ([], ["--bfcl-screen"], ["--train-eval", "--task-ids", "0", "1"]):
+        try:
+            job = gate_job.job_from_options(gate_job.parse_args(base + extra))
+            arguments = jobs.gate_script_arguments(job, "gate/round-99/code/x.tar.gz")
+            if "configs/systems/generated/r8-weight.yaml" not in arguments:
+                problems.append(f"gate_job {extra}: the candidate is not the bundled config")
+        except SystemExit as error:
+            problems.append(f"gate_job {extra}: {error}")
     return fail(name, " | ".join(problems)) if problems else ok(name)
 
 
@@ -313,10 +307,10 @@ def observation_v3_compacts_records() -> Check:
 
 
 def one_command_round_runs_offline() -> Check:
-    """scripts/run_round.py all on the round 10 config with fake models and fake HF jobs (nothing is billed): the config's recipe
-    block, the reminders switch on the candidate, the stage chain and the promote step all run once. Takes about 15 seconds."""
-    name = "run_round.py all runs the round 10 config offline"
-    command = [sys.executable, str(ROOT / "scripts" / "run_round.py"), "all", "--config", "configs/rounds/r10-fixes.yaml",
+    """`shipwright run --dry-run` on the round 10 config with fake models and fake HF jobs (nothing is billed): the config's
+    recipe block, the reminders switch on the candidate, the stages and the promote step all run once. About 15 seconds."""
+    name = "shipwright run --dry-run runs the round 10 config offline"
+    command = [sys.executable, str(ROOT / "scripts" / "loop.py"), "run", "--config", "configs/rounds/r10-fixes.yaml",
                "--dry-run", "--rounds", "1"]
     completed = subprocess.run(command, capture_output=True, text=True, cwd=ROOT)
     chain_file = ROOT / "runs" / "dry-chain-r10" / "chain.json"

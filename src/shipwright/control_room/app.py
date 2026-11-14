@@ -762,7 +762,7 @@ def tab_fix_train(data: RoundData) -> None:
         with st.expander("Full retrain-trigger status (raw)"):
             st.json(data.round_status)
     else:
-        st.caption("No round_status.json - run scripts/round_status.py.")
+        st.caption("No round_status.json - run scripts/round_status.py (the loop's train stage writes it).")
 
     if data.sft_stats:
         st.markdown("**SFT data built** (`scripts/build_sft.py`)")
