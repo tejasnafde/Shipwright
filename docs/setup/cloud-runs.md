@@ -137,4 +137,4 @@ done
 uploaded from `gs://lexsi-hackathon-runs/<owner>/` into `runs/` (the control room reads them from there).
 It uses the `lexsi` gcloud config, or `SHIPWRIGHT_GCLOUD_CONFIG`.
 
-Several run dirs: write each as `--fetch=<owner>/<dir>` (gcloud `--args` rejects a repeated value, so two `--fetch X` fail). `scripts/run_round.py` does this and refuses a job whose arguments repeat a value.
+Several run dirs: write each as `--fetch=<owner>/<dir>` (gcloud `--args` rejects a repeated value, so two `--fetch X` fail). The loop needs none: one execution runs every stage and fetches what it needs itself.

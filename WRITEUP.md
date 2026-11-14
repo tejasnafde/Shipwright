@@ -77,7 +77,7 @@ flowchart TD
 - a tool-patch ledger with rollback;
 - the gate with frozen thresholds and splits;
 - the teacher-vs-student report;
-- an unattended round driver (`scripts/run_round.py all`) with spend caps and stop rules.
+- an unattended loop (`shipwright run`, one Cloud Run execution) with spend caps, stop rules and every remedy, corrections included.
 
 ## Hackathon repos used and how they connect
 
@@ -255,7 +255,7 @@ A full round (baseline, classify, teacher, data, train, gate) runs unattended in
   - `configs/`: frozen splits and gate, systems, rounds;
   - `docs/`: setup, pipeline, ops;
   - `docs/system-design.html`: the full design.
-- **Setup and runs:** `docs/setup/*.md`, `docs/pipeline/*.md`. One round, unattended: `scripts/run_round.py all --config configs/rounds/<name>.yaml --launch`. Offline: `--dry-run`. Tests: `pytest` (368 pass).
+- **Setup and runs:** `docs/setup/*.md`, `docs/pipeline/*.md`. The loop, unattended: `shipwright run --config configs/rounds/<name>.yaml --launch`. Offline: `--dry-run`. Tests: `pytest` (368 pass).
 - **Reproducibility:** every run writes `run_config.json` (models, seeds, code sha, observation version) and `repro.json`, and every gate records the sha256 of the frozen configs.
 - **Declaration of work done outside the hackathon:** none. All code, data and models were produced between Nov 1 and Nov 15, 2026.
 
