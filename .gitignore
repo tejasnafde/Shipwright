@@ -15,3 +15,4 @@ wandb/
 .switchboard/
 third_party/
 /branch-diff.md
+/CLAUDE.local.md

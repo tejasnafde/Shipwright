@@ -152,7 +152,8 @@ def test_the_bfcl_screen_applies_the_gates_own_rule():
 def test_a_round_with_the_failures_given_does_not_pay_for_the_steps_it_skips():
     options = argparse.Namespace(failures_run="r4-cand-train", screen_bfcl=True)
     assert run_loop.planned_steps(options) == ["data", "train", "bfcl_screen", "gate"]
-    assert run_loop.cost_of_a_full_round(None, run_loop.planned_steps(options)) == pytest.approx(2.35)
+    expected = sum(run_loop.STEP_ESTIMATES[step] for step in ("data", "train", "bfcl_screen", "gate"))
+    assert run_loop.cost_of_a_full_round(None, run_loop.planned_steps(options)) == pytest.approx(expected)  # 2.55 today
     plain = argparse.Namespace(failures_run=None, screen_bfcl=False)
     assert run_loop.planned_steps(plain) == ["candidate_train", "classify", "data", "train", "gate"]
 
@@ -266,3 +267,13 @@ def test_a_real_litellm_reply_with_an_item_id_is_rewritten_in_place():
     assert function.name == "get_item_details" and json.loads(function.arguments) == {"item_id": "222"}
     trace = patched.choices[0].message.provider_specific_fields[patches.TRACE_FIELD]
     assert trace["guard_repairs"] == [{"from": "get_product_details", "to": "get_item_details", "arguments": {"item_id": "222"}}]
+
+
+def test_each_round_of_corrections_trains_on_the_earlier_rounds_too(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_loop, "ROOT", tmp_path)
+    for round_number, rows in ((7, ['{"a": 1}', '{"b": 2}']), (8, ['{"b": 2}', '{"c": 3}'])):  # one row is in both
+        directory = tmp_path / "runs" / f"r{round_number}-corrections"
+        directory.mkdir(parents=True)
+        (directory / "corrections.jsonl").write_text("\n".join(rows) + "\n")
+    combined = run_loop.combined_corrections(argparse.Namespace(round=8))
+    assert len(combined.read_text().splitlines()) == 3

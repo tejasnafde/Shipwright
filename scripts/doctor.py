@@ -234,6 +234,37 @@ def guards_behave() -> Check:
     return ok(name)
 
 
+def observation_format_and_repair_behave() -> Check:
+    """The student's view of a product listing is shortened, an id of the wrong kind is rerouted, and an over-long request is
+    shortened before anything is dropped: the three harness behaviours the loop relies on (gate 8, replay of 9,085 calls)."""
+    name = "tool-result shortening and id repair behave"
+    import json as json_module
+
+    from shipwright.llm import context, guards, prompted_tools
+
+    listing = {"name": "Shelf", "product_id": "P2", "variants": {
+        "111": {"item_id": "111", "options": {"c": "red"}, "available": True, "price": 1.0},
+        "222": {"item_id": "222", "options": {"c": "blue"}, "available": False, "price": 2.0}}}
+    shown = prompted_tools.observation_text("get_product_details", json_module.dumps(listing))
+    if '"222"' in shown or "available_variants" not in shown:
+        return fail(name, f"a listing was not shortened: {shown[:120]}")
+    history = [{"role": "user", "content": "hi"},
+               {"role": "assistant", "content": None, "tool_calls": [{"id": "a", "type": "function", "function": {
+                   "name": "get_product_details", "arguments": '{"product_id": "P2"}'}}]},
+               {"role": "tool", "tool_call_id": "a", "content": json_module.dumps(listing)}]
+    fixed = guards.repaired_call(history, guards.ToolCall("get_product_details", {"product_id": "111"}), {"get_item_details"})
+    if fixed != guards.ToolCall("get_item_details", {"item_id": "111"}):
+        return fail(name, f"an item id given to get_product_details was not rerouted: {fixed}")
+    bulky = {"role": "user", "content": "Tool result for get_product_details: " + json_module.dumps(
+        {**listing, "variants": {str(n): {"item_id": str(n), "options": {"c": "x" * 40}, "available": True, "price": 1.0}
+                                 for n in range(40)}}, separators=(",", ":"))}
+    messages = [{"role": "system", "content": "policy"}, {"role": "user", "content": "hi"}, bulky, bulky, bulky, bulky]
+    fitted, info = context.fit_messages(messages, budget=context.count_messages(messages) - 50)
+    if info["results_shortened"] < 1 or context.count_messages(fitted) > context.count_messages(messages) - 50:
+        return fail(name, f"an over-long request was not shortened to fit: {info}")
+    return ok(name)
+
+
 def bfcl_replay_is_disjoint_from_the_gate() -> Check:
     name = "the BFCL replay set does not overlap the gate's samples"
     completed = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", str(ROOT / "tests" / "test_bfcl_replay.py")],
@@ -257,7 +288,7 @@ def vllm_starts_on_a_gpu(adapter_revision: str) -> Check:
 
 FREE_CHECKS: list[Callable[[], Check]] = [
     git_is_clean_and_pushed, hf_token_scopes, vertex_token, gcloud_project, runs_dataset_reachable, system_configs_are_valid, round_configs_are_valid,
-    launchers_accept_the_loops_commands, guards_behave, sft_rows_render_with_the_real_template,
+    launchers_accept_the_loops_commands, guards_behave, observation_format_and_repair_behave, sft_rows_render_with_the_real_template,
 ]
 
 

@@ -25,12 +25,17 @@ import threading
 import uuid
 from typing import Any
 
+from shipwright.llm import context
 from shipwright.llm.context import REPLY_TOKENS, fit_messages
 
 TRACE_FIELD = "shipwright"
 # The format of the tool list the student sees. 1: examples as written in tau2's descriptions ("e.g. '#W0000000'").
 # 2 (2026-11-12): real-looking examples hidden (example_hint). Runs record it in run_config.json.
 TOOL_LIST_VERSION = 2
+# The format of a tool result the student sees. 1: as the tool returned it (minified). 2 (2026-11-13): a product listing
+# keeps only the variants that can be ordered (context.shortened_result), the moment it arrives: the same view in live
+# requests and in the training rows (both go through convert_messages), and 2.7k of the 8.2k window is already the prompt.
+OBSERVATION_VERSION = 2
 
 INSTRUCTION = """You can use these tools (name(arguments) - what it does; ? marks an optional argument):
 {tools}
@@ -197,6 +202,18 @@ def minify_content(content: str) -> str:
         return content
 
 
+def observation_text(tool_name: str, content: str) -> str:
+    """A tool result as the student sees it: minified, and a product listing without the variants that cannot be ordered."""
+    if tool_name == "get_product_details":
+        try:
+            result = json.loads(content)
+        except (TypeError, ValueError):
+            return minify_content(content)
+        if isinstance(result, dict):
+            return json.dumps(context.shortened_result(tool_name, result), separators=(",", ":"), ensure_ascii=False)
+    return minify_content(content)
+
+
 def format_tool_call(name: str, arguments: Any) -> str:
     if isinstance(arguments, str):
         try:
@@ -251,7 +268,7 @@ def convert_messages(messages: list[dict], tools: list[dict]) -> list[dict]:
         elif role == "tool":
             tool_name = tool_name_by_call_id.get(message.get("tool_call_id", ""), "tool")
             converted_messages.append(
-                {"role": "user", "content": f"Tool result for {tool_name}: {minify_content(content)}"}
+                {"role": "user", "content": f"Tool result for {tool_name}: {observation_text(tool_name, content)}"}
             )
         else:
             converted_messages.append({"role": role, "content": content})
