@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import threading
 import time
 from typing import Any, Callable
@@ -117,6 +118,43 @@ def cut_leaked_turn(response: Any) -> bool:
         return False
     message.content = content[:min(positions)].rstrip()
     return True
+
+
+# gpt-oss as the user simulator (HF router, DeepInfra, low reasoning effort) sometimes sends a bare "###STOP###"
+# while its own reasoning says it is about to answer ("So we say Yes. We should wait for next."). tau2 then ends the
+# conversation as if the customer hung up. r10-ceiling: 15 of the 20 bare stops had no intent to end in the reasoning,
+# 15 of the teacher's 41 failures; gate 8: 15 student failures against 3 base ones (the student asks more questions).
+# Such a stop is asked again, like an empty reply. A stop whose reasoning says the customer is done is kept.
+STOP_SIGNAL = "###STOP###"
+STOP_INTENT = re.compile(
+    r"stop|\bend\b|done|complete|finish|goodbye|\bbye\b|that's all|nothing else|satisf|resolved|wrap up|conclude|"
+    r"no further|transfer",
+    re.IGNORECASE,
+)
+
+
+def reasoning_text(response: Any) -> str:
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return ""
+    message = choices[0].message
+    reasoning = getattr(message, "reasoning_content", None)
+    if not reasoning:
+        fields = getattr(message, "provider_specific_fields", None) or {}
+        reasoning = fields.get("reasoning_content") if isinstance(fields, dict) else None
+    return reasoning or ""
+
+
+def is_unexplained_stop(response: Any) -> bool:
+    """A bare stop signal whose reasoning shows no intent to end the conversation. Without reasoning: kept."""
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return False
+    content = (getattr(choices[0].message, "content", None) or "").strip()
+    if content != STOP_SIGNAL:
+        return False
+    reasoning = reasoning_text(response)
+    return bool(reasoning) and not STOP_INTENT.search(reasoning)
 
 
 def is_json_reply(response: Any) -> bool:
@@ -351,7 +389,7 @@ def install(
                         break
                 elif is_user_simulator_call:
                     cut_leaked_turn(response)
-                    if not is_empty_reply(response):
+                    if not is_empty_reply(response) and not is_unexplained_stop(response):
                         break
                 else:
                     break

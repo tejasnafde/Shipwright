@@ -320,3 +320,17 @@ def test_tool_names_are_read_from_the_system_prompt_lines():
     prompt = "POLICY\n\nYou can use these tools:\nget_item_details(item_id: str) - x\ncalculate(expression: str) - y\n\nTo call a tool"
     assert guards.tool_names_in_prompt([{"role": "system", "content": prompt}]) == {"get_item_details", "calculate"}
     assert guards.tool_names_in_prompt([{"role": "user", "content": "hi"}]) is None
+
+
+def stop_reply(reasoning):
+    message = SimpleNamespace(content="###STOP###", tool_calls=None, reasoning_content=reasoning,
+                              provider_specific_fields={})
+    return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+def test_a_stop_the_simulator_did_not_mean_is_asked_again():
+    # r10-ceiling task 9: the reasoning says it will answer yes, the reply is a bare stop
+    assert patches.is_unexplained_stop(stop_reply("The user asks Yes/No. So we say Yes. We should wait for next."))
+    assert not patches.is_unexplained_stop(stop_reply("The exchange is done and the customer is satisfied."))
+    assert not patches.is_unexplained_stop(stop_reply(""))  # no reasoning: trust the stop
+    assert not patches.is_unexplained_stop(reply("Yes, go ahead. ###STOP###"))  # a reply with text is not bare
