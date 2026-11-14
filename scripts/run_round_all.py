@@ -164,6 +164,9 @@ def resolved_config(config: dict, config_path: Path, rounds: int, dry_run: bool)
                                         for name, path in config["frozen"].items()}}}
 
 
+CANDIDATE_EXTRA_KEYS = {"state_reminders"}
+
+
 def write_candidate_system(config: dict, round_number: int, state: dict) -> Path:
     """configs/systems/rN-weight.yaml from the template: this chain's adapter, the recipe's guards. In the image the gate
     bundle is a tar of the tree, so the file needs no commit. A dry run writes it into its round dir only."""
@@ -173,6 +176,11 @@ def write_candidate_system(config: dict, round_number: int, state: dict) -> Path
     system["name"] = f"r{round_number}-weight"
     system["adapter"] = {"repo": config["train"]["output_repo"], "revision": f"round-{state['adapter_round']}"}
     system["tool_guards"] = state["recipe"].tool_guards
+    # Serving-only switches for the candidate (config gate.candidate_extra), e.g. state_reminders: true.
+    for key, value in (config["gate"].get("candidate_extra") or {}).items():
+        if key not in CANDIDATE_EXTRA_KEYS:
+            raise SystemExit(f"gate.candidate_extra: {key} is not one of {sorted(CANDIDATE_EXTRA_KEYS)}")
+        system[key] = value
     systems.validate_system(system)
     text = (f"# Round {round_number} candidate, written by scripts/run_round_all.py from "
             f"{config['gate']['candidate_template']}.\n" + yaml.safe_dump(system, sort_keys=False))

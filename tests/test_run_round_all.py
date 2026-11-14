@@ -85,3 +85,18 @@ def test_a_failed_gate_job_is_a_failed_stage(tmp_path, monkeypatch):
         "stage": "ERROR", "cost": 0.4, "job": "j2", "flavor": flavors[0], "tried": []})
     entry = run_round_all.Stages(config(), 10, state(), dry_run=False).gate()
     assert entry["exit_code"] == 1 and "ERROR" in entry["note"] and entry["actual_usd"] == pytest.approx(1.0)
+
+
+def test_round_10_config_starts_from_the_learned_recipe_and_turns_reminders_on(tmp_path, monkeypatch):
+    from shipwright.heal import round_chain
+
+    round_10 = round_chain.load_config(ROOT / "configs" / "rounds" / "r10-fixes.yaml")
+    assert round_10["owner"] == "mitushi" and round_10["recipe"]["tool_guards"] is True
+    monkeypatch.setattr(run_round_all, "RUNS", tmp_path)
+    dry = run_round_all.dry_run_config(round_10)
+    run_round_all.Stages(dry, 10, state(tool_guards=True), dry_run=True).gate()
+    candidate = yaml.safe_load((tmp_path / "dry-r10-round" / "r10-weight.yaml").read_text())
+    assert candidate["state_reminders"] is True and candidate["tool_guards"] is True
+    bad = dict(dry, gate={**dry["gate"], "candidate_extra": {"adapter": None}})
+    with pytest.raises(SystemExit):
+        run_round_all.write_candidate_system(bad, 10, state(tool_guards=True))

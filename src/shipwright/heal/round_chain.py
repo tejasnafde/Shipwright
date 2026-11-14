@@ -283,8 +283,14 @@ def run_chain(config: dict, rounds: int, hooks: ChainHooks, resolved_config: dic
     (``recipe.next_recipe``) says what that round changes."""
     caps, rules = config["spend"], StopRules.from_config(config)
     first_round = config["round"]
+    # The first round's recipe: the config's ``recipe`` block (what earlier rounds already learned: the guards,
+    # general function-calling examples), else a bare one.
+    starting_recipe = config.get("recipe") or {}
     state = {"recipe": recipe_module.Recipe(epochs=config["train"]["epochs"],
-                                            learning_rate=config["train"]["learning_rate"]),
+                                            learning_rate=config["train"]["learning_rate"],
+                                            boost=int(starting_recipe.get("boost", recipe_module.DEFAULT_BOOST)),
+                                            general_replay=int(starting_recipe.get("general_replay", 0)),
+                                            tool_guards=bool(starting_recipe.get("tool_guards", False))),
              "baseline_run": run_name(config, first_round, "baseline"),
              "teacher_run": run_name(config, first_round, "teacher"), "adapter_round": None}
     previous = state["recipe"]

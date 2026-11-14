@@ -100,6 +100,17 @@ def check_train_split(run_directory: Path, task_split: str | None, allow_split: 
         )
 
 
+def has_simulator_leak(trace: dict) -> bool:
+    from shipwright.llm.patches import SIMULATOR_LEAK_MARKERS
+
+    for message in trace.get("messages") or []:
+        if isinstance(message, dict) and message.get("role") == "user":
+            content = message.get("content") or ""
+            if any(marker in content for marker in SIMULATOR_LEAK_MARKERS):
+                return True
+    return False
+
+
 def load_run(run_directory: Path, allow_split: bool) -> tuple[list[dict], dict]:
     """Successful traces and prompts of one run dir."""
     run_config_path = run_directory / "run_config.json"
@@ -109,7 +120,10 @@ def load_run(run_directory: Path, allow_split: bool) -> tuple[list[dict], dict]:
         task_split = None
     check_train_split(run_directory, task_split, allow_split)
 
-    successful_traces = [trace for trace in read_json_lines(run_directory / "traces.jsonl") if trace.get("passed")]
+    # A passing run whose user simulator wrote past its turn (patches.cut_leaked_turn) has chat-format tokens in a
+    # customer message: never train on it (rounds 1 to 3 on Vertex gpt-oss, 2026-11-14).
+    successful_traces = [trace for trace in read_json_lines(run_directory / "traces.jsonl")
+                         if trace.get("passed") and not has_simulator_leak(trace)]
 
     prompts_path = run_directory / "prompts.json"
     if prompts_path.exists():

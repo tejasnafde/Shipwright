@@ -35,3 +35,13 @@ def test_general_replay_rows_get_token_counts_so_the_statistics_work(tmp_path):
         "over_max_tokens": 0, "reply_over_max_tokens": 0}
     statistics = build_sft.sft_data.stats(records, dropped)  # the call that crashed without the counts
     assert statistics["examples"] == 1
+
+
+def test_a_passing_run_with_a_leaked_simulator_turn_is_not_training_data():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("build_sft_leak", Path(__file__).resolve().parents[1] / "scripts" / "build_sft.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    leaked = {"passed": True, "messages": [{"role": "user", "content": "Yes.<|end|><|start|>assistant ###STOP###"}]}
+    clean = {"passed": True, "messages": [{"role": "user", "content": "Yes, go ahead."}]}
+    assert module.has_simulator_leak(leaked) and not module.has_simulator_leak(clean)
