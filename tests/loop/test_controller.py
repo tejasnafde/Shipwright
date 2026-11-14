@@ -271,3 +271,39 @@ def test_a_promotion_keeps_the_serving_switches_of_the_gated_candidate(tmp_path)
     promotion.promote(ledger, {"decision": "promote", "round": 11, "systems": {"candidate": candidate}}, "d.json")
     deployed = promotion.deployed_system(promotion.read_ledger(ledger))
     assert deployed["tool_guards"] is True and deployed["state_reminders"] is True
+
+
+def test_a_regate_start_measures_the_candidate_again_then_picks_the_remedy_from_that():
+    chain_config = roomy_config()
+    chain_config.update(start={"from_round": 11, "candidate": "configs/systems/r11-r7-fixes.yaml", "regate": True},
+                        recipe={"tool_guards": True, "general_replay": 100, "corrections_rounds": 1})
+    fakes = Fakes(gate_decisions=[decision(False, failed=("non_target",)), decision(True)])
+    result = run(fakes, rounds=2, chain_config=chain_config, start_adapter_round=7)
+    assert result.status == controller.PROMOTED
+    assert stages_of(fakes, 10) == ["gate"] and fakes.states[0]["adapter_round"] == 7
+    assert stages_of(fakes, 11) == controller.CORRECTION_STAGES
+    assert fakes.states[1]["recipe"].corrections_rounds == 2 and fakes.states[1]["adapter_round"] == 11
+
+
+def test_the_r12_config_reaches_its_last_gate_inside_the_cap_at_realistic_costs():
+    """Round 12 gate $1.42 (gate 10's real cost), then a corrections round at past real costs: the final gate must still
+    be allowed to start, or the money would be spent on a round that never gets its verdict."""
+    chain_config = yaml.safe_load((ROOT / "configs" / "rounds" / "r12-final.yaml").read_text())
+    real = {"candidate_train": {"exit_code": 0, "actual_usd": 0.8, "num_runs": 50, "num_infra_errors": 0},
+            "classify": {"exit_code": 0, "actual_usd": 0.05}, "corrections": {"exit_code": 0, "actual_usd": 0.3},
+            "data": {"exit_code": 0, "actual_usd": 0.0, "examples": 600},
+            "train": {"exit_code": 0, "actual_usd": 1.25}}
+    gates = [decision(False, failed=("non_target",)), decision(True)]
+    fakes = Fakes({stage: [entry] for stage, entry in real.items()}, gate_decisions=gates)
+    original = fakes.entry
+
+    def entry(round_number, stage):
+        result = original(round_number, stage)
+        if stage == "gate":
+            result["actual_usd"] = 1.42
+        return result
+
+    fakes.entry = entry
+    result = run(fakes, rounds=2, chain_config=chain_config, start_adapter_round=7)
+    assert result.status == controller.PROMOTED and stages_of(fakes, 13)[-1] == "gate"
+    assert result.spent_usd <= chain_config["spend"]["total"]

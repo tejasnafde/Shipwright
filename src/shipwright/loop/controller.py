@@ -246,26 +246,36 @@ def run_chain(config: dict, rounds: int, hooks: Hooks, resolved_config: dict,
               start_decision: dict | None = None, start_adapter_round: int | None = None) -> ChainResult:
     """Round after round until one is promoted, a stage stops the chain, the money runs out or no remedy is left.
 
-    ``start_decision``: the gate decision the chain continues from (config ``start``), with the round whose adapter that
-    candidate serves. Without it, the first round is fresh."""
+    Config ``start``: continue from a refused candidate instead of a fresh round. ``start_decision`` is its gate
+    decision, ``start_adapter_round`` the round whose adapter it serves. With ``start.regate`` the first round only gates
+    that candidate again (its old decision was measured on an older harness or a broken gate) and the remedy is chosen
+    from the new decision."""
     state = ChainState(recipe=starting_recipe(config))
-    if start_decision is not None:
-        state.decisions.append(start_decision)
+    start = config.get("start") or {}
+    regate = bool(start.get("regate"))
+    if start:
         state.adapter_round = start_adapter_round
-        state.candidate_system = config["start"]["candidate"]
+        state.candidate_system = start["candidate"]
+    if start_decision is not None and not regate:
+        state.decisions.append(start_decision)
     results: list[RoundResult] = []
     spent = 0.0
     for round_index in range(rounds):
         round_number = config["round"] + round_index
-        fresh = round_index == 0 and start_decision is None
+        fresh = round_index == 0 and not start
         previous = state.recipe
-        if not fresh:
+        if round_index == 0 and regate:
+            pass  # re-measure the start candidate on today's harness and gate before anything is trained
+        elif not fresh:
             earlier = state.decisions[-2] if len(state.decisions) > 1 else None
             state.recipe = recipe_module.next_recipe(state.decisions[-1], previous, earlier)
             if state.recipe.exhausted:
                 reason = "; ".join(state.recipe.reasons) or EXHAUSTED
                 return ChainResult(EXHAUSTED, reason, round(spent, 4), results)
-        stages = planned_stages(fresh, state.recipe, previous, bool(config["gate"].get("screen_bfcl")))
+        if round_index == 0 and regate:
+            stages = ["gate"]
+        else:
+            stages = planned_stages(fresh, state.recipe, previous, bool(config["gate"].get("screen_bfcl")))
         update_state_for_round(state, round_number, stages, config)
         result = run_round(round_number, stages, hooks, state, config, spent, resolved_config)
         results.append(result)

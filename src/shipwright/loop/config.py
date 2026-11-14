@@ -10,6 +10,8 @@ Optional blocks:
     start:    continue from a gate that already refused a candidate, instead of a fresh round:
                 from_round: 8                                # its gate_decision.json is read from the runs dataset
                 candidate: configs/systems/r8-weight.yaml    # the refused system (its adapter is reused)
+                regate: true                                 # optional: gate it again first, decide the remedy from that
+    data.corrections_pool:  earlier corrections runs ("owner/dir") that join every round's corrections
 """
 
 from __future__ import annotations
@@ -109,6 +111,7 @@ def dry_run(config: dict) -> dict:
     dry["baseline"]["num_tasks"] = 2
     dry["teacher"]["trials"] = 1
     dry["data"]["pool"] = []
+    dry["data"]["corrections_pool"] = []
     dry["stop"]["min_sft_examples"] = 0
     dry["train"]["require_trigger"] = False
     return dry

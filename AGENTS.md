@@ -478,6 +478,22 @@ What changed, so nobody rebuilds what was removed or repeats what it fixed:
 
 - 2026-11-14 (Mitushi): the router (DeepInfra) gpt-oss user simulator sends a bare `###STOP###` while its reasoning says it will answer ("So we say Yes. We should wait for next."), and tau2 ends the conversation as if the customer hung up. r10-ceiling (the clean ceiling, teacher 19 of 60 = 31.7%): 20 bare stops, 15 of them with no intent to end in the reasoning, so 15 of the teacher's 41 failures are the simulator's. Gate 8: the customer quit right after an agent question in 19 candidate runs (15 failed) against 3 base runs, so the gate was biased against the candidate, which asks for identity and confirmation more. `patches.is_unexplained_stop`: a bare stop whose reasoning shows no intent to end (`STOP_INTENT`) is asked again, like an empty reply; no reasoning means the stop is kept. Round 10 (`shipwright-mitushi-qq56w`) was launched before this fix: re-gate its adapter and rerun the ceiling with it before quoting numbers.
 
+- 2026-11-14 (Ishank): gates 10 and 11 never applied the frozen classifier: every AgentTune classifier call answered 401
+  (`label_coverage.agenttune_errors` 52 to 54 of 54 failures, `agenttune` 0). The Vertex token is minted at launch and
+  was dead by the time the job classified, after the GPU queue, vLLM load and 120 runs. So 57% of the candidate's
+  failures stayed `unclassified` and `non_target` failed on that: their `non_target` and `target` checks are not
+  measurements. Fix (config unchanged): the loop's gate job runs with `--runs-only` (serve, tau2, BFCL, push), and the
+  gate stage classifies and decides in Cloud Run, where the token refreshes (`gate_eval.py --current-run ... --reclassify
+  --systems-from gate_inputs.json --push`). A decision whose classifier failed on any run is never reused.
+  `gate_job.py --runs-only` does the same by hand. Expect a working classifier to turn most `unclassified` into target
+  labels: the `target` check then needs the candidate to fail about 3 fewer of 60 runs, and `non_target` still counts
+  `context_overflow` (gate 11: 10 runs vs 0).
+- 2026-11-14 (Ishank): round config `start.regate: true` gates the start candidate again before choosing a remedy (for a
+  decision measured on an older harness or a broken gate); `data.corrections_pool` adds earlier corrections runs
+  ("owner/dir") to every round's corrections. `configs/rounds/r12-final.yaml`: re-gate gate 11's candidate (round 12),
+  then the recipe's remedy (round 13), total cap $6, one GPU flavor per stage so the last gate fits under the cap at real
+  costs (`tests/loop/test_controller.py`).
+
 ## Keep this file correct
 
 This file corrects itself through you. **`AGENTS.md` is the only file that carries facts, traps

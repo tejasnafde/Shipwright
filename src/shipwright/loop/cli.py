@@ -136,6 +136,8 @@ def start_point(config: dict, dry_run: bool) -> tuple[dict | None, int | None]:
     candidate = yaml.safe_load((ROOT / start["candidate"]).read_text())
     revision = str((candidate.get("adapter") or {}).get("revision") or "")
     adapter_round = int(revision.removeprefix("round-")) if revision.removeprefix("round-").isdigit() else None
+    if start.get("regate"):
+        return None, adapter_round  # the old decision is not used: the first round measures again
     if dry_run:
         decision = {"decision": "reject", "checks": [{"name": "pass_k", "passed": False}],
                     "metrics_current": {"label_rates": {}}, "metrics_candidate": {"label_rates": {}}}
