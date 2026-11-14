@@ -1,0 +1,7 @@
+# Base Tiny Aya with tool guards and per-turn status reminders (src/shipwright/llm/reminders.py), no adapter.
+name: base-guards-reminders
+model: CohereLabs/tiny-aya-global
+route: tool_fix
+targets: [invented_id, loop, premature_transfer, tool_error_ignored, skipped_policy_step]
+tool_guards: true
+state_reminders: true

@@ -134,6 +134,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="policy checks on the agent's tool calls before they run (src/shipwright/llm/guards.py)",
     )
+    parser.add_argument(
+        "--state-reminders",
+        action="store_true",
+        help="a short status note before each agent turn (src/shipwright/llm/reminders.py)",
+    )
     return parser
 
 
@@ -392,6 +397,11 @@ def prepare(
     guards.set_enabled(bool(getattr(run_options, "tool_guards", False)))
     if guards.is_enabled():
         logger.info("tool guards active", max_retries=guards.MAX_GUARD_RETRIES)
+    from shipwright.llm import reminders
+
+    reminders.set_enabled(bool(getattr(run_options, "state_reminders", False)))
+    if reminders.is_enabled():
+        logger.info("state reminders active")
     log.note_repro(tool_patch_ids_active=active_patches)
     write_run_config(run_options, run_directory, active_patches)
     return RunSetup(
@@ -478,6 +488,7 @@ def finish_run(
     summary["rerouted_models"] = run_setup.model_rerouter.counts
     summary["active_tool_patches"] = run_setup.active_patches
     summary["tool_guards"] = bool(getattr(run_options, "tool_guards", False))
+    summary["state_reminders"] = bool(getattr(run_options, "state_reminders", False))
     (run_directory / "summary.json").write_text(json.dumps(summary, indent=2))
 
     recorded_prompts = prompted_tools.recorded_prompts()

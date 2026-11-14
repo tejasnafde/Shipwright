@@ -408,7 +408,16 @@ def prepare_request(kwargs: dict) -> tuple[dict, dict]:
     with _prompts_lock:
         _prompts.setdefault(sha, {"system": system_prompt, "tools": tools})
 
-    fitted_messages, info = fit_messages(convert_messages(original_messages, tools))
+    converted_messages = convert_messages(original_messages, tools)
+    note = None
+    from shipwright.llm import reminders
+
+    if reminders.is_enabled():
+        note = reminders.status_note(original_messages)
+        if note:
+            converted_messages = reminders.add_to_request(converted_messages, note)
+    fitted_messages, info = fit_messages(converted_messages)
+    info["reminder"] = note
     info["prompt_sha"] = sha
     if _tool_patches:
         info["tool_patches"] = active_patch_ids

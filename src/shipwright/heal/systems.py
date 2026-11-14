@@ -11,6 +11,7 @@ One YAML file per system (see ``configs/systems/``):
       ledger: patches/ledger.jsonl
       ids: applied                 # or an explicit list of patch ids
     tool_guards: true              # optional (tool fix): policy checks before a tool call runs
+    state_reminders: true          # optional (tool fix): a status note before each agent turn (reminders.py)
     route: tool_fix                # none | tool_fix | weight_fix (for the record)
     targets: [tool_example_copied] # failure labels this candidate should lower
 
@@ -52,6 +53,7 @@ def validate_system(system_config: dict, root: Path | None = None) -> dict:
         "adapter": None,
         "tool_patches": None,
         "tool_guards": bool(system_config.get("tool_guards", False)),
+        "state_reminders": bool(system_config.get("state_reminders", False)),
         "route": system_config.get("route", "none"),
         "targets": list(system_config.get("targets") or []),
     }
@@ -119,6 +121,8 @@ def baseline_args(system: dict, patch_ids: list[str], root: Path) -> list[str]:
         extra_arguments += ["--tool-patches", str(root / tool_patches["ledger"]), "--tool-patch-ids", *patch_ids]
     if system.get("tool_guards"):
         extra_arguments.append("--tool-guards")
+    if system.get("state_reminders"):
+        extra_arguments.append("--state-reminders")
     return extra_arguments
 
 

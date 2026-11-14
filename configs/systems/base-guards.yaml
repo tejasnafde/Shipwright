@@ -1,0 +1,7 @@
+# Base Tiny Aya with the tool fix only: tool guards, no adapter, no reminders. The "tool fix alone" rung
+# of the ladder (base -> + guards -> + reminders -> + LoRA); never gated before 2026-11-14.
+name: base-guards
+model: CohereLabs/tiny-aya-global
+route: tool_fix
+targets: [invented_id, loop, premature_transfer, tool_error_ignored]
+tool_guards: true

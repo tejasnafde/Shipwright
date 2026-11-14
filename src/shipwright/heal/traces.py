@@ -154,6 +154,7 @@ def _build_agent_turn(
         "text_tool_call": is_text_tool_call,
         "guard_rejections": shipwright_fields.get("guard_rejections") or [],
         "guard_allowed_after_retries": shipwright_fields.get("guard_allowed_after_retries"),
+        "reminder": shipwright_fields.get("reminder"),
         "finish_reason": _finish_reason(message),
         "usage": _usage(message),
     }
