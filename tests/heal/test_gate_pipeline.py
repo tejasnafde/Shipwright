@@ -235,3 +235,19 @@ def test_gate_job_bundle_without_git(tmp_path, monkeypatch):
         names = tf.getnames()
     assert "src/pkg/a.py" in names and "pyproject.toml" in names and "configs/systems/generated/r9-weight.yaml" in names
     assert not any("__pycache__" in n for n in names)
+
+
+def test_a_runs_only_job_then_a_decision_outside_it(tmp_path):
+    """The loop's gate: the job only runs (--runs-only); the decision is made from its output with the systems and
+    targets it recorded, so a token that died inside the job cannot leave failures unclassified (gates 10, 11)."""
+    out = tmp_path / "gate"
+    assert gate_eval.main(["--round", "98", "--local-dry-run", "--runs-only", "--current", "configs/systems/base.yaml",
+                           "--candidate", "configs/systems/r11-r7-fixes.yaml", "--num-tasks", "1",
+                           "--output-dir", str(out)]) == 0
+    assert (out / "gate_inputs.json").exists() and not (out / "gate_decision.json").exists()
+    code = gate_eval.main(["--round", "98", "--current-run", str(out / "base"), "--candidate-run", str(out / "r11-r7-fixes"),
+                           "--reclassify", "--no-llm", "--systems-from", str(out / "gate_inputs.json"),
+                           "--output-dir", str(out)])
+    decision = json.loads((out / "gate_decision.json").read_text())
+    assert code == 1 and decision["decision"] == "reject"  # too few runs: the gate never approves by default
+    assert decision["systems"]["candidate"]["adapter"]["revision"] == "round-7" and decision["targets"]

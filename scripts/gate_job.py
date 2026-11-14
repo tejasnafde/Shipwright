@@ -42,6 +42,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--train-eval", action="store_true",
                         help="no gate: only the candidate on --task-ids of the train split (the next round's failures)")
     parser.add_argument("--bfcl-screen", action="store_true", help="no gate: BFCL only, on the candidate")
+    parser.add_argument("--runs-only", action="store_true",
+                        help="the job runs both systems and pushes the runs; decide afterwards where Vertex tokens refresh"
+                        " (gate_eval.py --current-run ... --reclassify --systems-from .../gate_inputs.json --push)")
     parser.add_argument("--task-ids", nargs="*", default=None, help="with --train-eval")
     parser.add_argument("--trials", type=int, default=1, help="with --train-eval")
     parser.add_argument("--flavor", default="a10g-large")
@@ -66,7 +69,8 @@ def job_from_options(options: argparse.Namespace) -> jobs.GateJob:
                         candidate=options.candidate.resolve(), user_model=options.user_model, flavor=options.flavor,
                         timeout=options.timeout, mode=mode, task_ids=list(options.task_ids or []), trials=options.trials,
                         runs_repo=options.runs_repo, config=options.config.resolve(),
-                        target_labels=options.target_label, serve_mode=options.serve_mode, namespace=options.namespace)
+                        target_labels=options.target_label, serve_mode=options.serve_mode, namespace=options.namespace,
+                        runs_only=options.runs_only)
 
 
 def print_plan(job: jobs.GateJob, options: argparse.Namespace) -> bool:
@@ -85,7 +89,7 @@ def print_plan(job: jobs.GateJob, options: argparse.Namespace) -> bool:
         total_runs = 2 * gate_config["heldout"]["num_tasks"] * gate_config["k"]
     user_on_vertex = vertex.is_vertex_model(job.user_model)
     classifier_model = (gate_config.get("classify") or {}).get("classifier_model") or ""
-    classifier_on_vertex = job.mode == "gate" and vertex.is_vertex_model(classifier_model)
+    classifier_on_vertex = job.mode == "gate" and not job.runs_only and vertex.is_vertex_model(classifier_model)
     if user_on_vertex:
         user_cost = total_runs * USER_COST_PER_RUN["vertex"]
     else:

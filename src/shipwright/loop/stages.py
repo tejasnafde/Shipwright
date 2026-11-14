@@ -209,9 +209,16 @@ class Stages:
         combined.parent.mkdir(parents=True, exist_ok=True)
         seen: set[str] = set()
         lines: list[str] = []
+        directories = []
         for round_number in range(self.round_number, 0, -1):
             directory = self.workspace.path(round_number, "corrections")
             self.workspace.fetch(directory.name)
+            directories.append(directory)
+        for name in self.config["data"].get("corrections_pool") or []:
+            if not self.workspace.fetch(name):
+                raise RuntimeError(f"data.corrections_pool: {name} not found")
+            directories.append(self.workspace.runs / name.rsplit("/", 1)[-1])
+        for directory in directories:
             path = directory / "corrections.jsonl"
             if not path.exists():
                 continue
@@ -322,6 +329,9 @@ class Stages:
         return path
 
     def gate_job(self, mode: str, stage: str, candidate_path: Path, task_ids: list[str] | None = None) -> jobs.JobResult:
+        """An HF Job on the gate's GPU. A gate job only runs (``runs_only``): the decision is made here, see ``gate``."""
+        from shipwright.llm import vertex
+
         settings = gpu_settings(self.config, stage)
         current_path = self.workspace.deployed_system_path()
         trials = (self.config.get("candidate_train") or {}).get("trials", 1)
@@ -329,8 +339,9 @@ class Stages:
         def launch(flavor: str) -> str:
             job = jobs.GateJob(round_number=self.round_number, current=current_path, candidate=candidate_path,
                                user_model=self.models["user"], flavor=flavor, timeout=settings["timeout"], mode=mode,
-                               task_ids=task_ids or [], trials=trials, runs_repo=self.config["gate"]["runs_repo"])
-            return jobs.launch_gate(job, needs_vertex_token=(mode == "gate"))
+                               task_ids=task_ids or [], trials=trials, runs_repo=self.config["gate"]["runs_repo"],
+                               runs_only=True)
+            return jobs.launch_gate(job, needs_vertex_token=vertex.is_vertex_model(self.models["user"]))
 
         return jobs.run_on_first_free_gpu(launch, settings["flavors"])
 
@@ -400,33 +411,23 @@ class Stages:
         return entry
 
     def gate(self) -> dict:
+        """The candidate against the deployed system on the held-out tasks, 8 checks (docs/pipeline/gate.md).
+
+        The HF Job serves both systems and runs tau2 and BFCL (``--runs-only``). The runs are downloaded here and
+        gate_eval.py classifies both systems with the frozen classifier and decides: here the Vertex token refreshes,
+        inside the job it was minted at launch and was dead by the time the job classified (gates 10 and 11)."""
         candidate_path = self.write_candidate()
         gate_directory = self.workspace.path(self.round_number, "gate")
         gate_directory.mkdir(parents=True, exist_ok=True)
         if self.dry_run:
             decision = fake_gate_decision(self.round_number, self.state, yaml.safe_load(candidate_path.read_text()))
+            (gate_directory / "gate_decision.json").write_text(json.dumps(decision, indent=1, default=str))
             entry = {"exit_code": 0, "actual_usd": 0.0, "job": "fake-gate"}
         else:
-            prefix = f"gate/round-{self.round_number}/r{self.round_number}-weight"
-            decision_file = hub_file(prefix, "gate_decision.json")
-            entry = {"exit_code": 0, "actual_usd": 0.0, "note": "already on the Hub: not launched again"}
-            if decision_file is not None and not same_candidate(json.loads(decision_file.read_text()), candidate_path):
-                decision_file = None  # another experiment used this round number: gate this candidate
-            if decision_file is None:
-                result = self.gate_job("gate", "gate", candidate_path)
-                entry = gpu_entry(result)
-                entry["actual_usd"] = round(entry["actual_usd"] + self.config["gate"].get("api_usd", 0.0), 4)
-                if not result.completed:
-                    return entry
-                decision_file = hub_file(prefix, "gate_decision.json")
-                if decision_file is None:
-                    entry.update(exit_code=1, note="the gate job pushed no gate_decision.json")
-                    return entry
-            decision = json.loads(decision_file.read_text())
-            metrics_file = hub_file(prefix, "metrics.jsonl")
-            if metrics_file is not None:
-                shutil.copy(metrics_file, gate_directory / "metrics.jsonl")
-        (gate_directory / "gate_decision.json").write_text(json.dumps(decision, indent=1, default=str))
+            entry = self.real_gate(candidate_path, gate_directory)
+            if entry["exit_code"] != 0:
+                return entry
+            decision = json.loads((gate_directory / "gate_decision.json").read_text())
         round_directory = self.workspace.path(self.round_number, "round")
         shutil.copy(gate_directory / "gate_decision.json", round_directory / "gate_decision.json")
         if (gate_directory / "metrics.jsonl").exists():
@@ -434,6 +435,50 @@ class Stages:
         entry.update(run_dir=relative(gate_directory), candidate=relative(candidate_path),
                      decision={key: decision.get(key) for key in ("round", "decision", "checks", "metrics_current",
                                                                   "metrics_candidate", "thresholds", "systems")})
+        return entry
+
+    def real_gate(self, candidate_path: Path, gate_directory: Path) -> dict:
+        name = f"r{self.round_number}-weight"
+        prefix = f"gate/round-{self.round_number}/{name}"
+        decided = hub_file(prefix, "gate_decision.json")
+        if decided is not None and same_candidate(json.loads(decided.read_text()), candidate_path) \
+                and classified_every_failure(json.loads(decided.read_text())):
+            shutil.copy(decided, gate_directory / "gate_decision.json")
+            return {"exit_code": 0, "actual_usd": 0.0, "note": "decided earlier: not run again"}
+        entry = {"exit_code": 0, "actual_usd": 0.0}
+        earlier_inputs = hub_file(prefix, "gate_inputs.json")
+        already_run = (earlier_inputs is not None and hub_file(prefix, "run_status.json") is not None
+                       and same_candidate(json.loads(earlier_inputs.read_text()), candidate_path))
+        if not already_run:
+            result = self.gate_job("gate", "gate", candidate_path)
+            entry = gpu_entry(result)
+            entry["actual_usd"] = round(entry["actual_usd"] + self.config["gate"].get("api_usd", 0.0), 4)
+            if not result.completed:
+                return entry
+        from huggingface_hub import snapshot_download
+
+        downloaded = Path(snapshot_download(cloud.RUNS_REPO, repo_type="dataset", token=cloud.hf_token(),
+                                            allow_patterns=[f"{prefix}/*", f"{prefix}/*/*"]))
+        if gate_directory.exists():
+            shutil.rmtree(gate_directory)
+        copy_real_files(downloaded / prefix, gate_directory)
+        gate_inputs = json.loads((gate_directory / "gate_inputs.json").read_text())
+        names = {role: system["name"] for role, system in gate_inputs["systems"].items()}
+        exit_code = run_script(["gate_eval.py", "--round", str(self.round_number),
+                                "--current-run", str(gate_directory / names["current"]),
+                                "--candidate-run", str(gate_directory / names["candidate"]),
+                                "--reclassify", "--systems-from", str(gate_directory / "gate_inputs.json"),
+                                "--output-dir", str(gate_directory), "--runs-repo", self.config["gate"]["runs_repo"],
+                                "--push"])
+        if not (gate_directory / "gate_decision.json").exists():
+            entry.update(exit_code=1, note=f"gate_eval.py decided nothing (exit {exit_code})")
+        coverage = {}
+        for role in ("current", "candidate"):
+            metrics = read_json(gate_directory / f"metrics_{role}.json")
+            coverage[role] = metrics.get("label_coverage")
+            if (metrics.get("label_coverage") or {}).get("agenttune_errors"):
+                entry.setdefault("warnings", []).append(f"{role}: the classifier failed on some runs: {coverage[role]}")
+        entry["label_coverage"] = coverage
         return entry
 
     # ------------------------------------------------------------ side stages (by hand, never in a round)
@@ -465,6 +510,14 @@ def same_candidate(decision: dict, candidate_path: Path) -> bool:
     ours = yaml.safe_load(candidate_path.read_text())
     for key in ("adapter", "tool_guards", "state_reminders"):
         if bool(gated.get(key)) != bool(ours.get(key)) or (gated.get(key) or None) != (ours.get(key) or None):
+            return False
+    return True
+
+
+def classified_every_failure(decision: dict) -> bool:
+    """False when the classifier failed on some run of either system: such a decision cannot be reused (gates 10, 11)."""
+    for role in ("metrics_current", "metrics_candidate"):
+        if ((decision.get(role) or {}).get("label_coverage") or {}).get("agenttune_errors"):
             return False
     return True
 

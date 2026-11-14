@@ -104,6 +104,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="no gate: serve only the candidate, run only BFCL (the gate's own 300 samples) and push the score. About 5"
         " minutes: it tells whether the BFCL check can pass before the 30 minute gate is paid for",
     )
+    parser.add_argument(
+        "--runs-only", action="store_true",
+        help="in a job: serve, run both systems and BFCL, push the run dirs, and stop. The loop classifies and decides"
+        " outside the job, where its Vertex token refreshes: a token minted at launch was dead by the time the job"
+        " classified (gates 10 and 11: every classifier call answered 401, so non_target counted 'unclassified')",
+    )
+    parser.add_argument("--systems-from", type=Path, default=None,
+                        help="with --current-run: the job's gate_inputs.json, for the systems and targets recorded")
+    parser.add_argument("--push", action="store_true",
+                        help="with --current-run: push the decided dir to <runs-repo>/gate/round-N/<candidate>/")
     parser.add_argument("--task-ids", nargs="*", default=None, help="with --train-eval: the train task ids to run")
     parser.add_argument("--trials", type=int, default=1, help="with --train-eval: trials per task")
     parser.add_argument("--in-job", action="store_true")
@@ -683,8 +693,17 @@ def decide_from_existing_runs(gate_options: argparse.Namespace) -> int:
     _attach(output_directory)
 
     run_directories = {"current": gate_options.current_run, "candidate": gate_options.candidate_run}
+    run_status = {}
+    if gate_options.systems_from is not None:
+        status_path = gate_options.systems_from.parent / "run_status.json"
+        if status_path.exists():
+            run_status = json.loads(status_path.read_text())
     metrics_by_role = {}
     for role, run_directory in run_directories.items():
+        baseline_exit = (run_status.get(run_directory.name) or {}).get("baseline_exit", 0)
+        if baseline_exit != 0 or not (run_directory / "traces.jsonl").exists():
+            metrics_by_role[role] = missing_metrics(run_directory.name, f"tau2 run failed (exit {baseline_exit})")
+            continue
         if gate_options.reclassify:
             command = classify_cmd(gate_config, run_directory, gate_options.no_llm)
             if run(command, log_path=run_directory / "classify.log") != 0:
@@ -692,11 +711,18 @@ def decide_from_existing_runs(gate_options: argparse.Namespace) -> int:
         metrics = metrics_for(run_directory, gate_config, run_directory.name, None)
         metrics_by_role[role] = metrics or missing_metrics(run_directory.name, "no metrics")
 
-    targets = gate_options.target_label or []
     recorded_systems = {role: {"run_dir": str(run_directory)} for role, run_directory in run_directories.items()}
+    targets = gate_options.target_label or []
+    if gate_options.systems_from is not None:
+        gate_inputs = json.loads(gate_options.systems_from.read_text())
+        recorded_systems = gate_inputs["systems"]
+        if gate_options.target_label is None:
+            targets = gate_inputs.get("targets") or []
     decision = decide_and_write(
         output_directory, gate_config, gate_options.round, metrics_by_role, recorded_systems, targets
     )
+    if gate_options.push:
+        push(output_directory, gate_options, output_directory / "metrics.jsonl", recorded_systems["candidate"]["name"])
     print(f"\nWrote {output_directory}")
     if decision["decision"] == "promote":
         return 0
@@ -781,10 +807,14 @@ def evaluate_systems(gate_options: argparse.Namespace) -> int:
             print(f"serving or running failed: {serve_error}", file=sys.stderr)
             status_by_system = {"_error": str(serve_error)[:1000]}
 
-    if gate_options.train_eval or gate_options.bfcl_screen:
+    if gate_options.train_eval or gate_options.bfcl_screen or gate_options.runs_only:
         (output_directory / "run_status.json").write_text(json.dumps(status_by_system, indent=1, default=str))
         if gate_options.in_job and not gate_options.no_push:
-            suffix = "-bfcl" if gate_options.bfcl_screen else "-train"
+            suffix = ""
+            if gate_options.bfcl_screen:
+                suffix = "-bfcl"
+            if gate_options.train_eval:
+                suffix = "-train"
             push(output_directory, gate_options, None, f"{systems['candidate']['name']}{suffix}")
         print(f"\nWrote {output_directory}")
         return 0

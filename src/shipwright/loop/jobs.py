@@ -67,6 +67,7 @@ class GateJob:
     target_labels: list[str] | None = None
     serve_mode: str | None = None
     namespace: str | None = None
+    runs_only: bool = False             # gate: push the runs, classify and decide outside the job (the loop does)
 
     def results_prefix(self, candidate_name: str) -> str:
         """Where gate_eval.py pushes the results in the runs dataset."""
@@ -128,6 +129,8 @@ def gate_script_arguments(job: GateJob, code_bundle_path: str) -> list[str]:
         arguments += ["--train-eval", "--trials", str(job.trials), "--task-ids", *job.task_ids]
     if job.mode == "bfcl_screen":
         arguments.append("--bfcl-screen")
+    if job.mode == "gate" and job.runs_only:
+        arguments.append("--runs-only")
     return arguments
 
 
