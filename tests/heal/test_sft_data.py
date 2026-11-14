@@ -72,14 +72,14 @@ def test_force_prompted_teacher_gets_student_view_and_own_reply_budget():
         {"role": "system", "content": "S"}, {"role": "user", "content": "hi"}]})
     assert pt.is_prompted_model(teacher) and "tools" not in req
     assert req["messages"] == student["messages"]
-    assert req["max_tokens"] == 4096 and student["max_tokens"] == 700
+    assert req["max_tokens"] == 4096 and student["max_tokens"] == sd.REPLY_TOKENS
 
 
 def test_filter_drops_over_8192_and_long_replies():
     recs = [
-        {"tokens": 8192, "reply_tokens_max": 700},
+        {"tokens": 8192, "reply_tokens_max": sd.REPLY_TOKENS},
         {"tokens": 8193, "reply_tokens_max": 10},
-        {"tokens": 100, "reply_tokens_max": 701},
+        {"tokens": 100, "reply_tokens_max": sd.REPLY_TOKENS + 1},
     ]
     kept, dropped = sd.filter_records(recs)
     assert kept == [recs[0]]

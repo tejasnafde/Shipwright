@@ -35,7 +35,10 @@ TOOL_LIST_VERSION = 2
 # The format of a tool result the student sees. 1: as the tool returned it (minified). 2 (2026-11-13): a product listing
 # keeps only the variants that can be ordered (context.shortened_result), the moment it arrives: the same view in live
 # requests and in the training rows (both go through convert_messages), and 2.7k of the 8.2k window is already the prompt.
-OBSERVATION_VERSION = 2
+# 3 (2026-11-14): an order (get_order_details, and the order a write tool returns) and a user's details arrive without
+# empty fields and with the address on one line (compact_record): about a third of an order was nulls and address
+# (gate 8: order details were 40% of the tool-result text in the runs that lost history).
+OBSERVATION_VERSION = 3
 
 INSTRUCTION = """You can use these tools (name(arguments) - what it does; ? marks an optional argument):
 {tools}
@@ -45,7 +48,8 @@ To call a tool, reply with exactly one block and nothing else:
 {{"name": "<tool name>", "arguments": {{<arguments>}}}}
 ```
 Call one tool at a time. You will get the result in the next message.
-If you do not need a tool, reply to the user in plain text.
+If you do not need a tool, reply to the user in plain text. Keep each reply short: at most three sentences,
+plus the exact details of a change when you ask the customer to confirm it.
 
 Only use values the customer or an earlier tool result gave you. Never make up an id.
 If you do not have a value yet, ask the customer or look it up first. An order id starts with #W;
@@ -202,16 +206,45 @@ def minify_content(content: str) -> str:
         return content
 
 
+ADDRESS_FIELDS = ("address1", "address2", "city", "state", "zip", "country")
+
+
+def one_line_address(address: dict) -> str:
+    """{"address1": "313 Chestnut Street", "address2": "Suite 537", ...} -> "313 Chestnut Street, Suite 537, ..."."""
+    parts = [str(address.get(field)) for field in ADDRESS_FIELDS if address.get(field)]
+    return ", ".join(parts)
+
+
+def compact_record(result: dict) -> dict:
+    """An order or user record without empty fields (null, empty list or dict) and with the address on one line.
+    Every id, item, price, status and payment stays."""
+    compact = {}
+    for key, value in result.items():
+        if value is None or value == [] or value == {}:
+            continue
+        is_address = key == "address" and isinstance(value, dict) and set(value) <= set(ADDRESS_FIELDS)
+        compact[key] = one_line_address(value) if is_address else value
+    return compact
+
+
+def is_order_or_user_record(result: dict) -> bool:
+    return ("order_id" in result and "items" in result) or ("user_id" in result and "payment_methods" in result)
+
+
 def observation_text(tool_name: str, content: str) -> str:
-    """A tool result as the student sees it: minified, and a product listing without the variants that cannot be ordered."""
+    """A tool result as the student sees it: minified; a product listing without the variants that cannot be
+    ordered; an order or user record without empty fields and with a one-line address (OBSERVATION_VERSION)."""
+    try:
+        result = json.loads(content)
+    except (TypeError, ValueError):
+        return minify_content(content)
+    if not isinstance(result, dict):
+        return minify_content(content)
     if tool_name == "get_product_details":
-        try:
-            result = json.loads(content)
-        except (TypeError, ValueError):
-            return minify_content(content)
-        if isinstance(result, dict):
-            return json.dumps(context.shortened_result(tool_name, result), separators=(",", ":"), ensure_ascii=False)
-    return minify_content(content)
+        result = context.shortened_result(tool_name, result)
+    elif is_order_or_user_record(result):
+        result = compact_record(result)
+    return json.dumps(result, separators=(",", ":"), ensure_ascii=False)
 
 
 def format_tool_call(name: str, arguments: Any) -> str:

@@ -70,7 +70,7 @@ def test_prepare_request_and_convert_response():
                               "tools": TOOLS, "tool_choice": "auto", "temperature": 0})
     assert "tools" not in req and "tool_choice" not in req and req["temperature"] == 0
     assert req["messages"][0]["role"] == "system"
-    assert req["max_tokens"] == 700 and info["dropped_messages"] == 0
+    assert req["max_tokens"] == pt.REPLY_TOKENS and info["dropped_messages"] == 0
 
     raw = '```json\n{"name": "get_order_details", "arguments": {"order_id": "#W1"}}\n```'
     resp = ModelResponse(model="m", choices=[{"index": 0, "finish_reason": "stop",
@@ -138,3 +138,24 @@ def test_convert_messages_drops_the_opening_greeting_so_roles_alternate():
     roles = [message["role"] for message in converted]
     assert roles == ["system", "user", "assistant", "user", "assistant"]
     assert "Hi! How can I help you today?" not in json.dumps(converted)
+
+
+def test_order_and_user_records_arrive_compact():
+    order = {"order_id": "#W1", "user_id": "u1", "status": "delivered",
+             "address": {"address1": "313 Chestnut Street", "address2": "Suite 537", "city": "Jacksonville",
+                         "country": "USA", "state": "FL", "zip": "32286"},
+             "items": [{"name": "Hose", "product_id": "p1", "item_id": "i1", "price": 96.35, "options": {"length": "25ft"}}],
+             "fulfillments": [], "payment_history": [{"transaction_type": "payment", "amount": 96.35,
+                                                      "payment_method_id": "paypal_1"}],
+             "cancel_reason": None, "exchange_items": None, "return_items": None}
+    text = pt.observation_text("get_order_details", json.dumps(order))
+    compact = json.loads(text)
+    assert compact["address"] == "313 Chestnut Street, Suite 537, Jacksonville, FL, 32286, USA"
+    assert "cancel_reason" not in compact and "fulfillments" not in compact
+    assert compact["items"] == order["items"] and compact["payment_history"] == order["payment_history"]
+    assert len(text) < len(json.dumps(order, separators=(",", ":")))
+    # a write tool returns the changed order: compacted the same way
+    assert json.loads(pt.observation_text("cancel_pending_order", json.dumps(order))) == compact
+    # other results are only minified
+    assert pt.observation_text("calculate", '{"result": 2}') == '{"result":2}'
+    assert pt.observation_text("transfer_to_human_agents", "Transfer successful") == "Transfer successful"

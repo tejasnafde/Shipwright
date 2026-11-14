@@ -17,7 +17,9 @@ from typing import Callable
 
 STUDENT_REPO = "CohereLabs/tiny-aya-global"
 CONTEXT_LIMIT = 8192
-REPLY_TOKENS = 700
+# 700 until 2026-11-14. Only 1 to 2% of student replies exceed 450 tokens (gate 8), and every token reserved here is
+# taken from the conversation on every turn: 512 gives the history about 190 more tokens.
+REPLY_TOKENS = 512
 PER_MESSAGE_TOKENS = 8  # chat template overhead per turn
 CHARS_PER_TOKEN = 3.5
 ESTIMATE_MARGIN = 400  # extra safety when we only estimate

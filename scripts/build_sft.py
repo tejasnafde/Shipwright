@@ -5,7 +5,7 @@
 
 Only runs with reward == 1 are used, and only from train-split runs (run_config.json).
 Every example is rendered as Tiny Aya sees it (see shipwright.heal.sft_data), deduplicated,
-and dropped if it has more than --max-tokens tokens or a reply over 700 tokens.
+and dropped if it has more than --max-tokens tokens or a reply over REPLY_TOKENS (context.py, 512 since 2026-11-14).
 
 Writes OUT_DIR/sft.jsonl (one {"messages": [...], "source", "task_id", ...} per line)
 and OUT_DIR/sft_stats.json. --push uploads both to an HF dataset repo (needs the token).
