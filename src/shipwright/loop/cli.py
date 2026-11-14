@@ -226,7 +226,7 @@ def run_doctor(cloud_check: bool = False) -> int:
 
 # ---------------------------------------------------------------- read-only commands
 
-def print_plan(config: dict, rounds: int) -> None:
+def print_plan(config: dict, rounds: int, launching: bool = False) -> None:
     caps = config["spend"]
     last = f" to {config['round'] + rounds - 1}" if rounds > 1 else ""
     print(f"Round {config['round']}{last}, owner {config['owner']}, total cap ${caps['total']:.2f}")
@@ -241,7 +241,8 @@ def print_plan(config: dict, rounds: int) -> None:
     stop = config["stop"]
     print(f"  stop rules: over {stop['max_infra_error_rate']:.0%} infra errors, under {stop['min_sft_examples']} SFT "
           f"examples, {stop['retries']} retry per stage, at most {recipe_module.MAX_CORRECTION_ROUNDS} correction rounds")
-    print("\nPlan only. `run --launch` starts one Cloud Run execution; `run --dry-run` walks the loop here, offline.")
+    if not launching:
+        print("\nPlan only. `run --launch` starts one Cloud Run execution; `run --dry-run` walks the loop here, offline.")
 
 
 def print_status(round_number: int | None) -> int:
@@ -341,7 +342,7 @@ def dispatch(argv: list[str]) -> int:
         return run_side_stage(config, options.name, options.dry_run)
     rounds = options.rounds or config.get("rounds", 1)
     if options.launch:
-        print_plan(config, rounds)
+        print_plan(config, rounds, launching=True)
         if not options.skip_doctor and run_doctor() != 0:
             print("\nThe preflight found problems: nothing was started and nothing was spent. Fix them (or --skip-doctor).")
             return 2

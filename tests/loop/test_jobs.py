@@ -1,6 +1,7 @@
 """HF Jobs (shipwright.loop.jobs): queue fallback, pricing by running seconds, the gate's command and code bundle.
 Fakes only: nothing is launched."""
 
+import json
 import tarfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -62,8 +63,9 @@ def test_the_gate_command_names_the_bundled_system_configs(tmp_path):
     job = jobs.GateJob(round_number=12, current=ROOT / "configs" / "systems" / "base.yaml", candidate=candidate,
                        user_model="u", mode="train_eval", task_ids=["1", "2"])
     arguments = jobs.gate_script_arguments(job, "gate/round-12/code/x.tar.gz")
-    assert arguments[arguments.index("--candidate") + 1] == "configs/systems/generated/r12-weight.yaml"
-    assert arguments[arguments.index("--current") + 1] == "configs/systems/generated/base.yaml"
+    assert arguments[arguments.index("--candidate") + 1] == "configs/systems/generated/r12-weight.json"
+    assert arguments[arguments.index("--current") + 1] == "configs/systems/generated/base.json"
+    assert arguments[arguments.index("--config") + 1] == "configs/systems/generated/gate.json"
     assert arguments[-5:] == ["--train-eval", "--trials", "1", "--task-ids", "1", "2"][-5:]
     assert job.results_prefix("r12-weight") == "gate/round-12/r12-weight-train"
 
@@ -75,7 +77,8 @@ def test_the_code_bundle_carries_a_system_config_that_is_not_committed(tmp_path)
     jobs.pack_bundle(archive, [ROOT / "configs" / "systems" / "base.yaml", candidate])
     with tarfile.open(archive) as bundle:
         names = bundle.getnames()
-    assert "configs/systems/generated/r99-weight.yaml" in names and "scripts/gate_eval.py" in names
+        bundled = json.loads(bundle.extractfile("configs/systems/generated/r99-weight.json").read())
+    assert bundled["name"] == "r99-weight" and "scripts/gate_eval.py" in names
     assert "configs/gate.yaml" in names
 
 
@@ -84,3 +87,18 @@ def test_every_gpu_flavor_has_one_price():
     assert cloud.worst_case_gpu_usd("h200", "1h", 5.0) == 5.0
     with pytest.raises(SystemExit):
         cloud.gpu_price("h200")
+
+
+@pytest.mark.parametrize("mode", ["gate", "bfcl_screen", "train_eval"])
+def test_no_job_argument_trips_huggingface_hubs_local_file_rule(mode, tmp_path, monkeypatch):
+    """run_uv_job refuses an argument ending in .py/.sh/.yaml/.yml/.toml that is not a local file (round 12's first launch
+    failed so), and uploads and renames one that is. The arguments must name no such file, wherever the launch runs."""
+    monkeypatch.chdir(tmp_path)  # not the repo root: nothing relative resolves by luck
+    job = jobs.GateJob(round_number=12, current=ROOT / "configs" / "systems" / "base.yaml",
+                       candidate=ROOT / "configs" / "systems" / "r11-r7-fixes.yaml", user_model="u", mode=mode,
+                       task_ids=["1"], runs_only=True)
+    arguments = jobs.gate_script_arguments(job, "gate/round-12/code/x.tar.gz")
+    flagged = [argument for argument in arguments if Path(argument).suffix in jobs.HF_LOCAL_FILE_SUFFIXES]
+    assert flagged == []
+    train = jobs.TrainJob(dataset_revision="round-12", revision="round-12", training_arguments=["--epochs", "2"])
+    assert [a for a in train.script_arguments() if Path(a).suffix in jobs.HF_LOCAL_FILE_SUFFIXES] == []

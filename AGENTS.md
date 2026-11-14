@@ -494,6 +494,11 @@ What changed, so nobody rebuilds what was removed or repeats what it fixed:
   then the recipe's remedy (round 13), total cap $6, one GPU flavor per stage so the last gate fits under the cap at real
   costs (`tests/loop/test_controller.py`).
 
+- 2026-11-14: huggingface_hub `run_uv_job` treats every job argument ending in `.py`, `.sh`, `.yaml`, `.yml` or `.toml`
+  as a local file: it must exist where the job is launched (else `FileNotFoundError`, the first round 12 launch, $0) and
+  is uploaded and renamed if it does. The gate bundle carries its configs as `.json` (`configs/systems/generated/`), and
+  `tests/loop/test_jobs.py` plus `shipwright doctor` check that no job argument has one of those suffixes.
+
 ## Keep this file correct
 
 This file corrects itself through you. **`AGENTS.md` is the only file that carries facts, traps

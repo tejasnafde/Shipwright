@@ -13,6 +13,7 @@ is not retried here: the stage reports it, and the controller decides about a re
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tarfile
@@ -22,13 +23,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+import yaml
+
 from shipwright import cloud
 
 ROOT = cloud.ROOT
 TRAIN_SCRIPT = ROOT / "scripts" / "train_lora.py"
 GATE_SCRIPT = ROOT / "scripts" / "gate_eval.py"
 BUNDLE_PATHS = ["src", "scripts", "configs", "patches", "pyproject.toml"]
-GENERATED_SYSTEMS_DIR = "configs/systems/generated"  # where a bundle carries the system configs it was given
+GENERATED_SYSTEMS_DIR = "configs/systems/generated"  # where a bundle carries the configs it was given
+# huggingface_hub's run_uv_job treats a job argument ending in one of these as a local file: it must exist where the job is
+# launched (else FileNotFoundError, round 12's first launch) and is uploaded and renamed. So the job's own arguments name
+# no such file: the bundle carries the configs as .json (valid YAML, loaded unchanged).
+HF_LOCAL_FILE_SUFFIXES = (".py", ".sh", ".yaml", ".yml", ".toml")
 QUEUE_LIMIT_MINUTES = 12
 JOB_POLL_SECONDS = 45
 FINAL_STAGES = ("COMPLETED", "ERROR", "CANCELED", "DELETED")
@@ -86,8 +93,8 @@ def code_sha() -> str:
 
 
 def bundled_system_path(system_path: Path) -> str:
-    """The path a system config has inside the bundle (and so on the job's command line)."""
-    return f"{GENERATED_SYSTEMS_DIR}/{system_path.name}"
+    """The path a config has inside the bundle (and so on the job's command line)."""
+    return f"{GENERATED_SYSTEMS_DIR}/{system_path.stem}.json"
 
 
 def pack_bundle(archive_path: Path, system_paths: list[Path]) -> None:
@@ -109,7 +116,9 @@ def pack_bundle(archive_path: Path, system_paths: list[Path]) -> None:
                                    "--", *BUNDLE_PATHS])
         with tarfile.open(plain_tar, "a") as bundle:
             for system_path in system_paths:
-                bundle.add(system_path, arcname=bundled_system_path(system_path))
+                as_json = Path(scratch) / f"{system_path.stem}.json"
+                as_json.write_text(json.dumps(yaml.safe_load(system_path.read_text()), indent=1))
+                bundle.add(as_json, arcname=bundled_system_path(system_path))
         with tarfile.open(plain_tar) as source, tarfile.open(archive_path, "w:gz") as compressed:
             for member in source.getmembers():
                 compressed.addfile(member, source.extractfile(member) if member.isfile() else None)
@@ -117,8 +126,7 @@ def pack_bundle(archive_path: Path, system_paths: list[Path]) -> None:
 
 def gate_script_arguments(job: GateJob, code_bundle_path: str) -> list[str]:
     """The gate_eval.py command line the HF Job runs."""
-    arguments = ["--in-job", "--round", str(job.round_number),
-                 "--config", str(job.config.resolve().relative_to(ROOT)),
+    arguments = ["--in-job", "--round", str(job.round_number), "--config", bundled_system_path(job.config),
                  "--current", bundled_system_path(job.current), "--candidate", bundled_system_path(job.candidate),
                  "--user-model", job.user_model, "--runs-repo", job.runs_repo, "--code-bundle", code_bundle_path]
     if job.target_labels is not None:
@@ -179,7 +187,7 @@ def launch_gate(job: GateJob, needs_vertex_token: bool) -> str:
     bundle_path = code_bundle_path(job)
     with tempfile.TemporaryDirectory() as scratch:
         archive_path = Path(scratch) / "code.tar.gz"
-        pack_bundle(archive_path, [job.current, job.candidate])
+        pack_bundle(archive_path, [job.config, job.current, job.candidate])
         with instrument.external("hf_hub_upload", f"datasets/{job.runs_repo}/{bundle_path}"):
             hf_api.upload_file(path_or_fileobj=str(archive_path), path_in_repo=bundle_path, repo_id=job.runs_repo,
                                repo_type="dataset", commit_message=f"{job.mode} round {job.round_number}: code")

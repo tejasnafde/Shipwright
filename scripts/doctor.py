@@ -175,8 +175,11 @@ def launchers_accept_the_loops_commands() -> Check:
         try:
             job = gate_job.job_from_options(gate_job.parse_args(base + extra))
             arguments = jobs.gate_script_arguments(job, "gate/round-99/code/x.tar.gz")
-            if "configs/systems/generated/r8-weight.yaml" not in arguments:
+            if "configs/systems/generated/r8-weight.json" not in arguments:
                 problems.append(f"gate_job {extra}: the candidate is not the bundled config")
+            flagged = [argument for argument in arguments if Path(argument).suffix in jobs.HF_LOCAL_FILE_SUFFIXES]
+            if flagged:
+                problems.append(f"gate_job {extra}: huggingface_hub would treat {flagged} as local files (round 12)")
         except SystemExit as error:
             problems.append(f"gate_job {extra}: {error}")
     return fail(name, " | ".join(problems)) if problems else ok(name)

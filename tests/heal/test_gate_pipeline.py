@@ -233,7 +233,7 @@ def test_gate_job_bundle_without_git(tmp_path, monkeypatch):
     jobs.pack_bundle(tar, [system])
     with tarfile.open(tar) as tf:
         names = tf.getnames()
-    assert "src/pkg/a.py" in names and "pyproject.toml" in names and "configs/systems/generated/r9-weight.yaml" in names
+    assert "src/pkg/a.py" in names and "pyproject.toml" in names and "configs/systems/generated/r9-weight.json" in names
     assert not any("__pycache__" in n for n in names)
 
 
