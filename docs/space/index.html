@@ -76,7 +76,7 @@ footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line);
     <div class="card hero"><b>$0.015</b><span>per resolved ticket</span><small>2.5× cheaper than the teacher API</small></div>
     <div class="card"><b>3.35B</b><span>parameters, one 24 GB GPU</span><small>tickets solved 10% → 15%</small></div>
     <div class="card"><b>40 → 0</b><span>invented order ids</span><small>per 60 conversations</small></div>
-    <div class="card"><b>69% → 21%</b><span>wasted tool calls</span><small>round 16 alone: −8 pts, guard blocks halved</small></div>
+    <div class="card"><b>69% → 21%</b><span>wasted tool calls</span><small>base → round 16; teacher 5%</small></div>
     <div class="card"><b>0 people</b><span>from launch to promotion</span><small>2 h 24 min, $3.89</small></div>
     <div class="card"><b>8 / 8</b><span>gate checks passed</span><small>after 11 refusals</small></div>
   </div>
@@ -134,19 +134,20 @@ footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line);
     <tr><td>BFCL, general tool calling</td><td>45</td><td><strong>73</strong></td></tr>
   </table></div>
 
-  <h2>Round 16's biggest jump: cleaner tool use</h2>
-  <p>Pass rates on 20 tasks are noisy, so we also measure how the agent works. tau2 stores the calls an expert makes for every task; we compare each conversation with that path and count the wasted calls: repeats with nothing changed in between, calls the shop rejected, and calls our guards had to block.</p>
+  <h2>Round 16's biggest jump: it uses tools like the teacher</h2>
+  <p>Pass rates on 20 tasks are noisy, so we also measure how the agent works. tau2 stores the calls an expert makes for every task; we compare each conversation with that path and count the wasted calls (repeats with nothing changed in between, calls the shop rejected, calls our guards had to block) and the expert's steps the agent also took.</p>
   <figure>
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="img/round16-jump-dark.png">
-      <img src="img/round16-jump-light.png" alt="Round 16 against the round before (gate 14): wasted tool calls 29% to 21%, tool calls tried per conversation 10.4 to 8.0, calls a guard had to block 2.6 to 1.3.">
+      <img src="img/round16-jump-light.png" alt="Base Tiny Aya vs round 16, teacher as reference: wasted tool calls 69% to 21% (teacher 4.9%), calls the shop rejected 44% to 6% (teacher 4.5%), exact repeats by AuditKIT 6.8% to 0.3% (teacher 0.4%), expert steps taken 8% to 47% (teacher 52%).">
     </picture>
   </figure>
   <ul>
-    <li><b>Against the round right before it</b>, on the same tasks: wasted calls −8 points, tool calls tried −23%, guard blocks halved. All three hold under a task bootstrap (95% intervals exclude zero).</li>
-    <li><b>The guards' lessons moved into the weights.</b> Round 16 trained on the teacher's fix for exactly the turns our guards had blocked, and now needs a guard half as often as the round before and a third as often as round 7.</li>
-    <li><b>AuditKIT agrees.</b> Its own <code>RedundantToolCalls</code> puts round 16's exact repeats at 0.3% of calls, level with the teacher (0.4%) and down from 6.8% for the base.</li>
-    <li><b>Not yet:</b> conversations are no shorter, about twice the teacher's length. That is the next target.</li>
+    <li><b>The base wastes most of what it does:</b> 69% of its tool calls, mostly calls the shop rejects, and it takes only 8% of the expert's steps. It looks frugal only because it gives up early.</li>
+    <li><b>Round 16 behaves like the teacher:</b> rejected calls 6% (teacher 4.5%), exact repeats 0.3% (teacher 0.4%), expert steps taken 47% (teacher 52%). All four changes from the base hold under a task bootstrap.</li>
+    <li><b>AuditKIT agrees:</b> the exact-repeat numbers are its own <code>RedundantToolCalls</code>, not our code.</li>
+    <li><b>Why:</b> round 16 trained on the teacher's fix for exactly the turns where the student went wrong, including every call our guards had blocked.</li>
+    <li><b>Not yet:</b> a fifth of its calls are still wasted (teacher 5%), and its conversations run about twice as long as the teacher's. That is the next target.</li>
   </ul>
   <p>Across every round, from the base model to round 16, wasted calls fell from 69% to 21% (the teacher wastes 5%):</p>
   <figure>
