@@ -89,7 +89,7 @@ def test_every_gpu_flavor_has_one_price():
         cloud.gpu_price("h200")
 
 
-@pytest.mark.parametrize("mode", ["gate", "bfcl_screen", "train_eval"])
+@pytest.mark.parametrize("mode", ["gate", "bfcl_screen", "train_eval", "hidden"])
 def test_no_job_argument_trips_huggingface_hubs_local_file_rule(mode, tmp_path, monkeypatch):
     """run_uv_job refuses an argument ending in .py/.sh/.yaml/.yml/.toml that is not a local file (round 12's first launch
     failed so), and uploads and renames one that is. The arguments must name no such file, wherever the launch runs."""
@@ -102,3 +102,25 @@ def test_no_job_argument_trips_huggingface_hubs_local_file_rule(mode, tmp_path, 
     assert flagged == []
     train = jobs.TrainJob(dataset_revision="round-12", revision="round-12", training_arguments=["--epochs", "2"])
     assert [a for a in train.script_arguments() if Path(a).suffix in jobs.HF_LOCAL_FILE_SUFFIXES] == []
+
+
+def test_a_hidden_run_opens_the_hidden_tasks_on_both_systems_and_makes_no_decision():
+    """The final-report run: both systems on the hidden ids with --open-hidden, results under a -hidden name."""
+    import sys
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import gate_eval
+    from shipwright.heal import splits
+    from shipwright.heal.gate import load_config
+
+    job = jobs.GateJob(round_number=15, current=ROOT / "configs" / "systems" / "base.yaml",
+                       candidate=ROOT / "configs" / "systems" / "r11-r7-fixes.yaml", user_model="u", mode="hidden")
+    assert "--hidden" in jobs.gate_script_arguments(job, "x.tar.gz")
+    assert job.results_prefix("r11-r7-fixes") == "gate/round-15/r11-r7-fixes-hidden"
+    options = gate_eval.parse_args(["--round", "15", "--local-dry-run", "--hidden",
+                                    "--current", "configs/systems/base.yaml", "--candidate", "configs/systems/r11-r7-fixes.yaml"])
+    gate_config = load_config(ROOT / "configs" / "gate.yaml")
+    command = gate_eval.baseline_cmd(gate_config, {"name": "base", "model": "CohereLabs/tiny-aya-global"}, [],
+                                     ROOT / "runs" / "x", options)
+    task_ids = command[command.index("--task-ids") + 1:command.index("--trials")]
+    assert task_ids == splits.hidden_ids() and "--open-hidden" in command
+    assert not set(task_ids) & set(splits.heldout_ids())
