@@ -13,7 +13,7 @@
 <td align="center"><h2>40 → 0</h2>invented order ids<br><sub>per 60 conversations</sub></td>
 </tr>
 <tr>
-<td align="center"><h2>69% → 21%</h2>wasted tool calls<br><sub>teacher 5%</sub></td>
+<td align="center"><h2>69% → 21%</h2>wasted tool calls<br><sub>round 16 alone: −8 pts, guard blocks halved</sub></td>
 <td align="center"><h2>0 people</h2>between launch and promotion<br><sub>2 h 24 min, $3.89</sub></td>
 <td align="center"><h2>8 / 8</h2>gate checks passed<br><sub>after 11 refusals</sub></td>
 </tr>
@@ -59,14 +59,30 @@ The customer simulator and judge is gpt-oss-120b, identical in every gate.
 | BFCL v3, general tool calling (no forgetting) | 45 | **73** |
 | Still failing: skipped a policy step / went in circles | 25 / 8 | 31 / 12 |
 
+### 4. Round 16's biggest jump: cleaner tool use
+
+Pass rates on 20 tasks are noisy, so we also measure *how* the agent works. tau2 stores the calls an expert makes for every task; `scripts/trajectory_efficiency.py` compares each conversation with that path and counts **wasted calls**: repeats of an earlier call with nothing changed in between, calls the shop rejected, and calls our guards had to block before they ran.
+
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/wasted-calls-dark.png">
-  <img src="docs/img/wasted-calls-light.png" alt="Wasted tool calls: base 69%, round 7 + guards 46%, round 13 26%, round 13 + guards 29%, round 16 21%, teacher 5%." width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/round16-jump-dark.png">
+  <img src="docs/img/round16-jump-light.png" alt="Round 16 against the round before (gate 14): wasted tool calls 29% to 21%, tool calls tried per conversation 10.4 to 8.0, calls a guard had to block 2.6 to 1.3." width="100%">
 </picture>
 
-Measured against tau2's expert path (`scripts/trajectory_efficiency.py`). The student also needs its guards less each round (4.3 → 1.3 blocked calls per conversation): the guards' lessons moved into the weights.
+| Same 20 held-out tasks × 3 | Base | Round before (gate 14) | **Round 16** | Teacher |
+|---|---|---|---|---|
+| Wasted tool calls | 69% | 29% | **21%** | 5% |
+| Tool calls tried per conversation | 4.0 | 10.4 | **8.0** | 4.5 |
+| Calls a guard had to block, per conversation | 0 | 2.6 | **1.3** | 0 |
+| Model calls per conversation (what serving costs) | 10.5 | 18.5 | **16.8** | 9.8 |
+| AuditKIT `RedundantToolCalls` (independent check) | 6.8% | 0.4% | **0.3%** | 0.4% |
 
-### 4. Why a business would care
+- **Round 16 against the round right before it, all on the same tasks** (task bootstrap, 95% intervals): wasted calls −8 points (−14 to −3), tool calls tried −2.4 per conversation (−4.1 to −0.8), guard blocks halved (−1.9 to −0.7).
+- **Against the base: wasted calls 69% → 21%** (−48 points, 38 to 56). The base looks frugal only because it gives up: 44% of its calls fail.
+- **The guards' lessons moved into the weights.** Round 16 trained on the teacher's fix for exactly the turns our guards had blocked. It now needs a guard half as often as the round before, and a third as often as round 7 (4.3 blocks per conversation).
+- **AuditKIT agrees.** Its own `RedundantToolCalls` puts round 16's exact repeats at 0.3% of calls, level with the teacher (0.4%) and down from 6.8% for the base.
+- **What did not change:** conversations are no shorter (about 31 messages and 74K prompt tokens, twice the teacher's), and AuditKIT's `AgentLoopDetection` finds a loop in half the conversations, as before (teacher: 1 in 10). Round 16 uses its tools more cleanly; it still talks longer than an expert. That is the next target.
+
+### 5. Why a business would care
 
 **Serving the self-healed student instead of the teacher's API costs about $22 instead of $117 per 10,000 conversations, on hardware the shop controls.** It resolves 15% of tickets end to end against the teacher's 32%, so today it is a first-line agent that never invents an order id and hands the rest to people.
 
@@ -153,6 +169,7 @@ The loop also caught faults in its own environment: fixing two simulator bugs ra
 | Train | `agenttune.create_distill_trainer(...)` (TRL SFTTrainer + LoRA) | Our trainer subclass skips logits for untrained positions, which Tiny Aya's 262k-token vocabulary needs to fit memory |
 | Gate | `agenttune.decide.closed_loop.deployment_gate.DeploymentGate.evaluate_decision` | One of the 8 checks, with an explicit minimum-sample floor above its permissive default |
 | Gate scoring | AuditKIT `agent_eval`: reliability (pass^1, pass^k) and the BFCL comparison | AuditKIT produces the scores; it has no gate of its own |
+| Trajectory check | AuditKIT `metrics.agent.RedundantToolCalls` and `AgentLoopDetection` (`scripts/trajectory_efficiency.py`) | An independent check on our expert-path efficiency metric: repeated calls 6.8% (base) → 0.3% (round 16), teacher 0.4% |
 
 **How they connect:** tau2 traces → AgentTune detect and classify → our router → AgentTune distill trainer → candidate → AuditKIT scores + AgentTune `DeploymentGate` → promote or reject.
 
@@ -407,7 +424,7 @@ What it shows:
 - **The guards' lessons moved into the weights.** Round 7 needed a guard to block 4.3 calls per conversation; round 16, trained on the teacher's corrections of exactly those turns, needs 1.3. This is the self-healing loop working at the level of single turns, and it fits overflowing runs falling from 13 (round 13) to 4.
 - **Still twice the expert's calls and five times its context per solved task** (490K vs 100K prompt tokens). That is the gap to close next: fewer calls is cheaper, faster and leaves room in the 8K window.
 
-The metric is evaluation only: it never feeds training or the gate. Making "wasted share must not rise" a ninth gate check is a one-line config change we did not make mid-hackathon, since the thresholds were frozen on 2026-11-11.
+Round 16 against the round right before it, with AuditKIT's own trajectory metrics as a cross-check, is in section 4 at the top. The metric is evaluation only: it never feeds training or the gate. Making "wasted share must not rise" a ninth gate check is a one-line config change we did not make mid-hackathon, since the thresholds were frozen on 2026-11-11.
 
 **Sample (gate 13, task 9, trial 2; this run passed).** The customer asked to exchange a desk lamp. The adapter wrote the exchange before the customer had said yes:
 

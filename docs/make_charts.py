@@ -111,9 +111,32 @@ def gates(t):
     return fig
 
 
+def round16_jump(t):
+    # scripts/trajectory_efficiency.py, gate 14 (round 13 + guards, the round before) vs gate 16, same 20 tasks x 3.
+    # 95% task-bootstrap intervals of the change: wasted -14 to -3 pts, attempts -4.1 to -0.8, blocks -1.9 to -0.7.
+    panels = [("Wasted tool calls", [29.3, 20.8], lambda v: f"{v:.0f}%", 35, "−8 pts"),
+              ("Tool calls tried per conversation", [10.4, 8.0], lambda v: f"{v:.1f}", 12.5, "−23%"),
+              ("Calls a guard had to block", [2.58, 1.27], lambda v: f"{v:.1f}", 3.2, "−51%")]
+    fig, axes = plt.subplots(1, 3, figsize=(10, 4.2), facecolor=t["surface"])
+    for ax, (label, values, fmt, top, change) in zip(axes, panels):
+        style(ax, t)
+        bars(ax, t, ["Round before\n(gate 14)", "Round 16"], values, {1}, fmt)
+        ax.set_ylim(0, top)
+        ax.set_yticks([])
+        ax.yaxis.grid(False)
+        ax.set_title(label, loc="left", fontsize=11, color=t["text"])
+        ax.text(0.98, 0.97, change, transform=ax.transAxes, ha="right", va="top",
+                fontsize=12, fontweight="bold", color=t["accent"])
+    title(fig, t, "Round 16 used its tools more cleanly than the round before",
+          "Same 20 held-out tasks x 3 trials. All three drops hold under a task bootstrap (95% intervals exclude zero).")
+    fig.subplots_adjust(left=0.03, right=0.98, top=0.74, bottom=0.17, wspace=0.18)
+    return fig
+
+
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for name, make in {"cost-vs-success": cost_vs_success, "wasted-calls": wasted_calls, "gates": gates}.items():
+    for name, make in {"cost-vs-success": cost_vs_success, "wasted-calls": wasted_calls, "gates": gates,
+                       "round16-jump": round16_jump}.items():
         for mode, theme in THEMES.items():
             figure = make(theme)
             figure.savefig(OUT / f"{name}-{mode}.png", dpi=160, facecolor=theme["surface"])

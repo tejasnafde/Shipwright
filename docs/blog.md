@@ -60,13 +60,19 @@ Round 16 against the base, 60 conversations each:
 | BFCL general tool calling | 45 | **73** |
 | Tickets resolved end to end | 10% | **15%** |
 
-## A new metric: wasted tool calls
+## Round 16's biggest jump: cleaner tool use
 
-Pass rates on 20 tasks are noisy, so we added a metric that looks inside each conversation. tau2 stores the calls an expert agent makes for every task. We compare each conversation with that path and count the calls that were repeated, failed, or blocked by one of our runtime guards.
+Pass rates on 20 tasks are noisy, so we added a metric that looks inside each conversation. tau2 stores the calls an expert agent makes for every task. We compare each conversation with that path and count the wasted calls: repeats of an earlier call with nothing changed in between, calls the shop rejected, and calls our runtime guards had to block before they ran.
+
+![Round 16 against the round before](img/round16-jump-light.png)
+
+Against the round right before it, on the same tasks, round 16 cut wasted calls by 8 points (29% → 21%), tried 23% fewer tool calls per conversation, and needed a guard half as often. All three hold under a task bootstrap. The reason is the most satisfying result of the project: round 16 trained on the teacher's fix for exactly the turns our guards had blocked, so the guards' lessons moved into the weights.
+
+We checked our metric against AuditKIT's own `RedundantToolCalls`: round 16 repeats a call in 0.3% of calls, level with the teacher (0.4%) and down from 6.8% for the base.
 
 ![Wasted tool calls by round](img/wasted-calls-light.png)
 
-Wasted calls fell from 69% (base) to 21% (round 16); the teacher wastes 5%. The base looks frugal only because it gives up early. The more interesting part: round 7 needed a guard to block 4.3 bad calls per conversation, round 16 needs 1.3. Training on the teacher's corrections of exactly those turns moved the guards' lessons into the weights.
+Over the whole project, wasted calls fell from 69% (base) to 21%; the teacher wastes 5%. The base looks frugal only because it gives up early. What round 16 did not fix: its conversations are still about twice as long as the teacher's. That is the next target.
 
 ## Why it matters for a business
 
