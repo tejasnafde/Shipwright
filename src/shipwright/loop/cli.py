@@ -139,6 +139,10 @@ def start_point(config: dict, dry_run: bool) -> tuple[dict | None, int | None]:
     if start.get("regate"):
         return None, adapter_round  # the old decision is not used: the first round measures again
     if dry_run:
+        # The real decision when it is on disk (so a dry run takes the branch the real run will), else a stand-in (CI).
+        local_decision = ROOT / "runs" / f"gate-r{start['from_round']}" / "gate_decision.json"
+        if local_decision.exists():
+            return json.loads(local_decision.read_text()), adapter_round
         decision = {"decision": "reject", "checks": [{"name": "pass_k", "passed": False}],
                     "metrics_current": {"label_rates": {}}, "metrics_candidate": {"label_rates": {}}}
         return decision, adapter_round

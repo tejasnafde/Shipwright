@@ -499,6 +499,38 @@ What changed, so nobody rebuilds what was removed or repeats what it fixed:
   is uploaded and renamed if it does. The gate bundle carries its configs as `.json` (`configs/systems/generated/`), and
   `tests/loop/test_jobs.py` plus `shipwright doctor` check that no job argument has one of those suffixes.
 
+- 2026-11-14 gates 12 and 13 (`configs/rounds/r12-final.yaml`, one unattended run, $4.91; classifier working, 0 errors):
+  both refused on `non_target` only, 7 of 8 checks. Gate 12 (round 7 adapter + guards): pass^1 0.15 vs 0.10, pass^k 0.10
+  vs 0.10, tool-call error rate 0.07 vs 0.50, BFCL 71.3, context overflow 5 runs vs 0. Gate 13 (retrained with a second
+  round of corrections): pass^1 0.15, pass^k 0.15 vs 0.10 (first time above the base), tool-call error rate 0.05, BFCL
+  72.3, context overflow 13 runs (rule label; 15 by the traces' trim flag) vs 0.
+- 2026-11-15 (Ishank): why gates 11 to 13 still failed `non_target`, read from the traces (gates 10 to 13, all on today's
+  harness; counts are rule labels, so the classifier outage does not touch them). (a) The overflowing runs are lookup
+  sprees: up to 38 lookups in a row (`get_item_details` on every variant), 9 gate 13 runs over 10 in a row, none passed;
+  the longest run of lookups in 285 passing teacher runs and every passing candidate run is 9. (b) After the window
+  dropped the turn with the `find_user_id` result, the agent asked an identified customer for their identity again (gate 13:
+  16 runs, gates 10 to 12: 2 to 3) and the customer quit. (c) Round 13's corrections caused both: 52 of its 176 correction
+  rows were the teacher's reply to a trimmed student view that had lost the identity, so they taught the re-ask; overflow
+  went 5 to 15 runs after that round. (d) Gate noise: gates 11 and 12 ran the same system and overflowed 12 vs 5 times.
+  (e) Data size was not the overflow cause: 250 of 252 teacher conversations fit the window whole; but round 10 (254
+  retail rows, no corrections) did worse on made-up ids than round 7 (433 + 43 corrections), so keep the corrections and
+  grow the teacher data. Fixes, all tested and in `shipwright doctor` (`capacity_fixes_behave`): `context.still_true_note`
+  (a request that drops old turns keeps the user id and order ids; live and training windows alike); guard
+  `lookup_spree` (an 11th lookup in a row is refused, no fallback reply; Mitushi's fix 14, same evidence); `patches.
+  is_agent_voiced_reply` (the simulated customer is asked again when it talks as the agent, Mitushi's fix 15: 4 gate 13
+  candidate runs, 3 teacher runs, 0 base runs, no customer message wrongly caught); `build_sft` drops correction rows that
+  lost the identity (`lost_authentication`); system key `condensed_policy` (`prompted_tools.CONDENSED_POLICY`, every rule
+  kept, the fixed prompt 2,714 to 1,815 tokens; `build_sft --condensed-policy`, `teacher_runs --condensed-policy`;
+  `build_corrections` follows the failures run's `run_config.json`). The ladder has a capacity step (`Recipe.capacity`,
+  `controller.CAPACITY_STAGES`): context overflow rose with the guards on, so serve and train on the short policy, with a
+  teacher harvest under it if `teacher.capacity_harvest_trials` is set, before another correction round.
+  Offline replay of the recorded requests (static: the conversations do not change): runs that lose history with the
+  short policy, gate 13 15 to 13 (the spree guard fires first in 6 of those), gate 12 5 to 4, gate 11 12 to 9, gate 10
+  5 to 2; the check allows 3. Not measured until a gate runs: `configs/rounds/r14-capacity.yaml`.
+- 2026-11-15: tau2's agent instructions say "according to the <policy> provided below", so a pattern for the policy block
+  must start at a line that is only `<policy>` (`prompted_tools.POLICY_BLOCK`); the first version ate the instructions.
+  Check a prompt rewrite on the real recorded prompt (`runs/gate-r13/r13-weight/prompts.json`), not only a test string.
+
 ## Keep this file correct
 
 This file corrects itself through you. **`AGENTS.md` is the only file that carries facts, traps

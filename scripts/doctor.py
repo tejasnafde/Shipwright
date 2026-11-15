@@ -287,6 +287,44 @@ def state_reminders_behave() -> Check:
     return ok(name)
 
 
+def capacity_fixes_behave() -> Check:
+    """The 2026-11-15 fixes for context overflow, on fixed inputs: the short policy replaces only tau2's policy block (its
+    instructions mention "<policy>" too) and keeps the exact transfer line; a request that drops old turns still says who
+    the customer is; an 11th lookup in a row is refused; a simulated customer that talks as the agent is asked again."""
+    name = "the short policy, the trim note, the lookup limit and the simulator re-ask behave"
+    import json as json_module
+    from types import SimpleNamespace
+
+    from shipwright.llm import context, guards, patches, prompted_tools
+
+    system = ("<instructions>\nHelp according to the <policy> provided below.\n</instructions>\n<policy>\n# Retail agent "
+              "policy\n\nLong rules.\n\nRespond in English.\n</policy>")
+    short = prompted_tools.condensed_system(system)
+    if "provided below" not in short or "Long rules" in short or "PLEASE HOLD ON." not in short or not short.endswith(
+            "Respond in English.\n</policy>"):
+        return fail(name, f"the short policy is not in place of tau2's block: {short[:200]!r}")
+    messages = [{"role": "system", "content": "s"}, {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "lookup"},
+                {"role": "user", "content": 'Tool result for find_user_id_by_email: "sara_doe_1"'},
+                {"role": "assistant", "content": "x " * 400}, {"role": "user", "content": "y " * 400},
+                {"role": "assistant", "content": "ok?"}, {"role": "user", "content": "yes"}]
+    fitted, info = context.fit_messages(messages, budget=300)
+    if not info["dropped_messages"] or not any("authenticated as user id sara_doe_1" in m["content"] for m in fitted):
+        return fail(name, f"a trimmed request lost the customer's user id: {info}")
+    history = [{"role": "user", "content": "hi"}]
+    for number in range(guards.MAX_LOOKUPS_IN_A_ROW):
+        history += [{"role": "assistant", "content": None, "tool_calls": [{"id": str(number), "type": "function", "function": {
+            "name": "get_item_details", "arguments": json_module.dumps({"item_id": str(number)})}}]},
+            {"role": "tool", "tool_call_id": str(number), "content": "{}"}]
+    if guards.check_lookup_spree(history, guards.ToolCall("get_item_details", {"item_id": "x"})) is None:
+        return fail(name, "an 11th lookup in a row was not refused")
+    agent_like = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+        content="I'm sorry, but I can't verify your account without the phone number."))])
+    if not patches.is_agent_voiced_reply(agent_like):
+        return fail(name, "a simulated customer speaking as the agent was not caught")
+    return ok(name)
+
+
 def observation_v3_compacts_records() -> Check:
     """Observation format 3: an order record arrives without empty fields and with a one-line address, every id and price kept."""
     name = "observation format 3 compacts an order record"
@@ -349,6 +387,7 @@ def vllm_starts_on_a_gpu(adapter_revision: str) -> Check:
 FREE_CHECKS: list[Callable[[], Check]] = [
     git_is_clean_and_pushed, hf_token_scopes, vertex_token, gcloud_project, runs_dataset_reachable, system_configs_are_valid, round_configs_are_valid,
     launchers_accept_the_loops_commands, guards_behave, observation_format_and_repair_behave, state_reminders_behave, observation_v3_compacts_records,
+    capacity_fixes_behave,
     one_command_round_runs_offline, sft_rows_render_with_the_real_template,
 ]
 

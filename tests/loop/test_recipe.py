@@ -76,3 +76,14 @@ def test_an_old_manifest_with_only_the_corrections_flag_counts_one_round():
 
     assert recipe_from_dict({"corrections": True}).corrections_rounds == 1
     assert recipe_from_dict({}).corrections_rounds == 0
+
+
+def test_context_overflow_with_the_guards_on_turns_the_short_policy_on_before_more_corrections():
+    """Gates 11 to 13 failed only non_target on context overflow; a correction round made it worse (5 to 15 runs)."""
+    gate_13 = decision(["non_target"], current={"context_overflow": 0.0}, candidate={"context_overflow": 0.22})
+    previous = Recipe(tool_guards=True, corrections_rounds=2, general_replay=100)
+    recipe = next_recipe(gate_13, previous)
+    assert recipe.capacity and recipe.corrections_rounds == 2 and needs_training(recipe, previous)
+    assert "short policy" in recipe.reasons[0]
+    again = next_recipe(gate_13, recipe, gate_13)  # capacity already on: back to the corrections rules
+    assert again.capacity and (again.exhausted or again.corrections_rounds == 3)

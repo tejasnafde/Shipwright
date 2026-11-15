@@ -109,9 +109,10 @@ class Stages:
                 "bfcl_screen": self.bfcl_screen, "gate": self.gate, "ceiling": self.ceiling, "smoke": self.smoke}
 
     def runs(self, name: str | None) -> Path | None:
+        """runs/<dir> of a run name: a bare dir of this chain, or "owner/dir" (a config's start.failures_run)."""
         if name is None:
             return None
-        return self.workspace.runs / name
+        return self.workspace.runs / name.rsplit("/", 1)[-1]
 
     def dry_flag(self) -> list[str]:
         return ["--dry-run"] if self.dry_run else []
@@ -143,13 +144,18 @@ class Stages:
                 "per_label": summary.get("per_label")}
 
     def teacher(self) -> dict:
+        """The teacher on the tasks the baseline failed (a fresh round), or, in a capacity round, on every train task
+        under the short policy, so new passes match the prompt the candidate will serve with."""
         output = self.runs(self.state.teacher_run)
         settings = self.config["teacher"]
         arguments = ["teacher_runs.py", "--teacher-model", self.models["teacher"], "--user-model", self.models["user"],
-                     "--from-run", str(self.runs(self.state.failures_run)), f"--trials={settings['trials']}",
                      "--max-concurrency", str(settings["max_concurrency"]), "--seed", str(self.config["seed"]),
                      "--max-cost-usd", str(self.caps["teacher"]), "--output-dir", str(output), *self.dry_flag()]
-        arguments += self.teacher_selection(settings)
+        if self.state.recipe.capacity:
+            arguments += ["--all-train", "--condensed-policy", f"--trials={settings['capacity_harvest_trials']}"]
+        else:
+            arguments += ["--from-run", str(self.runs(self.state.failures_run)), f"--trials={settings['trials']}"]
+            arguments += self.teacher_selection(settings)
         entry = api_stage_entry(run_script(arguments), output)
         entry["kept_traces"] = count_lines(output / "kept.jsonl")
         return entry
@@ -248,6 +254,8 @@ class Stages:
         arguments = ["build_sft.py", "--output-dir", str(output), "--only-model", self.models["teacher"],
                      "--revision", f"round-{self.round_number}", "--repo", self.config["data"]["repo"],
                      "--boost", str(recipe.boost)]
+        if recipe.capacity:
+            arguments.append("--condensed-policy")
         failures = self.runs(self.state.failures_run)
         if failures is not None and (failures / "failures.jsonl").exists():
             arguments += ["--boost-from", str(failures)]
@@ -278,6 +286,9 @@ class Stages:
         """AgentTune's RetrainingTrigger on the failures this round learns from (configs/heal.yaml)."""
         from shipwright.heal.agenttune_bridge import retrain_status_for_run
 
+        if self.state.failures_run is None:
+            raise RuntimeError("no classified failures run to judge the retraining by (a start needs start.failures_run)")
+        self.workspace.fetch(self.state.failures_run)
         status = retrain_status_for_run(self.runs(self.state.failures_run),
                                         self.workspace.path(self.round_number, "sft") / "sft.jsonl", HEAL_CONFIG)
         return {key: status.get(key) for key in ("should_train", "reason", "num_weight_fix_failures", "num_with_correction")}
@@ -319,6 +330,7 @@ class Stages:
             system = yaml.safe_load((ROOT / self.state.candidate_system).read_text())
         system["name"] = f"r{self.round_number}-weight"
         system["tool_guards"] = self.state.recipe.tool_guards
+        system["condensed_policy"] = self.state.recipe.capacity
         for key, value in (self.config["gate"].get("candidate_extra") or {}).items():
             system[key] = value
         systems.validate_system(system)
@@ -508,7 +520,7 @@ def same_candidate(decision: dict, candidate_path: Path) -> bool:
     execution that died after its gate job can resume without paying for the gate twice."""
     gated = (decision.get("systems") or {}).get("candidate") or {}
     ours = yaml.safe_load(candidate_path.read_text())
-    for key in ("adapter", "tool_guards", "state_reminders"):
+    for key in ("adapter", "tool_guards", "state_reminders", "condensed_policy"):
         if bool(gated.get(key)) != bool(ours.get(key)) or (gated.get(key) or None) != (ours.get(key) or None):
             return False
     return True

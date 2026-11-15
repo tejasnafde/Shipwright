@@ -307,3 +307,23 @@ def test_the_r12_config_reaches_its_last_gate_inside_the_cap_at_realistic_costs(
     result = run(fakes, rounds=2, chain_config=chain_config, start_adapter_round=7)
     assert result.status == controller.PROMOTED and stages_of(fakes, 13)[-1] == "gate"
     assert result.spent_usd <= chain_config["spend"]["total"]
+
+
+def test_a_capacity_round_harvests_under_the_short_policy_then_retrains():
+    overflow = {"decision": "reject", "checks": [{"name": "non_target", "passed": False}],
+                "metrics_current": {"label_rates": {"context_overflow": 0.0}},
+                "metrics_candidate": {"label_rates": {"context_overflow": 0.22}, "pass_1": 0.15}}
+    chain_config = config(start={"from_round": 13, "candidate": "configs/systems/r8-weight.yaml"},
+                          recipe={"tool_guards": True, "general_replay": 100, "corrections_rounds": 2})
+    chain_config["teacher"]["capacity_harvest_trials"] = 3
+    chain_config["gate"]["screen_bfcl"] = False
+    chain_config["spend"]["total"] = 50.0
+    fakes = Fakes(gate_decisions=[decision(True)])
+    result = run(fakes, chain_config=chain_config, start_decision=overflow, start_adapter_round=13)
+    assert result.status == controller.PROMOTED
+    assert stages_of(fakes, 10) == [stage for stage in controller.CAPACITY_STAGES if stage != "bfcl_screen"]
+    assert fakes.states[0]["recipe"].capacity and fakes.manifests[10]["teacher_run"] == "r10-teacher"
+    del chain_config["teacher"]["capacity_harvest_trials"]
+    fakes = Fakes(gate_decisions=[decision(True)])
+    run(fakes, chain_config=chain_config, start_decision=overflow, start_adapter_round=13)
+    assert stages_of(fakes, 10) == ["data", "train", "gate"]

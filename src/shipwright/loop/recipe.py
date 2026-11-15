@@ -15,6 +15,12 @@ does; two rules from round 3 were tested in round 4 and dropped:
                              showed the adapter repeating one lookup up to 8 times and exchanging a bookshelf for a camera.
                              Dropped in round 4: repeating the examples of the tasks the candidate failed (boost).
                              Loops went 45% to 40%: not enough to count.
+  guards already on and   -> capacity (``capacity``): the candidate serves the short policy (about 950 tokens more room on
+  context overflow rose      every turn) and the data is rebuilt with it, plus a teacher harvest of every train task
+  by more than 0.05          under the same prompt when the config allows it, then train. Added 2026-11-15: gates 11 to 13
+                             failed only non_target, on context overflow (5 to 15 runs against 0), and a correction round
+                             made it worse (5 to 15): no guard calls a long chain of lookups wrong, so corrections have
+                             nothing to correct there.
   guards already on and   -> correction examples: the teacher's next action at the points where the candidate went
   still failing              wrong (``corrections``), trained on with the replay data. Costs a training run.
   corrections already in  -> another round of corrections, from the failures of the adapter that round trained (on-policy:
@@ -44,6 +50,7 @@ class Recipe:
     tool_guards: bool = False  # the candidate system runs with the tool guards (src/shipwright/llm/guards.py)
     corrections: bool = False  # the data holds the teacher's corrections of the candidate's wrong turns
     corrections_rounds: int = 0  # how many rounds of corrections the adapter has been trained on
+    capacity: bool = False  # the short policy, in serving and in the training data (prompted_tools.CONDENSED_POLICY)
     exhausted: bool = False  # every remedy is already in use and the checks still fail: the loop stops
     reasons: list[str] = field(default_factory=list)
 
@@ -58,7 +65,8 @@ class Recipe:
 def recipe_to_dict(recipe: Recipe) -> dict:
     return {"epochs": recipe.epochs, "learning_rate": recipe.learning_rate, "boost": recipe.boost,
             "general_replay": recipe.general_replay, "tool_guards": recipe.tool_guards,
-            "corrections": recipe.corrections, "corrections_rounds": recipe.corrections_rounds, "exhausted": recipe.exhausted, "reasons": list(recipe.reasons)}
+            "corrections": recipe.corrections, "corrections_rounds": recipe.corrections_rounds,
+            "capacity": recipe.capacity, "exhausted": recipe.exhausted, "reasons": list(recipe.reasons)}
 
 
 def recipe_from_dict(saved: dict) -> Recipe:
@@ -68,7 +76,7 @@ def recipe_from_dict(saved: dict) -> Recipe:
         boost=saved.get("boost", DEFAULT_BOOST), general_replay=saved.get("general_replay", 0),
         tool_guards=saved.get("tool_guards", False), corrections=saved.get("corrections", False),
         corrections_rounds=saved.get("corrections_rounds", 1 if saved.get("corrections") else 0),
-        exhausted=saved.get("exhausted", False), reasons=list(saved.get("reasons", [])))
+        capacity=saved.get("capacity", False), exhausted=saved.get("exhausted", False), reasons=list(saved.get("reasons", [])))
 
 
 def failed_check_names(gate_decision: dict) -> set[str]:
@@ -78,7 +86,8 @@ def failed_check_names(gate_decision: dict) -> set[str]:
 def needs_training(recipe: Recipe, previous: Recipe) -> bool:
     """False when the only change is the harness (the guards): the same adapter is gated again."""
     return (recipe.general_replay != previous.general_replay
-            or recipe.corrections_rounds != previous.corrections_rounds)
+            or recipe.corrections_rounds != previous.corrections_rounds
+            or recipe.capacity != previous.capacity)
 
 
 def progress(gate_decision: dict) -> tuple[int, float]:
@@ -94,7 +103,7 @@ def next_recipe(gate_decision: dict, previous: Recipe, earlier_decision: dict | 
     ``earlier_decision`` is the gate decision before this one (None when there is none): another round of corrections is
     only started if the checks passed or the pass^1 rose since then."""
     recipe = Recipe(previous.epochs, previous.learning_rate, previous.boost, previous.general_replay,
-                    previous.tool_guards, previous.corrections, previous.corrections_rounds, False, [])
+                    previous.tool_guards, previous.corrections, previous.corrections_rounds, previous.capacity, False, [])
     failed = failed_check_names(gate_decision)
     if not failed:
         return recipe
@@ -119,6 +128,12 @@ def next_recipe(gate_decision: dict, previous: Recipe, earlier_decision: dict | 
             f"{', '.join(rose) or 'non-target or pass^k check'} failed: turn the tool guards on (a repeated lookup, a "
             f"change to another product type and a second change to one order are rejected). No training needed"
         )
+    elif "context_overflow" in rose and previous.tool_guards and not previous.capacity:
+        recipe.capacity = True
+        recipe.reasons.append(
+            f"context_overflow rose ({current_rates.get('context_overflow', 0.0):.2f} to "
+            f"{candidate_rates.get('context_overflow', 0.0):.2f}) with the guards on: serve the short policy (about 950 "
+            f"tokens more room every turn), rebuild the data with it and train")
     elif stuck and previous.tool_guards and previous.corrections_rounds == 0:
         recipe.corrections = True
         recipe.corrections_rounds = 1

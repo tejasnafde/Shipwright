@@ -28,6 +28,7 @@ The controller (`src/shipwright/loop/controller.py`) reads why the last gate ref
 | fresh (no refused candidate yet) | baseline, classify, teacher, data, train, bfcl_screen, gate | $5 |
 | BFCL fell: more general function-calling examples | data, train, bfcl_screen, gate | $2.3 |
 | looping, overflow, pass^k: turn the tool guards on | gate (the same adapter) | $1 |
+| context overflow rose with guards on: capacity (short policy in serving and data) | [teacher harvest of every train task under it], data, train, bfcl_screen, gate | $4.7 |
 | still failing with guards: corrections (on-policy) | candidate_train, classify, corrections, data, train, bfcl_screen, gate | $3.5 |
 | corrections improved the gate: another round of them | the same; at most 3 rounds, each trains on all earlier corrections | $3.5 |
 | corrections did not improve the gate, or 3 done | stop (`exhausted`) | |
@@ -48,9 +49,14 @@ stop rules and a spend cap per stage and in total. `git_sha` pins the commit (th
 - `recipe:` what the first round starts with (`tool_guards`, `general_replay`, `boost`, `corrections_rounds`): what
   earlier rounds already learned. Without it the first round is bare (gate 3's recipe).
 - `start: {from_round: 8, candidate: configs/systems/r8-weight.yaml}`: continue from a gate that refused a candidate
-  instead of a fresh round. Its `gate_decision.json` is read from the runs dataset.
+  instead of a fresh round. Its `gate_decision.json` is read from the runs dataset (a dry run uses
+  `runs/gate-r<from_round>/gate_decision.json` when it is on disk, so it takes the branch the real run will).
+  `start.failures_run: owner/dir` names that candidate's classified train-task failures, for AgentTune's
+  RetrainingTrigger in a first round that trains without `candidate_train` (a capacity round).
 - `teacher:` `skip_unsolved_from`, `skip_solved_from`, `only_solved_from` + `min_teacher_rate` (the harvest: a solved
   task passes again about 48% of the time, so replaying solved tasks is the cheapest way to more passing traces).
+- `teacher.capacity_harvest_trials: N`: the capacity round plays every train task N times under the short policy, so the
+  new passes match the prompt the candidate serves with (without it the capacity round only rebuilds the data).
 - `gate.candidate_extra:` serving-only switches for the candidate (`state_reminders: true`).
 
 `shipwright doctor` and `shipwright run` refuse a config whose GPU worst case (dearest flavor x timeout) passes its cap, a

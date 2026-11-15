@@ -11,6 +11,9 @@ Optional blocks:
                 from_round: 8                                # its gate_decision.json is read from the runs dataset
                 candidate: configs/systems/r8-weight.yaml    # the refused system (its adapter is reused)
                 regate: true                                 # optional: gate it again first, decide the remedy from that
+                failures_run: ishank/r13-cand-train          # optional: its classified failures on the train tasks, for
+                                                             # AgentTune's RetrainingTrigger in a round that trains
+                                                             # without running candidate_train (a capacity round)
     data.corrections_pool:  earlier corrections runs ("owner/dir") that join every round's corrections
 """
 
@@ -92,6 +95,9 @@ def validate(config: dict) -> list[str]:
             problems.append("start: needs from_round (a number) and candidate (a system config path)")
         elif not (cloud.ROOT / start["candidate"]).exists():
             problems.append(f"start.candidate: {start['candidate']} does not exist")
+    harvest = config["teacher"].get("capacity_harvest_trials")
+    if harvest is not None and (not isinstance(harvest, int) or harvest < 1):
+        problems.append("teacher.capacity_harvest_trials: a whole number of trials, 1 or more")
     return problems
 
 

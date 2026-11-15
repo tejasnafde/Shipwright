@@ -12,6 +12,8 @@ A round, by what the recipe changed since the last refused candidate (``recipe.n
     more general examples   data, train, [bfcl_screen], gate         (the first round's teacher passes are still right)
     corrections             candidate_train, classify, corrections, data, train, [bfcl_screen], gate
                             (the refused candidate's own failures on the train tasks: on-policy)
+    capacity (short policy) [teacher], data, train, [bfcl_screen], gate
+                            (teacher: a harvest of every train task under the short policy, if the config asks for it)
 
 The chain goes round after round until a candidate is promoted, a stage fails twice, the money runs out or the recipe
 has no further remedy. Nothing in it needs a person: every way it can end is one of the statuses below.
@@ -35,6 +37,7 @@ EXHAUSTED = "exhausted"      # the recipe has no further remedy
 FRESH_STAGES = ["baseline", "classify", "teacher", "data", "train", "bfcl_screen", "gate"]
 RETRAIN_STAGES = ["data", "train", "bfcl_screen", "gate"]
 CORRECTION_STAGES = ["candidate_train", "classify", "corrections", "data", "train", "bfcl_screen", "gate"]
+CAPACITY_STAGES = ["teacher", "data", "train", "bfcl_screen", "gate"]
 
 
 @dataclass
@@ -134,10 +137,15 @@ def run_stage(stage: str, run: Callable[[], dict], manifest: dict, caps: dict, s
 # ---------------------------------------------------------------- which stages a round runs
 
 def planned_stages(fresh: bool, chosen: recipe_module.Recipe, previous: recipe_module.Recipe,
-                   screen_bfcl: bool) -> list[str]:
-    """The stages of one round. ``fresh``: the chain's first round, with no refused candidate to start from."""
+                   screen_bfcl: bool, capacity_harvest: bool = False) -> list[str]:
+    """The stages of one round. ``fresh``: the chain's first round, with no refused candidate to start from.
+    ``capacity_harvest``: the round that turns the short policy on also harvests teacher passes under it."""
     if fresh:
         stages = list(FRESH_STAGES)
+    elif chosen.capacity and not previous.capacity:
+        stages = list(CAPACITY_STAGES)
+        if not capacity_harvest:
+            stages.remove("teacher")
     elif chosen.corrections_rounds > previous.corrections_rounds:
         stages = list(CORRECTION_STAGES)
     elif recipe_module.needs_training(chosen, previous):
@@ -155,6 +163,8 @@ def update_state_for_round(state: ChainState, round_number: int, stages: list[st
         state.baseline_run = run_name(config, round_number, "baseline")
         state.teacher_run = run_name(config, round_number, "teacher")
         state.failures_run = state.baseline_run
+    elif "teacher" in stages:  # a capacity round's harvest: its passes join the data from here on
+        state.teacher_run = run_name(config, round_number, "teacher")
     if "candidate_train" in stages:
         state.failures_run = run_name(config, round_number, "cand-train")
     if "train" in stages:
@@ -196,7 +206,7 @@ def run_round(round_number: int, stages: list[str], hooks: Hooks, state: ChainSt
     caps, rules = config["spend"], StopRules.from_config(config)
     manifest = hooks.load_manifest(round_number) or {"round": round_number, "stages": {}}
     manifest.update(config=resolved_config, planned_stages=stages, recipe=recipe_module.recipe_to_dict(state.recipe),
-                    failures_run=state.failures_run, adapter_round=state.adapter_round)
+                    failures_run=state.failures_run, teacher_run=state.teacher_run, adapter_round=state.adapter_round)
     functions = hooks.stage_functions(round_number, state)
     for stage in stages:
         if (manifest["stages"].get(stage) or {}).get("ok"):
@@ -256,6 +266,7 @@ def run_chain(config: dict, rounds: int, hooks: Hooks, resolved_config: dict,
     if start:
         state.adapter_round = start_adapter_round
         state.candidate_system = start["candidate"]
+        state.failures_run = start.get("failures_run")  # "owner/dir": the start candidate's classified train-task failures
     if start_decision is not None and not regate:
         state.decisions.append(start_decision)
     results: list[RoundResult] = []
@@ -275,7 +286,8 @@ def run_chain(config: dict, rounds: int, hooks: Hooks, resolved_config: dict,
         if round_index == 0 and regate:
             stages = ["gate"]
         else:
-            stages = planned_stages(fresh, state.recipe, previous, bool(config["gate"].get("screen_bfcl")))
+            stages = planned_stages(fresh, state.recipe, previous, bool(config["gate"].get("screen_bfcl")),
+                                    bool(config["teacher"].get("capacity_harvest_trials")))
         update_state_for_round(state, round_number, stages, config)
         result = run_round(round_number, stages, hooks, state, config, spent, resolved_config)
         results.append(result)
