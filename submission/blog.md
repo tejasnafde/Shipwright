@@ -9,7 +9,7 @@ authors:
 
 # Shipwright: a 3B support agent that fixes its own mistakes
 
-**A 3.35B Tiny Aya support agent that fixes its own mistakes for $4 a round, and refused to ship itself 11 times until the fix was real. On its first unattended promotion, invented order ids fell 40 → 0, tool errors 44% → 6% and wasted tool calls 69% → 21%, and it now resolves retail tickets for $0.015 each, 2.5× less than the teacher API it learned from.**
+**A 3.35B Tiny Aya support agent that heals itself: one command runs a whole round with no person in the loop for about $4, and it refused to ship itself 11 times until the fix was measured. Its first unattended promotion made its tool calls 7× more reliable (errors 44% → 6%), lifted tickets resolved from 10% to 15%, cut wasted tool calls from 69% to 21%, and serves retail tickets for $0.015 each, 2.5× less than the teacher API it learned from.**
 
 *Shipwright, Lexsi Labs AI Safety & Alignment Hackathon, Track 3 (problem statement 8: self-healing agents).*
 

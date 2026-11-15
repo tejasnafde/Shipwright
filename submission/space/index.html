@@ -38,6 +38,7 @@ p { color: var(--ink-2); margin: 0 0 14px; }
 .card.hero b { color: var(--accent); }
 figure { margin: 24px 0; }
 figure img { width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); display: block; }
+figure video { width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); display: block; background: #000; }
 figcaption { color: var(--ink-3); font-size: 13px; margin-top: 8px; }
 .steps { counter-reset: s; list-style: none; padding: 0; margin: 16px 0; display: grid; gap: 8px; }
 .steps li { counter-increment: s; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
@@ -70,7 +71,7 @@ footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line);
 <main>
   <div class="kicker">Lexsi Labs AI Safety &amp; Alignment Hackathon · Track 3 · Self-healing agents</div>
   <h1>A 3B support agent that fixes its own mistakes</h1>
-  <p class="lede">A 3.35B Tiny Aya support agent that heals itself: one command runs a whole round with no person in the loop for about $4, and it refused to ship itself 11 times until the fix was measured. Its first unattended promotion made its tool calls 7× more reliable (errors 44% → 6%), lifted tickets resolved from 10% to 15%, cut wasted tool calls from 69% to 21%, and serves retail tickets for $0.015 each, 2.5× less than the teacher API it learned from.</p>
+  <p class="lede">A 3.35B Tiny Aya support agent that heals itself: one command runs a whole round with no person in the loop for about $4, and it refused to ship itself 11 times until the fix was measured. Its first unattended promotion made its tool calls 7× more reliable (errors 44% → 6%), lifted tickets resolved from 10% to 15%, cut wasted tool calls from 69% to 21%, and serves retail tickets for <b>$0.015 each, 2.5× less than the teacher API it learned from</b>.</p>
 
   <div class="cards">
     <div class="card hero"><b>$0.015</b><span>per resolved ticket</span><small>2.5× cheaper than the teacher API</small></div>
@@ -80,6 +81,15 @@ footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line);
     <div class="card"><b>0 people</b><span>from launch to promotion</span><small>2 h 24 min, $3.89</small></div>
     <div class="card"><b>8 / 8</b><span>gate checks passed</span><small>after 11 refusals</small></div>
   </div>
+
+  <h2>Watch the demo (3 minutes)</h2>
+  <figure>
+    <video controls preload="metadata" poster="video/poster.jpg">
+      <source src="video/shipwright-demo.mp4" type="video/mp4">
+      <track kind="captions" src="video/shipwright-demo.vtt" srclang="en" label="English" default>
+    </video>
+    <figcaption>The control room replaying round 16 from the service's own run files: what changed, one on-policy correction, the 8-check gate, and every gate before it.</figcaption>
+  </figure>
 
   <figure>
     <picture>

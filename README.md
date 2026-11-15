@@ -8,6 +8,7 @@ and redeploys only when a frozen gate measures the new agent as better on tasks 
 
 [![Model](https://img.shields.io/badge/🤗_Adapters-shipwright--lora-ffcc4d?style=flat-square)](https://huggingface.co/mitushigoyal5/shipwright-lora)
 [![Data](https://img.shields.io/badge/🤗_Data-shipwright--sft_·_shipwright--runs-ffcc4d?style=flat-square)](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb)
+[![Demo video](https://img.shields.io/badge/▶_Demo_video-3_min-e11d48?style=flat-square)](https://huggingface.co/spaces/mitushigoyal5/shipwright/resolve/main/video/shipwright-demo.mp4)
 [![Space](https://img.shields.io/badge/🤗_Space-results-ff6b35?style=flat-square)](https://huggingface.co/spaces/mitushigoyal5/shipwright)
 ![Python](https://img.shields.io/badge/Python-3.12-3776ab?style=flat-square&logo=python&logoColor=white)
 ![Benchmark](https://img.shields.io/badge/Benchmark-τ²--bench_retail-2f6f9f?style=flat-square)
@@ -69,7 +70,8 @@ Every number above is recomputed from the public run files, without a GPU or a t
 python scripts/reproduce.py        # 17 of 17 claims match the run files
 ```
 
-The full analysis, every gate and every refusal: [`submission/WRITEUP.md`](submission/WRITEUP.md).
+The full analysis, every gate and every refusal: [`submission/WRITEUP.md`](submission/WRITEUP.md). A 3-minute
+[demo video](https://huggingface.co/spaces/mitushigoyal5/shipwright/resolve/main/video/shipwright-demo.mp4) walks through round 16 in the control room.
 
 ## What makes it different
 
