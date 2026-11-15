@@ -458,6 +458,34 @@ def push_adapter(training_options: argparse.Namespace, adapter_directory: Path, 
     print(f"Pushed https://huggingface.co/{training_options.output_repo}/tree/{training_options.revision}", flush=True)
 
 
+def write_lineage_record(adapter_directory: Path, training_options: argparse.Namespace, final_loss) -> None:
+    """``lexsi_provenance.json`` (AgentTune's ``write_provenance``): the base model, the SFT dataset and its revision,
+    and the training settings, the lineage record every Lexsi library writes. AgentTune's own trainers write it; our
+    distill factory did not (2026-11-15). A failure here only warns: it must never lose a trained adapter."""
+    try:
+        from agenttune.utils.provenance import write_provenance
+
+        write_provenance(
+            adapter_directory,
+            method="agentic.distill.sft_lora",
+            base_model=training_options.student,
+            dataset=training_options.dataset,
+            dataset_config=training_options.dataset_revision,
+            params={
+                "output_repo": training_options.output_repo,
+                "revision": training_options.revision,
+                "lora_r": training_options.lora_r,
+                "lora_alpha": training_options.lora_alpha,
+                "lr": training_options.lr,
+                "epochs": training_options.epochs,
+                "max_seq_len": training_options.max_seq_len,
+                "train_loss": final_loss,
+            },
+        )
+    except Exception as error:  # noqa: BLE001
+        print(f"warning: lexsi_provenance.json not written: {error}", flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     training_options = parse_args(argv)
     from agenttune import create_distill_trainer
@@ -502,6 +530,7 @@ def main(argv: list[str] | None = None) -> int:
         "minutes": round((time.time() - started_at) / 60, 1),
     }
     (adapter_directory / "training_meta.json").write_text(json.dumps(training_meta, indent=2, default=str))
+    write_lineage_record(adapter_directory, training_options, final_loss)
     (adapter_directory / "README.md").write_text(MODEL_CARD.format(
         student=training_options.student,
         revision=training_options.revision,
