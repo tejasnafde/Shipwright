@@ -561,9 +561,9 @@ What 14 rounds taught us decides the order: the gate is too noisy to see a 5-poi
 
 All three of us worked across the whole loop, ran rounds and analysed traces; each also led some parts.
 
-- **Tejas Nafde:** cloud infrastructure (Cloud Run Jobs, Cloud Build, GCP), the baseline harness and observability, tool patches, SFT data rendering, on-policy corrections.
-- **Ishank Giri:** the unattended loop service and its controller, the tool guards and context handling, the gate stages, the control room and the demo video.
-- **Mitushi Goyal:** the customer-simulator and context fixes, rule labels, the round 16 run, the efficiency analysis, the write-up, blog and Space.
+- **Tejas Nafde:** cloud infrastructure and the evaluation pipeline (gate, teacher runs, tool-fix proposer), the baseline harness and observability, and training data.
+- **Ishank Giri:** the unattended loop service, the gate stages, context handling and guards, the control room and the demo video.
+- **Mitushi Goyal:** guards and simulator fixes, evaluation on the hidden split, round 16, the trajectory-efficiency analysis, and the write-up, blog and Space.
 
 ## Related work
 
@@ -579,7 +579,7 @@ Lexsi Labs for the hackathon and the kits (AgentTune, AuditKIT); Cohere Labs for
 
 ## LLM usage statement
 
-**TODO (team):** approximate share of code and write-up generated with AI assistance, and for what.
+Most of the code and most of the write-up text were drafted with AI coding assistants (Claude Code) under the team's direction. The team chose the problem, the design and every experiment, read the results, and reviewed and edited the text. Every headline number comes from the public run files and is recomputed by `scripts/reproduce.py`.
 
 ## References
 
