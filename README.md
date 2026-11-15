@@ -14,7 +14,7 @@ and redeploys only when a frozen gate measures the new agent as better on tasks 
 ![Python](https://img.shields.io/badge/Python-3.12-3776ab?style=flat-square&logo=python&logoColor=white)
 ![Benchmark](https://img.shields.io/badge/Benchmark-τ²--bench_retail-2f6f9f?style=flat-square)
 
-**[Read the hackathon write-up →](submission/WRITEUP.md)** (Lexsi Labs AI Safety & Alignment Hackathon, Track 3, problem statement 8: self-healing agents)
+**[Read the hackathon write-up →](submission/WRITEUP.md)** (Lexsi Labs AI Safety & Alignment Hackathon, Track 3, problem statements 8 Self-healing agents, 1 Reliable tool calling, 2 Efficient trajectories and 3 Agentic distillation)
 
 [What it does](#what-it-does) · [Results](#results) · [What makes it different](#what-makes-it-different) · [How it works](#how-it-works) · [Quickstart](#quickstart) · [Documentation](#documentation) · [Models and data](#models-and-data)
 
@@ -183,5 +183,5 @@ Teacher: DeepSeek V4.1 Flash on Vertex AI. Customer simulator and classifier: gp
 
 ## Team
 
-Built for the Lexsi Labs AI Safety and Alignment Hackathon, Track 3 (agentic fine-tuning), problem statement 8:
-self-healing agents. Team: Tejas Nafde, Ishank Giri, Mitushi Goyal.
+Built for the Lexsi Labs AI Safety and Alignment Hackathon, Track 3 (Agentic Fine-tuning), problem statements
+8 Self-healing agents, 1 Reliable tool calling, 2 Efficient trajectories and 3 Agentic distillation. Team: Tejas Nafde, Ishank Giri, Mitushi Goyal.

@@ -102,7 +102,9 @@ The catch: a student that acts more also makes more wrong changes than the base,
 
 - **Track 3, Agentic Fine-tuning.**
 - **Problem statement 8, Self-healing agents** (primary): "Detect failing runs, classify why they failed, generate corrective training examples, retrain, and gate redeployment on measured accuracy."
-- Also measured: **#1 Reliable tool calling** (tool-call error rate, BFCL) and **#3 Agentic distillation** (a DeepSeek teacher's trajectories distilled into Tiny Aya).
+- **Problem statement 1, Reliable tool calling:** tool-call errors 44% → 6%; invented order and item ids 40 → 0 and made-up answers 8 → 0 per 60 conversations (hallucinated arguments and replies); BFCL 45 → 73.
+- **Problem statement 2, Efficient trajectories:** measured against tau2's expert path, wasted tool calls (repeated, failed or blocked) fell 69% → 21% (teacher 5%) and exact repeats 6.8% → 0.3% by AuditKIT's `RedundantToolCalls`, while task success rose 10% → 15% (section 4).
+- **Problem statement 3, Agentic distillation:** a DeepSeek V4.1 Flash teacher's trajectories and per-turn corrections distilled into Tiny Aya 3.35B, closing a quarter to a third of the gap to the teacher.
 
 ## Abstract
 

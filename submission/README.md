@@ -1,6 +1,6 @@
 # Hackathon submission
 
-Material for the Lexsi Labs AI Safety and Alignment Hackathon (Track 3, problem statement 8: self-healing agents).
+Material for the Lexsi Labs AI Safety and Alignment Hackathon (Track 3, problem statements 8 Self-healing agents, 1 Reliable tool calling, 2 Efficient trajectories and 3 Agentic distillation).
 The service itself is documented in the repository's `README.md` and `docs/`; nothing here is needed to run it.
 
 | Path | What it is |

@@ -13,7 +13,7 @@ authors:
 
 ▶ **[Watch the 3-minute demo](https://huggingface.co/spaces/mitushigoyal5/shipwright/resolve/main/video/shipwright-demo.mp4)**: the control room replaying round 16 step by step. Code: [github.com/tejasnafde/Shipwright](https://github.com/tejasnafde/Shipwright).
 
-*Shipwright, Lexsi Labs AI Safety & Alignment Hackathon, Track 3 (problem statement 8: self-healing agents).*
+*Shipwright, Lexsi Labs AI Safety & Alignment Hackathon, Track 3: problem statements 8 Self-healing agents, 1 Reliable tool calling, 2 Efficient trajectories, 3 Agentic distillation.*
 
 Most AI agents fail quietly. A support bot invents an order number, cancels the wrong thing, or loops until the customer gives up, and tomorrow it does the same again. The usual fix is a bigger model behind an API. We wanted the opposite: the **smallest** Aya model, **Tiny Aya Global (3.35B)**, on one cheap GPU, made better by a loop that finds its own failures, fixes them and only redeploys when the fix is measured.
 
