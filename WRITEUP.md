@@ -1,12 +1,10 @@
-# Shipwright: a support agent that finds, sorts and fixes its own failures
+# Shipwright: a 3B support agent that fixes its own mistakes
 
-**One-line claim.** Self-healing on a $1.50-an-hour GPU: a 3.35B Tiny Aya support agent found its own failures on tau2-bench retail, had a teacher correct them, retrained and redeployed itself with no person in the loop, and now resolves tickets for **$0.015 each, 2.5× cheaper than the teacher API it learned from**. One unattended round costs $3.89; all 16 rounds used about $25 of GPU. Invented order ids 40 → 0, tool errors 44% → 6%, wasted tool calls 69% → 21%, BFCL 45 → 73, and AuditKIT, AgentTune's `DeploymentGate` and six more checks all approved the deploy.
+**One-line claim.** A 3.35B Tiny Aya support agent that fixes its own mistakes for $4 a round, and refused to ship itself 11 times until the fix was real. On its first unattended promotion, invented order ids fell 40 → 0, tool errors 44% → 6% and wasted tool calls 69% → 21%, and it now resolves retail tickets for **$0.015 each, 2.5× less than the teacher API it learned from**.
 
-> 2026-11-15. Round 16, the loop's first promotion, ran from 12:15 to 14:38 UTC for $3.89.
+**Base model + method:** Tiny Aya Global 3.35B (CC-BY-NC-4.0) + a LoRA adapter (r 16), trained by an automatic detect → classify → route → distil → gate loop (AgentTune + AuditKIT) on DeepSeek V4.1 Flash teacher corrections, plus runtime tool-call guards.
 
 **See it in one page:** [HF Space](https://huggingface.co/spaces/mitushigoyal5/shipwright) · [blog post](docs/blog.md) · [models](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6) · [data and every gate trace](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb)
-
-**Base model + method:** Tiny Aya Global 3.35B (CC-BY-NC-4.0) with a LoRA adapter (r 16), trained by an automatic detect → classify → route → distil → gate loop (AgentTune + AuditKIT) on DeepSeek V4.1 Flash teacher trajectories and on-policy corrections, plus runtime tool-call guards.
 
 <table>
 <tr>
@@ -29,80 +27,58 @@
 > [!IMPORTANT]
 > **Why the smallest model.** We chose Tiny Aya 3.35B on purpose: it fits the budget, serves on a $1.50-an-hour A10G, and is the model where self-healing matters most because it fails most. Its 8,192-token window is the limit our gate kept catching; **Aya Expanse 32B (128K context) is the first thing we would run with more credit.**
 
-### 1. Three models
+### 1. The loop, run with no person in it
 
-| Role | Model | What it does |
+One command with a $4 cap (`shipwright run --config configs/rounds/r16-corrections.yaml --launch`) ran round 16 end to end on 15 November. Numbers on each step are that round's; badges show which kit runs it ([animated version](https://huggingface.co/spaces/mitushigoyal5/shipwright)):
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/loop-dark.svg">
+  <img src="docs/img/loop-light.svg" alt="The self-healing loop. 1 Run Tiny Aya on 74 train tasks. 2 Detect failures (tau2 grader + AgentTune FailureDetector). 3 Classify (rules, then AgentTune FailureClassifier). 4 Route by root cause: tool fault to guards and tool text with a person approving; model fault to the weight fix; environment fault to no fix, never trained on. 5 Correct: the teacher fixes each wrong turn (235 corrections). 6 Train with AgentTune's distill trainer (789 examples). 7 Gate: 8 checks from AuditKIT and AgentTune. Promote to the ledger with rollback (once, round 16) or refuse and keep the old model (11 times). Round 16: 2 h 24 min, $3.89, no person in the loop." width="100%">
+</picture>
+
+**Who approved it:** AuditKIT scored pass^1, pass^k and BFCL; tau2-bench's database grader decided each conversation; AgentTune's `DeploymentGate` approved; our checks confirmed the targeted failures fell and no new kind appeared. The same gate had refused 11 times before, each for a traced reason, so the approval means something.
+
+### 2. Three models
+
+| Role | Model | Tickets solved (20 held-out tasks × 3) |
 |---|---|---|
-| **Base** | Tiny Aya Global 3.35B (Cohere Labs, CC-BY-NC-4.0), unchanged | The reference every gate compares against |
-| **Student** | Base + a LoRA adapter (r 16, about 30M parameters, under 1% of the model) | What the loop trains and deploys. Runs on one A10G with vLLM |
-| **Teacher** | DeepSeek V4.1 Flash on Vertex AI | Shows the right behaviour: full passing conversations, and the right next turn at each point where the student went wrong. Never deployed |
-| Customer and judge | gpt-oss-120b | Plays the customer in tau2-bench and judges its natural-language checks; identical in every gate |
+| **Base** | Tiny Aya Global 3.35B, unchanged | 10% |
+| **Student** (what the loop deploys) | Base + LoRA, about 30M parameters, one A10G | **15%** (round 16); 17.2% pooled for round 7 |
+| **Teacher** (never deployed) | DeepSeek V4.1 Flash, API | 32–40% |
 
-Same harness, same 20 held-out tasks × 3 trials: **base 10%, student 15%** (round 16; the round 7 adapter pooled over three gates: 17.2%), **teacher 32–40%**.
+The customer simulator and judge is gpt-oss-120b, identical in every gate.
 
-### 2. What the student stopped doing
+### 3. What the student stopped doing
 
-Round 16 against the base, 60 conversations each (gate 16):
-
-| | Base | Student (round 16) |
+| Round 16 vs base, 60 conversations each | Base | Student |
 |---|---|---|
 | Invented an order or item id | 40 | **0** |
 | Handed off to a human too early | 11 | **0** |
 | Made up an answer (judge) | 8 | **0** |
-| Malformed or unknown tool call | 6 | **0** |
-| Wrong tool | 11 | 4 |
-| Tool-call error rate | 44.3% | **5.7%** |
-| BFCL v3, general tool calling (external benchmark: no forgetting) | 45.0 | **73.3** |
+| Tool-call error rate | 44% | **6%** |
+| BFCL v3, general tool calling (no forgetting) | 45 | **73** |
 | Still failing: skipped a policy step / went in circles | 25 / 8 | 31 / 12 |
-
-**Trajectories got leaner, measured against tau2's expert path** (`scripts/trajectory_efficiency.py`, details in Results):
-
-| | Base | Round 7 + guards | Round 16 | Teacher |
-|---|---|---|---|---|
-| Wasted calls (repeated, failed or blocked by a guard) | 69% | 46% | **21%** | 5% |
-| Calls per expert call | 0.9 (gives up) | 2.8 | **1.9** | 1.05 |
-| Expert steps taken (recall) | 8% | 48% | **47%** | 52% |
-| Guard blocks per conversation | 0 | 4.3 | **1.3** | 0 |
-
-Every round of corrections made the student need its guards less (4.3 → 2.5 → 1.3 blocks per conversation): the guards' lessons moved into the weights.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/wasted-calls-dark.png">
   <img src="docs/img/wasted-calls-light.png" alt="Wasted tool calls: base 69%, round 7 + guards 46%, round 13 26%, round 13 + guards 29%, round 16 21%, teacher 5%." width="100%">
 </picture>
 
-### 3. A full loop, with no person in it
-
-One command (`shipwright run --config configs/rounds/r16-corrections.yaml --launch`, spend cap $4) ran one Cloud Run execution end to end:
-
-| Step | What happened | Cost |
-|---|---|---|
-| Detect | The last refused candidate ran the 74 train tasks; AgentTune `FailureDetector` + tau2's grader flagged the failures | $0.53 |
-| Classify | Rules, then AgentTune `FailureClassifier`, labelled each failure and routed it (tool fix / weight fix / no fix) | $0.05 |
-| Correct | The teacher answered at every turn where the student went wrong, from the student's exact context: 235 corrections across three rounds | $0.12 |
-| Train | AgentTune `create_distill_trainer`, LoRA from the base, on the corrections + teacher passes + 300 BFCL rows (789 examples) | $1.17 |
-| Gate | Base and candidate on 20 held-out tasks × 3, BFCL, 8 checks | $2.02 |
-| Promote | Written to the promotion ledger on the Hub (`promotions/ledger.jsonl`), with one-step rollback | – |
-
-**Who approved it:** AuditKIT computed pass^1, pass^k and BFCL; tau2-bench's database grader decided each conversation; AgentTune's `DeploymentGate` gave its verdict; our checks confirmed the targeted failures fell (90% → 85% of runs, the 0.05 minimum) and no other kind rose by more than 0.05. All 8 passed. The same gate had refused 11 times before for traceable reasons (forgetting, new failure kinds, conversations overflowing the context), so the approval means something.
+Measured against tau2's expert path (`scripts/trajectory_efficiency.py`). The student also needs its guards less each round (4.3 → 1.3 blocked calls per conversation): the guards' lessons moved into the weights.
 
 ### 4. Why a business would care
 
-**Running the self-hosted student instead of the teacher's API for first-line retail support costs about $22 instead of $117 per 10,000 conversations (5× less, 2.5× less per resolved ticket), with every conversation and fix on hardware the shop controls; it fully resolves 15% of tickets against the teacher's 32%, so today it fits as a first-line agent that never invents an order id and hands the rest to people, and each unattended $4 round narrows the gap.**
+**Serving the self-healed student instead of the teacher's API costs about $22 instead of $117 per 10,000 conversations, on hardware the shop controls.** It resolves 15% of tickets end to end against the teacher's 32%, so today it is a first-line agent that never invents an order id and hands the rest to people.
 
-| Per 10,000 conversations (gate 16 and the teacher on the same 20 tasks) | Base | Student (round 16) | Teacher API |
+| Per 10,000 conversations | Base | Student | Teacher API |
 |---|---|---|---|
 | Resolved end to end | 1,000 | **1,500** | 3,170 |
-| Serving cost | | **about $22** | about $117 (about $20 if every prompt hits the API's cache) |
 | Cost per resolved ticket | | **$0.015** | $0.037 |
-| A wrong change written to the shop | 3% | 13% | 10% |
-| Invented ids, early handoffs, made-up answers (labels in 60 conversations) | 59 | **0** | |
+| Wrong change written to the shop | 3% | 13% | 10% |
 
-Cost uses measured model calls per conversation (student 16.8 including guard retries, teacher 9.8) at $0.13 per 1,000 student replies on a busy A10G and $1.19 per 1,000 uncached teacher replies (cost table in Results). The honest catch: a student that acts more also makes more wrong changes than the base, at about the teacher's rate, which is why the gate tracks failure kinds and not only success.
+The catch: a student that acts more also makes more wrong changes than the base, at about the teacher's rate. With full prompt caching the teacher API costs about $20 per 10,000. Method in Results.
 
-**How to read these numbers.** tau2-bench retail is a public benchmark we did not write: multi-turn, a simulated customer, a written policy, and a grader that checks the final shop database. Its tasks, grader and customer are fixed by others, so the model cannot learn the test's format from our own data. On it, the teacher solves 32–40% and base Tiny Aya 10%. A self-built task set, where tasks, training data and grader come from the same authors, can reach 90%+; the two kinds of number are not comparable.
-
-**On the hidden split (20 tasks never used for any decision, opened once, with the round 7 adapter + guards):** task success **0% → 10%** (6 paired wins, 0 losses, McNemar p = 0.031) against a teacher at 30%, so about a third of the gap closed; tool-call errors **56% → 5%**. Round 16 was promoted after the hidden split was opened and has not been run on it.
+**How to read these numbers.** tau2-bench retail is a public benchmark with a fixed customer, policy and database grader; nothing in it was written by us. Scores on self-built task sets, where the same team writes tasks, data and grader, are not comparable. **On the hidden split** (20 tasks opened once, with the round 7 adapter): 0% → 10%, 6 paired wins and 0 losses (p = 0.031), teacher 30%.
 
 ## Tracks and problem statements
 
@@ -138,12 +114,7 @@ The loop also caught faults in its own environment: fixing two simulator bugs ra
 
 **Use case.** An online shop's first-line support: look up orders, cancel or modify pending orders, return or exchange delivered ones, and update addresses, all under a written policy. The policy requires authenticating first, taking ids only from the customer or the tools, getting an explicit "yes" before any change, and transferring to a human only when no tool can help. A 3B model that does this reliably runs on one small GPU at a fraction of an API model's cost.
 
-**The loop.** One round, start to finish, with round 16's numbers and the kit that runs each step (animated version on the [HF Space](https://huggingface.co/spaces/mitushigoyal5/shipwright); source `docs/make_loop_diagram.py`):
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/loop-dark.svg">
-  <img src="docs/img/loop-light.svg" alt="The self-healing loop. 1 Run Tiny Aya on 74 train tasks. 2 Detect failures (tau2 grader + AgentTune FailureDetector). 3 Classify (rules, then AgentTune FailureClassifier). 4 Route by root cause: tool fault to guards and tool text with a person approving; model fault to the weight fix; environment fault to no fix, never trained on. 5 Correct: the teacher fixes each wrong turn (235 corrections). 6 Train with AgentTune's distill trainer (789 examples). 7 Gate: 8 checks from AuditKIT and AgentTune. Promote to the ledger with rollback (once, round 16) or refuse and keep the old model (11 times). Round 16: 2 h 24 min, $3.89, no person in the loop." width="100%">
-</picture>
+**The loop.** One round, start to finish (diagram in section 1 above):
 
 1. **Run.** Tiny Aya plays the agent in a tau2 task. Tiny Aya has no native tool calling, so tools are described in the prompt and the model answers with one JSON block per call (`src/shipwright/llm/prompted_tools.py`). Training data uses exactly this format.
 2. **Log.** Every turn's raw model output is kept, not just the parsed call; otherwise a "reasoned its way to the wrong conclusion" failure is unclassifiable afterwards. OpenTelemetry spans are built from the same trace.
