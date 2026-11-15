@@ -380,17 +380,55 @@ def test_a_real_litellm_reply_with_an_item_id_is_rewritten_in_place():
 
 
 
-def test_an_eleventh_lookup_in_a_row_is_refused_and_a_customer_turn_or_a_write_resets_the_count():
-    """Round 13: up to 38 lookups in a row, 9 runs over 10, none passed; passing runs make at most 9 (285 teacher passes)."""
-    messages = [customer("I want to exchange my watches."), agent_call("find_user_id_by_email", {"email": "a@b.c"}, "auth"),
-                tool_result("auth", '"noah_ito_3850"'), customer("Yes, that is me.")]
-    for number in range(guards.MAX_LOOKUPS_IN_A_ROW):
-        messages += [agent_call("get_item_details", {"item_id": str(number)}, f"c{number}"), tool_result(f"c{number}", "{}")]
-    violation = guards.first_violation(messages, call("get_item_details", item_id="99"))
-    assert violation is not None and violation.rule == "lookup_spree" and violation.fallback_reply is None
-    assert guards.check_lookup_spree(messages[:-2], call("get_item_details", item_id="99")) is None  # 9 so far
-    assert guards.check_lookup_spree(messages + [customer("The red one.")], call("get_item_details", item_id="99")) is None
-    assert guards.check_lookup_spree(messages, call("exchange_delivered_order_items", order_id="#W1")) is None
+def test_a_simulator_reply_in_the_agents_voice_is_asked_again():
+    # gate 13 task 33 and task 79: the "customer" answers as the agent
+    assert patches.speaks_as_agent(reply("Sure thing. I’ve processed the cancellation of order #W1845024."))
+    assert patches.speaks_as_agent(reply("I’m sorry, but I’m not able to transfer you to a supervisor."))
+    assert patches.speaks_as_agent(reply("If there’s anything else I can help you with, please let me know."))
+    assert not patches.speaks_as_agent(reply("Yes, please cancel order #W1845024. The reason is no longer needed."))
+    assert not patches.speaks_as_agent(reply("Can you help me with anything else on my account?"))
+
+
+def lookups(count):
+    messages = AUTHENTICATED + [agent_text("Let me check your orders."), customer("ok")]
+    for index in range(count):
+        messages += [agent_call("get_order_details", {"order_id": f"#W{index}"}, f"s{index}"),
+                     tool_result(f"s{index}", "{}")]
+    return messages
+
+
+def test_a_change_reopens_only_the_lookups_it_can_change():
+    product = call("get_product_details", product_id="P1")
+    looked = AUTHENTICATED + [agent_call("get_product_details", {"product_id": "P1"}, "p1"), tool_result("p1", '{"name": "Lamp"}'),
+                              agent_call("get_order_details", {"order_id": "#W1"}, "o1"), tool_result("o1", '{"status": "pending"}'),
+                              agent_call("get_order_details", {"order_id": "#W2"}, "o2"), tool_result("o2", '{"status": "pending"}')]
+    cancelled = looked + [agent_call("cancel_pending_order", {"order_id": "#W1", "reason": "x"}, "c9"), tool_result("c9", "{}")]
+    assert guards.check_repeated_call(cancelled, product).rule == "repeated_call"  # a cancel does not change a product
+    assert guards.check_repeated_call(cancelled, call("get_order_details", order_id="#W2")).rule == "repeated_call"
+    assert guards.check_repeated_call(cancelled, call("get_order_details", order_id="#W1")) is None  # that order changed
+    failed = looked + [agent_call("cancel_pending_order", {"order_id": "#W1", "reason": "x"}, "c9"),
+                       tool_result("c9", "Error: Non-pending order cannot be cancelled")]
+    assert guards.check_repeated_call(failed, call("get_order_details", order_id="#W1")).rule == "repeated_call"
+
+
+def test_a_stubborn_repeat_of_a_failed_call_is_replaced_by_text():
+    failed = AUTHENTICATED + [agent_call("get_order_details", {"order_id": "#W9"}, "c4"),
+                              tool_result("c4", "Error: Order not found")]
+    stubborn = reply("again", "get_order_details", {"order_id": "#W9"})
+    final = patches.ask_again_until_policy_ok(failed, {"messages": []}, stubborn, lambda request: stubborn)
+    assert final.choices[0].message.tool_calls is None and "did not go through" in final.choices[0].message.content
+
+
+def test_a_long_streak_of_lookups_without_a_reply_is_stopped():
+    limit = guards.LOOKUP_STREAK_LIMIT
+    next_lookup = call("get_product_details", product_id="P1")
+    assert guards.check_lookup_streak(lookups(limit - 1), next_lookup) is None
+    assert guards.check_lookup_streak(lookups(limit), next_lookup).rule == "lookup_streak"
+    # a change is progress, never blocked by the streak rule
+    assert guards.check_lookup_streak(lookups(limit), call("cancel_pending_order", order_id="#W1", reason="x")) is None
+    # a reply to the customer starts the count again
+    replied = lookups(limit) + [agent_text("Here is what I found."), customer("ok")]
+    assert guards.check_lookup_streak(replied, next_lookup) is None
 
 
 def test_a_simulated_customer_that_answers_as_the_agent_is_asked_again():

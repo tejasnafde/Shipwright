@@ -312,11 +312,11 @@ def capacity_fixes_behave() -> Check:
     if not info["dropped_messages"] or not any("authenticated as user id sara_doe_1" in m["content"] for m in fitted):
         return fail(name, f"a trimmed request lost the customer's user id: {info}")
     history = [{"role": "user", "content": "hi"}]
-    for number in range(guards.MAX_LOOKUPS_IN_A_ROW):
+    for number in range(guards.LOOKUP_STREAK_LIMIT):
         history += [{"role": "assistant", "content": None, "tool_calls": [{"id": str(number), "type": "function", "function": {
             "name": "get_item_details", "arguments": json_module.dumps({"item_id": str(number)})}}]},
             {"role": "tool", "tool_call_id": str(number), "content": "{}"}]
-    if guards.check_lookup_spree(history, guards.ToolCall("get_item_details", {"item_id": "x"})) is None:
+    if guards.check_lookup_streak(history, guards.ToolCall("get_item_details", {"item_id": "x"})) is None:
         return fail(name, "an 11th lookup in a row was not refused")
     agent_like = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
         content="I'm sorry, but I can't verify your account without the phone number."))])

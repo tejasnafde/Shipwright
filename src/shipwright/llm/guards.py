@@ -236,6 +236,10 @@ def check_repeated_failure(messages: list[dict], call: ToolCall) -> GuardViolati
                 rule="repeated_failed_call",
                 message=(f"This exact call already failed with \"{earlier.result[:150]}\". Do not repeat it. "
                          f"Check the arguments against the tool results, or ask the customer."),
+                # Gate 12 task 27: let through after the retries, one failing return ran 8 times until the context
+                # ran out. The same call cannot succeed, so the customer hears this instead.
+                fallback_reply=("That did not go through with those details. Could you confirm exactly which item "
+                                "and order you mean?"),
             )
     return None
 
@@ -350,14 +354,31 @@ def check_one_change_per_order(messages: list[dict], call: ToolCall) -> GuardVio
     return None
 
 
+CATALOGUE_LOOKUPS = ("get_product_details", "get_item_details", "list_all_product_types")
+
+
+def write_can_change(write: EarlierCall, lookup: ToolCall) -> bool:
+    """Could this change make the lookup return something new? A failed change changes nothing, no retail tool changes
+    the product catalogue, and an order changes only with a change to that order. Gate 12: after one cancel, the old
+    rule let the round 7 adapter fetch the same products 2 to 3 times (task 74, all three trials ran out of context)."""
+    if not is_write_tool(write.call.name) or write.result.startswith("Error"):
+        return False
+    if lookup.name in CATALOGUE_LOOKUPS:
+        return False
+    if lookup.name == "get_order_details":
+        written_order = str(write.call.arguments.get("order_id") or "").lstrip("#")
+        return written_order == str(lookup.arguments.get("order_id") or "").lstrip("#")
+    return True
+
+
 def check_repeated_call(messages: list[dict], call: ToolCall) -> GuardViolation | None:
     """The same lookup again, with nothing changed since, only returns the same answer (round 5: the adapter repeated
-    one order lookup 8 times and ran out of room). A repeat after a change to the data is a legitimate check."""
+    one order lookup 8 times and ran out of room). A repeat after a change to that data is a legitimate check."""
     calls = earlier_calls(messages)
     for position in range(len(calls) - 1, -1, -1):
         earlier = calls[position]
         if earlier.call.name == call.name and earlier.call.arguments == call.arguments and not earlier.result.startswith("Error"):
-            changed_since = any(is_write_tool(later.call.name) for later in calls[position + 1:])
+            changed_since = any(write_can_change(later, call) for later in calls[position + 1:])
             if not changed_since:
                 return GuardViolation(
                     rule="repeated_call",
@@ -371,37 +392,38 @@ def check_repeated_call(messages: list[dict], call: ToolCall) -> GuardViolation 
     return None
 
 
-MAX_LOOKUPS_IN_A_ROW = 10
+# Gate 13 (round 13 adapter): the 13 failed runs that ran out of context held a streak of 6 to 38 tool calls without a
+# word to the customer (median 11), against at most 9 in a passing run and at most 7 for the teacher. Each product
+# listing is about 500 tokens, so one streak fills the 8k window.
+LOOKUP_STREAK_LIMIT = 10
 
 
-def lookups_since_customer_spoke(messages: list[dict]) -> int:
-    """How many read-only calls the agent made in a row since the customer's last message (a write call resets it)."""
-    streak = 0
-    for message in messages:
-        role = message.get("role")
-        if role == "user":
-            streak = 0
-        elif role == "assistant":
-            for tool_call in message.get("tool_calls") or []:
-                name = tool_call_from_message(tool_call).name
-                streak = 0 if is_write_tool(name) or name == TRANSFER_TOOL else streak + 1
-    return streak
+def calls_since_last_reply(messages: list[dict]) -> int:
+    """Tool calls the agent made since it last wrote to the customer."""
+    count = 0
+    for message in reversed(messages):
+        if message.get("role") != "assistant":
+            continue
+        if message.get("tool_calls"):
+            count += len(message["tool_calls"])
+        elif (message.get("content") or "").strip():
+            break
+    return count
 
 
-def check_lookup_spree(messages: list[dict], call: ToolCall) -> GuardViolation | None:
-    """An 11th lookup in a row with no word to the customer. Round 13 (2026-11-15): the candidate fetched every product
-    and every item of a customer's orders (up to 38 lookups in a row) and ran out of context in 9 of 60 gate runs, none
-    passed. The longest run of lookups in 285 passing teacher runs, and in every passing candidate run, is 9; the
-    2026-11-13 trial of a limit of 6 or 7 cut passing runs, so the limit sits above all of them. No fallback reply: after
-    MAX_GUARD_RETRIES the call runs."""
+def check_lookup_streak(messages: list[dict], call: ToolCall) -> GuardViolation | None:
+    """Another lookup after LOOKUP_STREAK_LIMIT tool calls with no reply to the customer. A change is never blocked
+    here: it is progress, and the other guards check it."""
     if is_write_tool(call.name) or call.name == TRANSFER_TOOL:
         return None
-    if lookups_since_customer_spoke(messages) < MAX_LOOKUPS_IN_A_ROW:
+    streak = calls_since_last_reply(messages)
+    if streak < LOOKUP_STREAK_LIMIT:
         return None
     return GuardViolation(
-        rule="lookup_spree",
-        message=(f"You have made {MAX_LOOKUPS_IN_A_ROW} lookups in a row without replying to the customer. Stop looking "
-                 f"things up: tell the customer what you found and what you can do, or ask them which item they mean."),
+        rule="lookup_streak",
+        message=(f"You have made {streak} tool calls without replying to the customer. Stop looking things up: use "
+                 f"what you already found and reply to the customer now, or make the change they asked for."),
+        fallback_reply="I have the order and product details now. Which change would you like me to make first?",
     )
 
 
@@ -472,7 +494,7 @@ GUARDS = [
     check_authentication_first,
     check_repeated_failure,
     check_repeated_call,
-    check_lookup_spree,
+    check_lookup_streak,
     check_made_up_ids,
     check_order_status_fits_tool,
     check_same_product_type,

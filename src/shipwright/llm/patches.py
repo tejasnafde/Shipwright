@@ -157,12 +157,11 @@ def is_unexplained_stop(response: Any) -> bool:
     return bool(reasoning) and not STOP_INTENT.search(reasoning)
 
 
-# The user simulator sometimes answers as the store's agent ("I'm sorry, but I can't verify your account without ...",
-# "I understand this is frustrating. I'll transfer you to a supervisor"), and the conversation goes round in circles
-# until it overflows or hits the step limit. Found by Mitushi on gate 13 (2026-11-15). Recorded runs: 4 candidate runs
-# of gate 13, 3 teacher runs, 0 base runs; no customer message in any recorded run matched that speaks for the customer
-# ("I'm sorry, but I can't share my credit-card details" is kept by CUSTOMER_VOICE). Such a reply is asked again.
-AGENT_VOICE = re.compile(
+# The same fault as speaks_as_agent below, other wordings: a reply that opens like the agent's apology or service line
+# ("I'm sorry, but I can't verify your account without ...", "I understand this is frustrating. I'll transfer you to a
+# supervisor") and says nothing for the customer. Recorded runs: 4 gate 13 candidate runs, 3 teacher runs, 0 base runs;
+# "I'm sorry, but I can't share my credit-card details" is the customer and is kept (CUSTOMER_VOICE). Asked again too.
+AGENT_OPENING = re.compile(
     r"^(i'?m sorry, but i (can'?t|cannot|am not able|'m not able)|i understand (this is|that this is|your) frustrat|"
     r"unfortunately, i (can'?t|cannot|am unable)|thank you for your patience|"
     r"i apologi[sz]e for (the|any) (inconvenience|confusion)|how (can|may) i (help|assist) you|"
@@ -178,7 +177,29 @@ def is_agent_voiced_reply(response: Any) -> bool:
     if not choices:
         return False
     content = (getattr(choices[0].message, "content", None) or "").strip().replace("\u2019", "'")
-    return bool(AGENT_VOICE.search(content)) and not CUSTOMER_VOICE.search(content)
+    return bool(AGENT_OPENING.search(content)) and not CUSTOMER_VOICE.search(content)
+
+
+# gpt-oss as the user simulator sometimes starts speaking as the agent ("I've processed the cancellation", "I'm not
+# able to transfer you to a supervisor", "Anything else I can help you with?") and stays that way; agent and "customer"
+# then argue until the context runs out. Gate 13: 5 of the 13 failed runs that ran out of context, 0 of the other 38
+# failures; all 55 flagged customer turns in gates 11 and 13 and the r11 ceiling were the simulator in the agent's
+# voice. Such a reply is asked again, like an empty one.
+AGENT_VOICE = re.compile(
+    r"I(’|')ve (processed|initiated|cancell?ed|submitted|updated)|I have (processed|initiated|cancell?ed|submitted)|"
+    r"I(’|')m (not able|unable) to (transfer|reverse|process)|I can(’|')?no?t (reverse|transfer|process)|"
+    r"anything else I can help( you)? with|I(’|')ll (process|go ahead and (cancel|process))|"
+    r"refund (has been|will be) (issued|processed) to your",
+    re.IGNORECASE,
+)
+
+
+def speaks_as_agent(response: Any) -> bool:
+    """A user-simulator reply written in the agent's voice."""
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return False
+    return bool(AGENT_VOICE.search(getattr(choices[0].message, "content", None) or ""))
 
 
 def is_json_reply(response: Any) -> bool:
@@ -413,8 +434,9 @@ def install(
                         break
                 elif is_user_simulator_call:
                     cut_leaked_turn(response)
+                    # Mitushi's speaks_as_agent and is_agent_voiced_reply catch different wordings of the same fault.
                     usable = not (is_empty_reply(response) or is_unexplained_stop(response)
-                                  or is_agent_voiced_reply(response))
+                                  or speaks_as_agent(response) or is_agent_voiced_reply(response))
                     if usable:
                         break
                 else:

@@ -515,10 +515,11 @@ What changed, so nobody rebuilds what was removed or repeats what it fixed:
   (e) Data size was not the overflow cause: 250 of 252 teacher conversations fit the window whole; but round 10 (254
   retail rows, no corrections) did worse on made-up ids than round 7 (433 + 43 corrections), so keep the corrections and
   grow the teacher data. Fixes, all tested and in `shipwright doctor` (`capacity_fixes_behave`): `context.still_true_note`
-  (a request that drops old turns keeps the user id and order ids; live and training windows alike); guard
-  `lookup_spree` (an 11th lookup in a row is refused, no fallback reply; Mitushi's fix 14, same evidence); `patches.
-  is_agent_voiced_reply` (the simulated customer is asked again when it talks as the agent, Mitushi's fix 15: 4 gate 13
-  candidate runs, 3 teacher runs, 0 base runs, no customer message wrongly caught); `build_sft` drops correction rows that
+  (a request that drops old turns keeps the user id and order ids; live and training windows alike); Mitushi's
+  guards from the merge of `origin/mitushi` e026b8d (`lookup_streak`: no lookup after 10 tool calls with no reply;
+  `write_can_change`; a fallback for a repeated failed call; `patches.speaks_as_agent`), plus `patches.
+  is_agent_voiced_reply` (other wordings of the simulator talking as the agent: 4 gate 13 candidate runs, 3 teacher runs,
+  0 base runs, no customer message wrongly caught; a reply is asked again if either check fires); `build_sft` drops correction rows that
   lost the identity (`lost_authentication`); system key `condensed_policy` (`prompted_tools.CONDENSED_POLICY`, every rule
   kept, the fixed prompt 2,714 to 1,815 tokens; `build_sft --condensed-policy`, `teacher_runs --condensed-policy`;
   `build_corrections` follows the failures run's `run_config.json`). The ladder has a capacity step (`Recipe.capacity`,
@@ -526,7 +527,7 @@ What changed, so nobody rebuilds what was removed or repeats what it fixed:
   teacher harvest under it if `teacher.capacity_harvest_trials` is set, before another correction round.
   Offline replay of the recorded requests (static: the conversations do not change): runs that lose history with the
   short policy, gate 13 15 to 13 (the spree guard fires first in 6 of those), gate 12 5 to 4, gate 11 12 to 9, gate 10
-  5 to 2; the check allows 3. Not measured until a gate runs: `configs/rounds/r14-capacity.yaml`.
+  5 to 2; the check allows 3. Not measured until a gate runs: `configs/rounds/r15-capacity.yaml` (after gate 14, Mitushi's re-gate of the round 13 adapter with these guards).
 - 2026-11-15: tau2's agent instructions say "according to the <policy> provided below", so a pattern for the policy block
   must start at a line that is only `<policy>` (`prompted_tools.POLICY_BLOCK`); the first version ate the instructions.
   Check a prompt rewrite on the real recorded prompt (`runs/gate-r13/r13-weight/prompts.json`), not only a test string.

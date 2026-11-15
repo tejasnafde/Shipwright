@@ -1,0 +1,102 @@
+# Round 14 (2026-11-15, Mitushi): one gate, no training, total cap $2.5.
+#   shipwright run --config configs/rounds/r14-regate.yaml --launch
+# Gate 13 refused the round 13 adapter on non_target only: 13 of 60 runs ran out of context (0 for the base). Those runs
+# were long lookup streaks (6 to 38 calls without a word to the customer), lookups repeated after an unrelated change,
+# a failed call repeated until the window filled, and the user simulator answering as the agent. The harness now guards
+# all four (src/shipwright/llm/guards.py, patches.speaks_as_agent). Offline on gate 13's runs a fix fires before the history
+# is lost in 12 of the 13; whether the runs then finish is what this gate measures. The fixes were written from gate
+# 13's runs on the same held-out tasks: a pass is optimistic, and the hidden split is the honest check.
+round: 14
+rounds: 1                 # the re-gate only: no remedy round after a refusal
+owner: mitushi
+git_sha: null             # null: the image's commit, recorded. Set it to reproduce a run: the run refuses another commit.
+seed: 300
+
+frozen:
+  splits: configs/splits.yaml
+  gate: configs/gate.yaml
+
+start:                    # continue from gate 13's candidate (same adapter, new harness)
+  from_round: 13
+  candidate: configs/systems/r14-r13-fixes.yaml
+  regate: true            # same adapter as gate 13, new harness: measure it again
+
+recipe:                   # how the round 7 adapter was made (AGENTS.md, rounds 5 to 7)
+  tool_guards: true       # gate 6 on
+  general_replay: 100     # general function-calling examples per BFCL category (BFCL 35 to 72, gate 5)
+  boost: 1
+  corrections_rounds: 1   # round 7 trained on 43 corrections
+
+models:
+  agent: openai/CohereLabs/tiny-aya-global:cohere            # Tiny Aya Global on the HF router
+  user: openai/openai/gpt-oss-120b:deepinfra                 # user simulator and tau2 judge (the gate uses the same)
+  teacher: vertex/deepseek-ai/deepseek-v4.1-flash-maas
+  classifier: vertex/openai/gpt-oss-120b-maas                # AgentTune FailureClassifier
+
+baseline:                 # not run here (no fresh round); the config keeps the full shape
+  num_tasks: 0
+  trials: 1
+  max_concurrency: 10
+
+teacher:                  # not run here: the pool below is the teacher data
+  trials: 3
+  max_concurrency: 10
+
+candidate_train:          # the refused candidate on the train tasks the teacher can solve: its own failures
+  flavors: [a10g-large]   # one flavor per GPU stage: a fallback's dearer worst case would not leave room for the gate
+  timeout: 40m
+  trials: 1
+
+data:
+  repo: mitushigoyal5/shipwright-sft
+  pool:                   # teacher runs whose passes are training data (all DeepSeek V4.1 Flash, train split)
+    - tejas/r1-teacher-t1
+    - tejas/r1-teacher-all-t2
+    - tejas/r1-teacher-ds-a
+    - tejas/r1-teacher-ds-b
+    - tejas/r1-teacher-ds-c
+    - tejas/bake-dsv41flash
+    - ishank/r2-teacher
+    - ishank/r3-teacher
+    - tejas/r9-teacher
+    - mitushi/r10-teacher  # made after the user-simulator leak fix
+  corrections_pool:       # on-policy corrections of the round 8 candidate (the round 7 adapter with guards)
+    - tejas/r9-corrections
+
+train:
+  output_repo: mitushigoyal5/shipwright-lora
+  flavors: [l40sx1]
+  timeout: 45m
+  epochs: 2               # round 9: 2 epochs at 1e-4 from the base model
+  learning_rate: 0.0001
+  extra_args: []
+  require_trigger: true
+
+gate:
+  runs_repo: mitushigoyal5/shipwright-runs
+  candidate_template: configs/systems/r11-r7-fixes.yaml       # targets of a trained candidate; name, adapter, guards set
+  flavors: [a10g-large]   # a queued job is not billed: waiting for an A10G costs time, not money
+  timeout: 60m
+  screen_bfcl: false      # BFCL held at 71 to 73 in gates 8 to 11; its $0.90 worst case does not fit the cap
+  screen_timeout: 30m
+  api_usd: 0.6
+
+stop:
+  max_infra_error_rate: 0.25
+  min_sft_examples: 40
+  retries: 1
+
+spend:                    # USD caps; a stage starts only if its cap plus what is spent fits in total
+  baseline: 2.0           # not run
+  candidate_train: 1.0    # worst case a10g-large $1.50/h x 40m
+  classify: 0.3
+  teacher: 2.0            # not run
+  corrections: 0.4
+  data: 0.0
+  train: 1.4              # worst case l40sx1 $1.80/h x 45m = $1.35
+  bfcl_screen: 1.0        # not run
+  gate: 2.1               # worst case a10g-large $1.50/h x 1h + $0.60 of simulator (gate 10 really cost $1.42)
+  total: 2.5              # approved 2026-11-15: one gate (gate 13 really cost $1.65)
+
+cloud:
+  task_timeout: 8h
