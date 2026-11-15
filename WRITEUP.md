@@ -404,16 +404,30 @@ A full round (baseline, classify, teacher, data, train, gate) runs unattended in
 
 ## With more credits
 
+What 14 rounds taught us decides the order: the gate is too noisy to see a 5-point gain on 20 tasks, and the one failure it keeps refusing (overflowing conversations) is the model's behaviour, not noise. So first a better measurement, then changes aimed at that behaviour.
+
+**1. A k-fold gate instead of one 20-task held-out set.** Pool the 74 train and 20 held-out tasks (94) into 5 folds of about 19. For each fold, train the candidate's recipe on the other four and gate it on that fold; pool the five results so the gate decides on 94 tasks, not 20; on a pass, train the deployed adapter on all 94.
+- *Fixes:* noise. Today two tasks flipping moves pass^1 by 10 points (the same model scored 23%, 13% and 15% in three gates). On 94 tasks a 5–7 point gain is visible, and no single lucky gate can promote.
+- *Does not fix:* the overflow refusal. It is a systematic gap (base 0%, student 10–20% of runs), so a bigger gate only measures it more precisely.
+- *Cost:* 5 trainings (about $3.50) + both systems on 94 tasks × 3 (about 564 conversations, $6–7) + teacher runs on the 20 held-out tasks so they can be trained on (about $0.30): about $10 per decision, against $1.50 now. Reusing the base runs across gates (the base does not change) halves the evaluation part.
+- *The final test after it:* our 20 hidden retail tasks are now spent (opened once, reported above). A clean final check for a k-fold-selected model needs tasks no decision has seen: tau2's airline or telecom domain, with their own tools and policies, as an out-of-domain test.
+
+**2. Changes aimed at the stuck conversations and the policy mistakes.**
+- **2–3 more on-policy correction rounds** (DAgger-style: run the newest adapter on the train tasks, have the teacher correct each wrong turn, retrain, repeat). One round took invented ids from 35 to 2; "skipped a policy step" is the largest failure left.
+- **"Stop and answer" examples:** teacher turns where it replies to the customer after one or two lookups instead of looking further, built from the teacher runs we already have, aimed at the lookup streaks (median 11 in a row in overflowing runs).
 - **A condensed policy** (about 1,500 to 500 tokens) with a retrained adapter, to free about 1,000 tokens of context per turn.
-- **More on-policy correction rounds** (DAgger-style), and DPO on the 300+ recorded guard rejections (rejected call vs corrected call).
+- **DPO on the 300+ recorded guard rejections** (rejected call vs corrected call in the same turn), through AgentTune's adapter-only preference path, so the model stops needing the retry.
 - **A reply-text guard** for invented order ids, emails and dates in messages to the customer, not only in tool calls. Offline, a grounding check flags 7 to 13 failed student runs per gate and none of the teacher's.
-- **A larger student.** Aya Expanse 32B (128K context) would remove the overflow, at roughly 10× the cost of a round. The runs that overflow are stuck conversations, so a bigger window alone would turn them into a different failure, not a pass.
+- **A fair "same budget" baseline:** base with fresh resampling at temperature > 0 and the same number of model calls, and base + guards without training, to separate what the guards and the training each add. (Best-of-3 at temperature 0, already measured, stays below the student's single attempt: 10% vs 15–23% held-out, 0% vs 10% hidden.)
+
+**3. A larger student.** Aya Expanse 32B (128K context) would remove the overflow, at roughly 10× the cost of a round. The runs that overflow are stuck conversations, so a bigger window alone would turn them into a different failure, not a pass.
 
 **Expected before → after (forecasts, not measured):**
 
 | Extension | Cost | Metric now | Expected after |
 |---|---|---|---|
-| Gate 14's guards + one more on-policy correction round | ~$5 | Context overflow 7 of 60 runs | 3 or fewer, and the first promotion |
+| k-fold gate (5 folds, 94 tasks) | ~$10 per decision | pass^1 moves ±10 pts between gates of the same model | ±4–5 pts, so a 5–7 pt gain is detectable |
+| Gate 14's guards + one more on-policy correction round + "stop and answer" examples | ~$5 | Context overflow 7 of 60 runs | 3 or fewer, and the first promotion |
 | 2–3 more on-policy correction rounds | ~$3 per round | pass^1 15%, invented ids 2 | pass^1 20–25%; skipped policy steps down a third |
 | Condensed policy (1,500 → 500 tokens) + retrain | ~$3 | 36% of the window is fixed prompt | Under 25%, overflow near 0 without guards |
 | Reply-text grounding guard | free + one gate | Made-up facts in 7–13 failed runs per gate | Near 0 (the teacher has none) |
