@@ -441,7 +441,7 @@ What changed, so nobody rebuilds what was removed or repeats what it fixed:
   (c) What still blocks a promotion: `non_target` counts `context_overflow` and `unclassified` as new failure kinds. The adapter loops (the same lookup 3 or more times, `loop` 17% to 60%), runs 21 steps against 10 and overflows its context (2% to 37%): that is the whole non-target rise, and it drags `pass_k` (0.05 against 0.10: 1 task solved on every try against 2). The next lever is the loop, not the weights' intensity: a guard on repeated calls (Mitushi's `repeated_failed_call` covers only failed calls), or examples where the right move after a lookup is to answer.
   (d) Gate noise: 60 runs, about 7 passes for the base, so pass^1 moves by 3 passes between candidates of the same quality. Do not read a pass^1 gain of 3 as a result, or a loss of 3 as a regression.
   (e) Cheap screens before the gate: the `bfcl_screen` stage (config `gate.screen_bfcl`; was `run_loop.py --screen-bfcl`) scores BFCL alone on the candidate (about 8 minutes, $0.17) and stops if the gate's BFCL check could not pass. A refused gate costs about $1 (L40S, 30 minutes) and a training run about $1.1: spend on one blocker at a time. HF GPUs queue: an A10G waited 30 minutes, an L40S 2 to 16 minutes; an HF job is billed by its running seconds, not the wait (`durations.running_secs`).
-  (f) Held-out reuse: every gate we run on the same 20 held-out tasks selects on them. If a candidate is ever promoted, the number to report comes from the hidden split, opened once.
+  (f) Held-out reuse: every gate we run on the same 20 held-out tasks selects on them. If a candidate is ever promoted, the number to report comes from the hidden split, opened once (done 2026-11-15, see the end of this list).
 
 - 2026-11-13: the loop runs unattended (`shipwright run`, was `scripts/run_loop.py`; `docs/pipeline/loop.md`). Rules for working on it: a first-use path that was never run on real infrastructure is the usual cause of a failed run (about 20 of them in rounds 3 to 5), so add a check for it to `scripts/doctor.py` in the same change; do not patch a run while it is going: a run that needs a human is a defect to fix before the next run. The remedy ladder (`loop/recipe.py`: BFCL, then the tool guards, then corrections) is the only place that decides what a round changes; a rule stays only while its evidence does. The guards define what a wrong turn is, for the harness and for the correction data (`scripts/build_corrections.py`); a correction row trains only the teacher's final reply (`train_last_only`, `train_lora.mask_all_but_last_assistant`). Vertex's gcloud config resolves like the GCS code (`lexsi` if present).
 
@@ -515,11 +515,13 @@ What changed, so nobody rebuilds what was removed or repeats what it fixed:
   (e) Data size was not the overflow cause: 250 of 252 teacher conversations fit the window whole; but round 10 (254
   retail rows, no corrections) did worse on made-up ids than round 7 (433 + 43 corrections), so keep the corrections and
   grow the teacher data. Fixes, all tested and in `shipwright doctor` (`capacity_fixes_behave`): `context.still_true_note`
-  (a request that drops old turns keeps the user id and order ids; live and training windows alike); Mitushi's
+  (a request that drops old turns keeps the user id and order ids; live and training windows alike; off by default since the
+  round 16 promotion, system key `identity_note`); Mitushi's
   guards from the merge of `origin/mitushi` e026b8d (`lookup_streak`: no lookup after 10 tool calls with no reply;
   `write_can_change`; a fallback for a repeated failed call; `patches.speaks_as_agent`), plus `patches.
   is_agent_voiced_reply` (other wordings of the simulator talking as the agent: 4 gate 13 candidate runs, 3 teacher runs,
-  0 base runs, no customer message wrongly caught; a reply is asked again if either check fires); `build_sft` drops correction rows that
+  0 base runs, no customer message wrongly caught; off by default since the round 16 promotion, system key
+  `agent_voice_check`, and then a reply is asked again if either check fires); `build_sft` drops correction rows that
   lost the identity (`lost_authentication`); system key `condensed_policy` (`prompted_tools.CONDENSED_POLICY`, every rule
   kept, the fixed prompt 2,714 to 1,815 tokens; `build_sft --condensed-policy`, `teacher_runs --condensed-policy`;
   `build_corrections` follows the failures run's `run_config.json`). The ladder has a capacity step (`Recipe.capacity`,
@@ -527,10 +529,29 @@ What changed, so nobody rebuilds what was removed or repeats what it fixed:
   teacher harvest under it if `teacher.capacity_harvest_trials` is set, before another correction round.
   Offline replay of the recorded requests (static: the conversations do not change): runs that lose history with the
   short policy, gate 13 15 to 13 (the spree guard fires first in 6 of those), gate 12 5 to 4, gate 11 12 to 9, gate 10
-  5 to 2; the check allows 3. Not measured until a gate runs: `configs/rounds/r15-capacity.yaml` (after gate 14, Mitushi's re-gate of the round 13 adapter with these guards).
+  5 to 2; the check allows 3. Never measured in a gate: its round config (`r15-capacity.yaml`) was removed unrun on
+  2026-11-15, because round 16 continued from gate 14 and was promoted.
 - 2026-11-15: tau2's agent instructions say "according to the <policy> provided below", so a pattern for the policy block
   must start at a line that is only `<policy>` (`prompted_tools.POLICY_BLOCK`); the first version ate the instructions.
   Check a prompt rewrite on the real recorded prompt (`runs/gate-r13/r13-weight/prompts.json`), not only a test string.
+- 2026-11-15: CI's dry loop (`configs/rounds/default.yaml`, round 10 rejected by design) and `shipwright doctor`'s dry run
+  (`r10-fixes.yaml`) both write `runs/dry-*-r10`, and a dry run resumes from what it finds: after the CI one, the doctor
+  check reports "the dry chain ended rejected". Move `runs/dry-*` aside before trusting that check locally.
+- 2026-11-15 (Mitushi): round 16 PROMOTED, the loop's first (`configs/rounds/r16-corrections.yaml`: a third on-policy
+  corrections round from gate 14's refusal of `configs/systems/r14-weight.yaml`, unattended, $3.89; adapter
+  `mitushigoyal5/shipwright-lora@round-16`). Gate 16 passed 8 of 8: pass^1 0.10 to 0.15, pass^k 0.10 to 0.10, tool-call
+  errors 44% to 6%, BFCL 45 to 73, overflow 4 runs vs 2. It is the deployed system in the promotion ledger on the Hub.
+  Numbers and the full story: `WRITEUP.md`.
+- 2026-11-15 (Mitushi): the hidden split is OPENED (spent). It was run once, before round 16 existed, with the round 7
+  adapter + guards (`gate_job.py` hidden mode): base 0% to 10% (6 paired wins, 0 losses, p = 0.031), tool-call errors 56%
+  to 5%; teacher on the same tasks 30% (`teacher_runs.py --hidden-ceiling`). Round 16 has not been run on it. Do not run
+  anything else on the hidden ids: a later check needs new tasks (another tau2 domain), not the hidden split again.
+- 2026-11-15 (Ishank): the harness serving round 16 is the one it was gated with. Two later harness changes that were
+  always on are now switches, off by default: `identity_note` (`context.still_true_note`, `baseline --identity-note`,
+  `build_sft --identity-note`) and `agent_voice_check` (`patches.is_agent_voiced_reply` on top of Mitushi's always-on
+  `speaks_as_agent`, `baseline --agent-voice-check`; it changes the customer, so set it on both systems of a gate). Both
+  are recorded in `run_config.json` and `summary.json`, kept by a promotion, and the ladder's capacity step turns
+  `identity_note` on with the short policy. Turning either on for the deployed system needs a new gate.
 
 ## Keep this file correct
 
