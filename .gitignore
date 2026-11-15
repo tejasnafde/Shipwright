@@ -12,3 +12,7 @@ wandb/
 *.bin
 *.gguf
 *.log
+.switchboard/
+third_party/
+/branch-diff.md
+submission/demo_video/out/

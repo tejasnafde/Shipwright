@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "shipwright"
+version = "1.0.0"
+description = "Self-healing service for a tool-calling support agent: detect, classify, route, fix, gate, promote"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    # tau2 is installed by scripts/setup_tau2.sh (pinned commit, editable).
+    # agenttune==1.1.3 too, with --no-deps (its torch pin does not install on a CPU Mac).
+    "httpx>=0.24.0",
+    "auditkit==1.1.6",  # Lexsi AuditKIT: gate metrics (scripts/gate_eval.py)
+    "huggingface_hub>=1.0",
+    "pyyaml>=6",
+    "opentelemetry-sdk>=1.30",  # run spans, src/shipwright/observability/otel_export.py
+    "opentelemetry-exporter-otlp-proto-http>=1.30",  # only used when OTEL_EXPORTER_OTLP_ENDPOINT is set
+]
+
+[project.scripts]
+shipwright = "shipwright.loop.cli:main"   # the one command: doctor, plan, run, stage, status, show, rollback, promote
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+# control-room, the read-only demo UI (infra/space/) - no GPU, no agenttune/auditkit,
+# no secrets. Kept separate so the harness image never pulls streamlit.
+space = ["streamlit>=1.38.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shipwright"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

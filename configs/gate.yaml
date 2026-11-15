@@ -1,0 +1,52 @@
+# The deploy gate. Read by scripts/gate_eval.py; the checks are described in docs/evaluation.md.
+#
+# Frozen 2026-11-11, sized for the 20-task held-out split of configs/splits.yaml (20 tasks x k=3 = 60
+# runs per system). A change to any value here is recorded with its reason in docs/evaluation.md,
+# "Frozen values and their changes", before it is used.
+status: frozen
+frozen_on: "2026-11-11"
+
+heldout:
+  domain: retail
+  task_split: test        # tau2 retail test split. Never train on it.
+  num_tasks: 20           # the held-out ids of configs/splits.yaml; the other 20 test tasks are hidden
+k: 3                      # trials per task; pass^k uses all k
+seed: 300                 # tau2 base seed (it derives one seed per trial)
+agent_temperature: 0.0    # same as the baseline; the user simulator gives the variation
+max_steps: 100
+max_concurrency: 8
+
+# The user simulator is not set here: the round config sets it (models.user), and by hand it is the
+# required --user-model of scripts/gate_job.py and scripts/gate_eval.py.
+
+classify:
+  # AgentTune's FailureClassifier on every failed run of both systems (since 2026-11-13, see
+  # docs/evaluation.md). Not a threshold. null or gate_eval.py --no-llm: detector + rules only (free).
+  classifier_model: vertex/openai/gpt-oss-120b-maas
+
+thresholds:
+  min_valid_runs: 54              # per system, absolute floor (90% of 20 tasks x k=3)
+  min_valid_run_fraction: 0.9     # per system, of the runs asked for (tasks x k)
+  min_complete_tasks: 18          # per system, tasks with all k trials valid (pass^k needs them)
+  pass_1_max_drop: 0.0            # candidate pass^1 must not be lower (a tie passes)
+  pass_k_max_drop: 0.0            # candidate pass^k must not be lower (a tie passes)
+  target_label_min_drop: 0.05     # target-label failure rate must drop by >= 5 points (3 of 60 runs); a tie rejects
+  non_target_max_increase: 0.05   # other failure labels may rise by at most 5 points, 3 of 60 runs (null: off)
+  bfcl_max_drop_points: 2.0       # BFCL accuracy may drop by at most 2 points
+
+agenttune_gate:           # AgentTune DeploymentGate.evaluate_decision, an extra AND check (docs/pipeline/gate.md)
+  task_regression_tol: 0.0  # pass rate on paired held-out runs may not drop; min_test_samples = the valid_runs floor
+
+bfcl:
+  enabled: true
+  revision: 61fc0608cfd831fcfbbaa676ebdfef0ed963eeda   # gorilla-llm/Berkeley-Function-Calling-Leaderboard
+  categories: [simple, multiple, irrelevance]           # one call per reply (our prompted protocol)
+  limit_per_category: 100
+
+serve:
+  mode: lora              # lora: one vLLM server, adapters as LoRA modules; merged: peft merge, one server per system
+  vllm: vllm==0.32.0      # first vLLM with CohereCompass is 0.30; Cohere2ForCausalLM supports LoRA
+  max_lora_rank: 16       # scripts/train_lora.py trains r=16
+  max_model_len: 8192     # Tiny Aya context
+  gpu_memory_utilization: 0.85
+  startup_timeout_s: 1200

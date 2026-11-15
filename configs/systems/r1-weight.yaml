@@ -1,0 +1,12 @@
+# Round 1 weight-fix candidate: the round-1 LoRA adapter plus the current tool patches.
+# Edit tool_patches to match the current system (none in round 1 if the tool fix was rejected).
+name: r1-weight
+model: CohereLabs/tiny-aya-global
+adapter:
+  repo: mitushigoyal5/shipwright-lora
+  revision: round-1
+tool_patches:
+  ledger: patches/ledger.jsonl
+  ids: applied
+route: weight_fix
+targets: [invented_id, loop, tool_error_ignored, unknown_tool, malformed_args]

@@ -1,0 +1,23 @@
+# Round 7 candidate, written by the loop (gate 7).
+# Adapter: trained this round. Tool guards: on.
+# Why: context_overflow still failing with the guards on: add the teacher's corrections of the candidate's wrong turns to the data and train
+name: r7-weight
+model: CohereLabs/tiny-aya-global
+adapter:
+  repo: mitushigoyal5/shipwright-lora
+  revision: round-7
+route: weight_fix
+targets:
+- invented_id
+- tool_example_copied
+- loop
+- tool_error_ignored
+- unknown_tool
+- malformed_args
+- wrong_tool
+- bad_arguments
+- wrong_order
+- skipped_policy_step
+- invented_answer
+- premature_transfer
+tool_guards: true

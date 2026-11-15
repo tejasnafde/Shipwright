@@ -1,0 +1,16 @@
+# Docker build context for infra/docker/Dockerfile (Cloud Build only).
+.git
+.github
+.venv
+.pytest_cache
+.switchboard
+runs/
+outputs/
+checkpoints/
+third_party/
+docs/
+tests/
+**/__pycache__
+*.egg-info
+.env
+.DS_Store

@@ -1,0 +1,72 @@
+# Build the harness image and point the branch's Cloud Run Job at it (docs/setup/cloud-runs.md).
+#
+# Branch -> owner: tejas, mitushi, main -> same name; ig/main, updated-ishank -> ishank. Triggers pass nothing;
+# a manual build passes _OWNER and _SHA:
+#   gcloud --configuration=personal --project=lexsi-hackathon builds submit --region=asia-south1 \
+#     --config=infra/cloudbuild.yaml --substitutions=_OWNER=tejas,_SHA=$(git rev-parse --short HEAD) .
+#
+# Tags: harness:<owner> (moves) and harness:<sha> (fixed). The job gets the pushed digest (image@sha256:...),
+# and SHIPWRIGHT_IMAGE_DIGEST; the image has SHIPWRIGHT_GIT_SHA and SHIPWRIGHT_IMAGE (docs/ops/debugging.md).
+substitutions:
+  _OWNER: ""
+  _SHA: ""
+  _IMAGE: asia-south1-docker.pkg.dev/lexsi-hackathon/shipwright/harness
+  _REGION: asia-south1
+
+steps:
+  - id: tags
+    name: bash
+    args:
+      - -c
+      - |
+        set -eu
+        owner="${_OWNER}"
+        if [ -z "$$owner" ]; then
+          case "${BRANCH_NAME}" in
+            ig/main|updated-ishank) owner=ishank ;;
+            tejas|mitushi|main) owner="${BRANCH_NAME}" ;;
+            *) echo "no Cloud Run Job for branch '${BRANCH_NAME}'"; exit 1 ;;
+          esac
+        fi
+        sha="${_SHA}"
+        [ -n "$$sha" ] || sha="${SHORT_SHA}"
+        [ -n "$$sha" ] || sha="build-$$(echo ${BUILD_ID} | cut -c1-8)"
+        echo "$$owner" > /workspace/owner
+        echo "$$sha" > /workspace/sha
+        echo "owner=$$owner sha=$$sha"
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -eu
+        owner=$$(cat /workspace/owner); sha=$$(cat /workspace/sha)
+        docker pull "${_IMAGE}:$$owner" || true
+        full="${COMMIT_SHA}"
+        [ -n "$$full" ] || full="$$sha"
+        docker build -f infra/docker/Dockerfile --cache-from "${_IMAGE}:$$owner" \
+          --build-arg GIT_SHA="$$full" --build-arg IMAGE_TAG="${_IMAGE}:$$sha" \
+          -t "${_IMAGE}:$$owner" -t "${_IMAGE}:$$sha" .
+        docker push "${_IMAGE}:$$sha"
+        docker push "${_IMAGE}:$$owner"
+        # image@sha256:... of what was pushed: the job runs exactly this, repro.json records it
+        docker inspect --format='{{index .RepoDigests 0}}' "${_IMAGE}:$$sha" > /workspace/digest
+        cat /workspace/digest
+
+  - id: update-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -eu
+        owner=$$(cat /workspace/owner); digest=$$(cat /workspace/digest)
+        gcloud run jobs update "shipwright-$$owner" --project=lexsi-hackathon --region=${_REGION} \
+          --image="$$digest" --update-env-vars="SHIPWRIGHT_IMAGE_DIGEST=$${digest##*@}" --quiet
+
+serviceAccount: projects/lexsi-hackathon/serviceAccounts/shipwright-builder@lexsi-hackathon.iam.gserviceaccount.com
+timeout: 1800s
+options:
+  logging: CLOUD_LOGGING_ONLY

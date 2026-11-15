@@ -1,0 +1,8 @@
+# Round 1 tool-fix candidate: base model plus the round 1 tool patches.
+name: r1-tool
+model: CohereLabs/tiny-aya-global
+tool_patches:
+  ledger: patches/ledger.jsonl
+  ids: applied            # the ledger's applied set at run time; the resolved ids go into the results
+route: tool_fix
+targets: [tool_example_copied]

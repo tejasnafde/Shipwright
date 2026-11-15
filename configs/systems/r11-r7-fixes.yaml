@@ -1,0 +1,24 @@
+# Gate 11 candidate (2026-11-14): the round 7 adapter (gate 8's model, the best so far) with the tool guards and all of
+# 2026-11-14's harness fixes, which are on in the code for every system: the user-simulator leak cut and the re-ask after
+# an unmeant stop, observation version 3, a 512-token reply reserve, the "short replies" line. Per-turn reminders off,
+# so the only change against gate 8 is the harness. No training.
+name: r11-r7-fixes
+model: CohereLabs/tiny-aya-global
+adapter:
+  repo: mitushigoyal5/shipwright-lora
+  revision: round-7
+route: weight_fix
+targets:
+- invented_id
+- tool_example_copied
+- loop
+- tool_error_ignored
+- unknown_tool
+- malformed_args
+- wrong_tool
+- bad_arguments
+- wrong_order
+- skipped_policy_step
+- invented_answer
+- premature_transfer
+tool_guards: true
