@@ -113,3 +113,14 @@ def test_ceiling_runs_the_heldout_tasks_on_the_test_split():
     assert len(task_ids) == 20
     argv = teacher_runs.build_baseline_argv(options, task_ids)
     assert argv[argv.index("--task-split") + 1] == "test"
+
+
+def test_hidden_ceiling_opens_exactly_the_hidden_tasks_and_keeps_nothing_for_training():
+    from shipwright.heal import splits
+
+    options = teacher_runs.parse_args(["--teacher-model", "t", "--user-model", "u", "--hidden-ceiling"])
+    task_ids = teacher_runs.resolve_task_ids(options)
+    assert task_ids == splits.hidden_ids() and not set(task_ids) & set(splits.heldout_ids())
+    argv = teacher_runs.build_baseline_argv(options, task_ids)
+    assert argv[argv.index("--task-split") + 1] == "test" and "--open-hidden" in argv
+    assert teacher_runs.is_ceiling_run(options)

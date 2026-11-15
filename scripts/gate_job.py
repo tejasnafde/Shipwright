@@ -45,6 +45,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--runs-only", action="store_true",
                         help="the job runs both systems and pushes the runs; decide afterwards where Vertex tokens refresh"
                         " (gate_eval.py --current-run ... --reclassify --systems-from .../gate_inputs.json --push)")
+    parser.add_argument("--hidden", action="store_true",
+                        help="no gate: both systems on the hidden tasks (opened once, for the final report)")
     parser.add_argument("--task-ids", nargs="*", default=None, help="with --train-eval")
     parser.add_argument("--trials", type=int, default=1, help="with --train-eval")
     parser.add_argument("--flavor", default="a10g-large")
@@ -65,6 +67,8 @@ def job_from_options(options: argparse.Namespace) -> jobs.GateJob:
         mode = "train_eval"
     if options.bfcl_screen:
         mode = "bfcl_screen"
+    if options.hidden:
+        mode = "hidden"
     return jobs.GateJob(round_number=options.round, current=options.current.resolve(),
                         candidate=options.candidate.resolve(), user_model=options.user_model, flavor=options.flavor,
                         timeout=options.timeout, mode=mode, task_ids=list(options.task_ids or []), trials=options.trials,
@@ -85,6 +89,10 @@ def print_plan(job: jobs.GateJob, options: argparse.Namespace) -> bool:
         total_runs = len(job.task_ids) * job.trials
     elif job.mode == "bfcl_screen":
         total_runs = 0
+    elif job.mode == "hidden":
+        from shipwright.heal import splits
+
+        total_runs = 2 * len(splits.hidden_ids()) * gate_config["k"]
     else:
         total_runs = 2 * gate_config["heldout"]["num_tasks"] * gate_config["k"]
     user_on_vertex = vertex.is_vertex_model(job.user_model)

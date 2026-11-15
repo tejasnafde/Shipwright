@@ -66,7 +66,7 @@ class GateJob:
     user_model: str
     flavor: str = "a10g-large"
     timeout: str = "60m"                # never shorter: a gate needs about 40 minutes of running time (AGENTS.md, gate 8)
-    mode: str = "gate"                  # gate | bfcl_screen | train_eval
+    mode: str = "gate"                  # gate | bfcl_screen | train_eval | hidden
     task_ids: list[str] = field(default_factory=list)  # train_eval only
     trials: int = 1                     # train_eval only
     runs_repo: str = cloud.RUNS_REPO
@@ -78,7 +78,7 @@ class GateJob:
 
     def results_prefix(self, candidate_name: str) -> str:
         """Where gate_eval.py pushes the results in the runs dataset."""
-        suffix = {"gate": "", "bfcl_screen": "-bfcl", "train_eval": "-train"}[self.mode]
+        suffix = {"gate": "", "bfcl_screen": "-bfcl", "train_eval": "-train", "hidden": "-hidden"}[self.mode]
         return f"gate/round-{self.round_number}/{candidate_name}{suffix}"
 
 
@@ -137,6 +137,8 @@ def gate_script_arguments(job: GateJob, code_bundle_path: str) -> list[str]:
         arguments += ["--train-eval", "--trials", str(job.trials), "--task-ids", *job.task_ids]
     if job.mode == "bfcl_screen":
         arguments.append("--bfcl-screen")
+    if job.mode == "hidden":
+        arguments.append("--hidden")
     if job.mode == "gate" and job.runs_only:
         arguments.append("--runs-only")
     return arguments

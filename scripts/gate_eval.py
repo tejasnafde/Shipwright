@@ -100,6 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
         " failures of the deployed or latest candidate on train tasks are the next round's corrective data",
     )
     parser.add_argument(
+        "--hidden", action="store_true",
+        help="no gate: run both systems on the hidden tasks of configs/splits.yaml (k from the gate config) and push"
+        " the traces. The hidden set is opened once, for the final report; no decision is made on it",
+    )
+    parser.add_argument(
         "--bfcl-screen", action="store_true",
         help="no gate: serve only the candidate, run only BFCL (the gate's own 300 samples) and push the score. About 5"
         " minutes: it tells whether the BFCL check can pass before the 30 minute gate is paid for",
@@ -202,8 +207,14 @@ def baseline_cmd(
     from shipwright.heal.systems import agent_model_id, baseline_args
 
     held_out = gate_config["heldout"]
+    hidden_run = getattr(gate_options, "hidden", False)
     if gate_options.train_eval:
         task_split, task_ids, trials = "train", gate_options.task_ids, gate_options.trials
+    elif hidden_run:
+        from shipwright.heal import splits
+
+        splits_config = splits.load()
+        task_split, task_ids, trials = splits_config["hidden"]["task_split"], splits.hidden_ids(splits_config), gate_config["k"]
     else:
         task_split = held_out["task_split"]
         task_ids = heldout_task_ids(gate_config, gate_options.num_tasks)
@@ -222,6 +233,8 @@ def baseline_cmd(
         "--output-dir", str(run_directory),
         *baseline_args(system, patch_ids, ROOT),
     ]
+    if hidden_run:
+        command.append("--open-hidden")
     if gate_options.local_dry_run:
         command.append("--dry-run")
     else:
@@ -536,7 +549,7 @@ def run_server_plan(
                         log_path=run_directory / "baseline.log",
                     )
                 bfcl_result = None
-                if not gate_options.train_eval:
+                if not gate_options.train_eval and not getattr(gate_options, "hidden", False):
                     try:
                         bfcl_result = run_bfcl(gate_config, system, run_directory, gate_options)
                     except Exception as bfcl_error:  # noqa: BLE001 - recorded; the gate rejects without BFCL
@@ -807,7 +820,7 @@ def evaluate_systems(gate_options: argparse.Namespace) -> int:
             print(f"serving or running failed: {serve_error}", file=sys.stderr)
             status_by_system = {"_error": str(serve_error)[:1000]}
 
-    if gate_options.train_eval or gate_options.bfcl_screen or gate_options.runs_only:
+    if gate_options.train_eval or gate_options.bfcl_screen or gate_options.runs_only or gate_options.hidden:
         (output_directory / "run_status.json").write_text(json.dumps(status_by_system, indent=1, default=str))
         if gate_options.in_job and not gate_options.no_push:
             suffix = ""
@@ -815,6 +828,8 @@ def evaluate_systems(gate_options: argparse.Namespace) -> int:
                 suffix = "-bfcl"
             if gate_options.train_eval:
                 suffix = "-train"
+            if gate_options.hidden:
+                suffix = "-hidden"
             push(output_directory, gate_options, None, f"{systems['candidate']['name']}{suffix}")
         print(f"\nWrote {output_directory}")
         return 0
