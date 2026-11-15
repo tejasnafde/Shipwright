@@ -21,8 +21,10 @@ own run files; nothing is staged. The words are in `narration.md`; `build_demo.p
   hidden. The app is recorded at 1536x864 and scaled to 1080p, so its text reads at 125%.
 - Each scene lasts exactly as long as its narration, plus a short lead-in and tail, with fades between scenes.
 - Subtitles (`out/final_video.srt`) come from the same narration, one cue per sentence.
-- The default voice is macOS `say` (Samantha). For a better result record your own takes as `<scene>.wav` and pass
-  `--voiceover-dir`, or download a premium system voice (System Settings, Accessibility, Spoken Content) and pass
-  `--voice "Ava (Premium)"`. `--music <file>` mixes a background track quietly under the voice.
+- The voice is Google Cloud Text-to-Speech, Chirp 3 HD (`make_voiceover.py`, default `en-US-Chirp3-HD-Charon`;
+  `--samples Charon Aoede Kore` writes the title line in several voices to compare). Build with
+  `--voiceover-dir submission/demo_video/out/voice`. Without takes, `build_demo.py` falls back to macOS `say`; a human
+  recording per scene (`<scene>.wav`) works the same way. `--music <file>` mixes a background track quietly under the
+  voice.
 - Any claim added to the narration must be visible in the control room or in `submission/WRITEUP.md`, and checkable
   against the run files (`python scripts/reproduce.py`).

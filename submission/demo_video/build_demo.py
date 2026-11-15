@@ -85,7 +85,7 @@ def make_voice(scene: str, text: str, options: argparse.Namespace, work: Path) -
         for suffix in (".wav", ".mp3", ".m4a", ".aiff"):
             take = Path(options.voiceover_dir) / f"{scene}{suffix}"
             if take.exists():
-                run_ffmpeg("-i", str(take), "-ar", "48000", "-ac", "2", str(wav))
+                run_ffmpeg("-i", str(take), "-ar", "48000", "-ac", "2", "-af", "loudnorm=I=-16:TP=-1.5", str(wav))
                 return wav
     aiff = work / f"{scene}.aiff"
     subprocess.run(["say", "-v", options.voice, "-r", str(options.rate), "-o", str(aiff), text], check=True)
