@@ -27,6 +27,8 @@ The job is **tau2-bench retail**, a public benchmark: a simulated customer, 16 s
 
 ## The loop
 
+![The self-healing loop, with round 16's numbers and the kit that runs each step](img/loop-light.svg)
+
 1. **Run** the student on training tasks and log every turn, including the raw model output.
 2. **Detect** failures: tau2's grader plus AgentTune's `FailureDetector`.
 3. **Classify** each failure (rules first, then AgentTune's `FailureClassifier`) and **route** it: a tool problem gets a tool fix, a model problem gets a weight fix, and an environment problem (a buggy simulated customer) gets no fix and is never trained on.

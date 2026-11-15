@@ -138,27 +138,12 @@ The loop also caught faults in its own environment: fixing two simulator bugs ra
 
 **Use case.** An online shop's first-line support: look up orders, cancel or modify pending orders, return or exchange delivered ones, and update addresses, all under a written policy. The policy requires authenticating first, taking ids only from the customer or the tools, getting an explicit "yes" before any change, and transferring to a human only when no tool can help. A 3B model that does this reliably runs on one small GPU at a fraction of an API model's cost.
 
-**The loop.** One round, start to finish:
+**The loop.** One round, start to finish, with round 16's numbers and the kit that runs each step (animated version on the [HF Space](https://huggingface.co/spaces/mitushigoyal5/shipwright); source `docs/make_loop_diagram.py`):
 
-```mermaid
-flowchart TD
-  A["Task pool: tau2-bench retail (train split)"] --> B["01 Run: Tiny Aya + LoRA + guards"]
-  B --> C["02 Log: traces.jsonl + OTel spans"]
-  C --> D["03 Detect: AgentTune FailureDetector + task reward"]
-  D --> E["04 Classify: rules first, then AgentTune FailureClassifier"]
-  E --> F{"05 Route"}
-  F -->|tool fault| G["Patch the tool / guard: ledger + rollback"]
-  F -->|model fault| H["Teacher replay + corrections of the student's own wrong turns"]
-  F -->|environment fault| J["Retry or skip: never training data"]
-  G -. unfixed failures .-> H
-  H --> K["06 Curate: build_sft.py, Tiny Aya's own prompt format"]
-  K --> L["07 Train: LoRA via AgentTune create_distill_trainer"]
-  L --> M{"08 Gate: 8 checks, all required"}
-  M -->|promote| N["Adapter live, tool patch kept"]
-  M -->|reject| O["Old system keeps serving"]
-  N --> A
-  O --> A
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/loop-dark.svg">
+  <img src="docs/img/loop-light.svg" alt="The self-healing loop. 1 Run Tiny Aya on 74 train tasks. 2 Detect failures (tau2 grader + AgentTune FailureDetector). 3 Classify (rules, then AgentTune FailureClassifier). 4 Route by root cause: tool fault to guards and tool text with a person approving; model fault to the weight fix; environment fault to no fix, never trained on. 5 Correct: the teacher fixes each wrong turn (235 corrections). 6 Train with AgentTune's distill trainer (789 examples). 7 Gate: 8 checks from AuditKIT and AgentTune. Promote to the ledger with rollback (once, round 16) or refuse and keep the old model (11 times). Round 16: 2 h 24 min, $3.89, no person in the loop." width="100%">
+</picture>
 
 1. **Run.** Tiny Aya plays the agent in a tau2 task. Tiny Aya has no native tool calling, so tools are described in the prompt and the model answers with one JSON block per call (`src/shipwright/llm/prompted_tools.py`). Training data uses exactly this format.
 2. **Log.** Every turn's raw model output is kept, not just the parsed call; otherwise a "reasoned its way to the wrong conclusion" failure is unclassifiable afterwards. OpenTelemetry spans are built from the same trace.

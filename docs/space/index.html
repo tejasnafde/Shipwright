@@ -101,6 +101,10 @@ footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line);
   <p>The benchmark is <b>tau2-bench retail</b>: a simulated customer, 16 shop tools, a written policy, and a grader that checks whether the shop database ends up right, not whether the reply sounded right.</p>
 
   <h2>The loop</h2>
+  <figure>
+    <img src="img/loop-animated.svg" alt="The self-healing loop: run, detect, classify, route by root cause (tool fix, weight fix, or no fix for environment faults), correct, train, gate, then promote or refuse and run again. Round 16: 2 h 24 min, $3.89, no person in the loop.">
+    <figcaption>Round 16, the first unattended promotion. Badges show which kit runs each step.</figcaption>
+  </figure>
   <ol class="steps">
     <li><b>Run</b> the student on training tasks; every turn's raw output is logged.</li>
     <li><b>Detect</b> failures with tau2's grader and AgentTune's <code>FailureDetector</code>.</li>
