@@ -107,7 +107,7 @@ def gates(t):
     ax.set_ylim(0, 30)
     ax.set_yticks([0, 10, 20, 30], ["0", "10", "20", "30%"])
     title(fig, t, "Eleven refusals, then an unattended promotion",
-          "Candidate task success per gate. Hollow: refused by our 8-check gate (AgentTune's own gate approved 4 of them).")
+          "Candidate task success per gate. Hollow: refused by our 8-check gate (AgentTune's gate alone would have approved 10 of the 11).")
     fig.subplots_adjust(left=0.06, right=0.98, top=0.78, bottom=0.12)
     return fig
 
