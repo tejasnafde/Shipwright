@@ -45,21 +45,46 @@ def load_gold(results_path: Path) -> dict[str, list[tuple[str, str]]]:
 
 
 def runs(path: Path):
-    """(task id, passed, messages, guard-blocked attempts) for each conversation in a run dir or results.json."""
+    """(task id, passed, messages, guard-blocked attempts, overflowed) per conversation in a run dir or results.json.
+
+    Overflowed: the agent's history was cut to fit the 8K window at some turn (our harness only)."""
     path = Path(path)
     if path.is_dir():
         for line in (path / "traces.jsonl").read_text().splitlines():
             if line.strip():
                 trace = json.loads(line)
-                blocked = sum(len(turn.get("guard_rejections") or []) for turn in trace["agent_turns"])
-                yield str(trace["task_id"]), trace["passed"] in (True, "True"), trace["messages"], blocked
+                turns = trace["agent_turns"]
+                blocked = sum(len(turn.get("guard_rejections") or []) for turn in turns)
+                overflowed = any(turn.get("context_trimmed") or turn.get("context_dropped_messages") for turn in turns)
+                yield str(trace["task_id"]), trace["passed"] in (True, "True"), trace["messages"], blocked, overflowed
     else:
         for simulation in json.loads(path.read_text())["simulations"]:
             reward = (simulation.get("reward_info") or {}).get("reward") or 0.0
-            yield str(simulation["task_id"]), reward >= 0.999, simulation["messages"], 0
+            yield str(simulation["task_id"]), reward >= 0.999, simulation["messages"], 0, False
 
 
-def measure(passed: bool, messages: list[dict], gold: list[tuple[str, str]], blocked: int = 0) -> dict:
+def auditkit_scores(messages: list[dict]) -> dict:
+    """AuditKIT's own reference-free trajectory metrics, as an independent check on ours.
+
+    RedundantToolCalls: share of calls that exactly repeat an earlier call (any time, unlike ours).
+    AgentLoopDetection: 1.0 if no loop (a call made 3+ times, near-identical replies, or a call cycle)."""
+    from auditkit.metrics.agent import AgentLoopDetection, RedundantToolCalls
+    from auditkit.sample import Sample
+
+    turns = [[{"name": call["name"], "arguments": call.get("arguments") or {}} for call in message["tool_calls"]]
+             for message in messages if message["role"] == "assistant" and message.get("tool_calls")]
+    context = {"trace": {"tool_calls": turns,
+                         "messages": [{"role": message["role"], "content": message.get("content") or ""}
+                                      for message in messages]}}
+    sample = Sample(input="")
+    redundant = RedundantToolCalls().score(sample, "", context)
+    loop = AgentLoopDetection().score(sample, "", context)
+    return {"auditkit_redundant": redundant[0].value if redundant else 0.0,
+            "auditkit_loop_free": loop[0].value if loop else 1.0}
+
+
+def measure(passed: bool, messages: list[dict], gold: list[tuple[str, str]], blocked: int = 0,
+            overflowed: bool = False) -> dict:
     calls, errored = [], {}
     for message in messages:
         if message["role"] == "assistant" and message.get("tool_calls"):
@@ -83,8 +108,9 @@ def measure(passed: bool, messages: list[dict], gold: list[tuple[str, str]], blo
     return {"passed": passed, "calls": count, "blocked": blocked, "attempts": attempts, "gold": len(gold),
             "on_path": on_path, "redundant": redundant, "failed": failed,
             "precision": on_path / count if count else 0.0, "recall": on_path / max(len(gold), 1),
-            "prompt_tokens": prompt_tokens,
-            "efficient": passed and not (redundant or failed or blocked) and attempts <= 1.5 * len(gold)}
+            "prompt_tokens": prompt_tokens, "messages": len(messages), "overflowed": overflowed,
+            "efficient": passed and not (redundant or failed or blocked) and attempts <= 1.5 * len(gold),
+            **auditkit_scores(messages)}
 
 
 def summarise(name: str, rows: list[dict]) -> dict:
@@ -100,7 +126,9 @@ def summarise(name: str, rows: list[dict]) -> dict:
             if attempts else 0.0,
             "efficient": mean("efficient"), "efficient_of_solved": mean("efficient", solved),
             "prompt_tokens": mean("prompt_tokens"),
-            "prompt_tokens_per_solve": sum(row["prompt_tokens"] for row in rows) / len(solved) if solved else None}
+            "prompt_tokens_per_solve": sum(row["prompt_tokens"] for row in rows) / len(solved) if solved else None,
+            "messages": mean("messages"), "overflowed": mean("overflowed"),
+            "auditkit_redundant": mean("auditkit_redundant"), "auditkit_loop_free": mean("auditkit_loop_free")}
 
 
 def main() -> None:
@@ -115,14 +143,15 @@ def main() -> None:
     summaries = []
     for spec in args.run:
         name, _, path = spec.partition("=")
-        summaries.append(summarise(name, [measure(passed, messages, gold[task], blocked)
-                                          for task, passed, messages, blocked in runs(Path(path))]))
+        summaries.append(summarise(name, [measure(passed, messages, gold[task], blocked, overflowed)
+                                          for task, passed, messages, blocked, overflowed in runs(Path(path))]))
     print(f"{'system':24s} {'pass^1':>6s} {'excess':>6s} {'prec':>5s} {'recall':>6s} {'wasted':>6s} "
-          f"{'blocked':>7s} {'kTok/solve':>10s}")
+          f"{'blocked':>7s} {'kTok/solve':>10s} {'msgs':>5s} {'ovfl':>5s} {'AK-red':>6s} {'AK-noloop':>9s}")
     for s in summaries:
         per_solve = f"{s['prompt_tokens_per_solve'] / 1000:.0f}" if s["prompt_tokens_per_solve"] else "-"
         print(f"{s['system']:24s} {s['pass_1']:6.1%} {s['excess']:6.2f} {s['precision']:5.0%} {s['recall']:6.0%} "
-              f"{s['wasted_share']:6.0%} {s['blocked']:7.2f} {per_solve:>10s}")
+              f"{s['wasted_share']:6.0%} {s['blocked']:7.2f} {per_solve:>10s} {s['messages']:5.1f} "
+              f"{s['overflowed']:5.0%} {s['auditkit_redundant']:6.1%} {s['auditkit_loop_free']:9.0%}")
     if args.output:
         Path(args.output).write_text(json.dumps(summaries, indent=1))
 

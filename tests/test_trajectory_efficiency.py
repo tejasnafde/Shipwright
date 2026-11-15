@@ -44,6 +44,14 @@ def test_repeat_failure_and_guard_block_are_waste():
     assert summary["wasted_share"] == 4 / 5
 
 
+def test_auditkit_cross_check_counts_exact_repeats():
+    messages = [call("a", "get_order_details", order_id="#W1"), result("a"),
+                call("b", "get_order_details", order_id="#W1"), result("b")]
+    row = te.measure(False, messages, GOLD)
+    assert row["auditkit_redundant"] == 0.5
+    assert row["auditkit_loop_free"] in (0.0, 1.0)
+
+
 def test_a_successful_change_reopens_lookups():
     messages = [call("a", "get_order_details", order_id="#W1"), result("a"),
                 call("b", "cancel_pending_order", order_id="#W1", reason="no longer needed"), result("b"),

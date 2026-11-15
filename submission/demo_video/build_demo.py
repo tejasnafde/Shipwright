@@ -241,7 +241,7 @@ def scene_corrections(director: Director, duration: float) -> None:
     director.clear()
     director.scroll_to("On-policy corrections")
     director.highlight("Corrections kept")
-    director.caption("59 corrections for $0.12 of teacher time; only the corrected turn is trained")
+    director.caption("59 new corrections this round ($0.12), 235 across all three rounds; only the corrected turn is trained")
     pace(duration * 0.27)
     director.clear()
 
