@@ -43,7 +43,7 @@ The gate refused 11 times before it said yes.
 
 ![Candidate success per gate](img/gates-light.png)
 
-Each refusal had a reason we could trace: the first adapter forgot general tool calling (BFCL fell 43 → 35), later ones invented new failure kinds, and several overflowed Tiny Aya's 8,192-token window because the student kept working where the base gives up. AgentTune's own `DeploymentGate`, which only asks "is task success not worse?", approved four candidates that ours refused. A loop that always approves its own updates isn't self-healing; it's retraining on a schedule.
+Each refusal had a reason we could trace: the first adapter forgot general tool calling (BFCL fell 43 → 35), later ones invented new failure kinds, and several overflowed Tiny Aya's 8,192-token window because the student kept working where the base gives up. AgentTune's own `DeploymentGate`, which only asks "is task success not worse?", would have approved ten of the eleven candidates ours refused. A loop that always approves its own updates isn't self-healing; it's retraining on a schedule.
 
 ## What the student stopped doing
 

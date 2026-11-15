@@ -228,17 +228,18 @@ class Correction:
     teacher_said: str
 
 
+# In order of how much harm the mistake does to a customer (the corrections view lists them in this order).
 GUARD_RULE_WORDS = {
-    "repeated_call": "asked for the same thing again, with nothing changed since",
-    "lookup_streak": "kept looking things up without answering the customer",
-    "not_authenticated": "acted before identifying the customer",
     "made_up_id": "used an id nobody had given it",
-    "wrong_order_status": "used a tool that does not fit the order's status",
-    "repeated_failed_call": "repeated a call that had already failed",
+    "not_authenticated": "acted before identifying the customer",
     "no_confirmation": "made a change without the customer's explicit yes",
-    "early_transfer": "handed off to a human before trying",
+    "wrong_order_status": "used a tool that does not fit the order's status",
     "exchange_other_product_type": "exchanged for a different kind of product",
     "second_change_to_one_order": "changed the same order twice",
+    "early_transfer": "handed off to a human before trying",
+    "repeated_failed_call": "repeated a call that had already failed",
+    "lookup_streak": "kept looking things up without answering the customer",
+    "repeated_call": "asked for the same thing again, with nothing changed since",
 }
 
 
@@ -268,8 +269,8 @@ def _paired_corrections(corrections_dir: Path, traces: list[dict]) -> list[Corre
         paired.append(Correction(task_id=str(trace.get("task_id")), rule=rejection.get("rule") or "",
                                  customer_said=customer, student_tried=rejection.get("raw_text") or "",
                                  teacher_said=teacher_said))
-    rule_counts = Counter(correction.rule for correction in paired)
-    return sorted(paired, key=lambda correction: rule_counts[correction.rule])  # the rarer kinds of mistake first
+    order = list(GUARD_RULE_WORDS)  # the most serious kinds of mistake first
+    return sorted(paired, key=lambda correction: order.index(correction.rule) if correction.rule in order else len(order))
 
 
 class RoundData:

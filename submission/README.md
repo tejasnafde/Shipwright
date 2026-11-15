@@ -10,6 +10,7 @@ The service itself is documented in the repository's `README.md` and `docs/`; no
 | `img/` | charts and the loop diagram used by the write-up, the blog and the Space |
 | `make_charts.py`, `make_loop_diagram.py` | regenerate `img/` from the published numbers (`pip install matplotlib`) |
 | `space/` | the results page published as the Hugging Face Space `mitushigoyal5/shipwright` |
+| `demo_video/` | the demo video: storyboard, narration, and `build_demo.py`, which records the real control room and assembles the MP4 |
 | `analysis/tool-fix-proposer.md` | a study: does the loop's tool-fix proposer find the guard fixes that moved the numbers? |
 
 Every headline number in the write-up is checked against the public run files by `python scripts/reproduce.py`.

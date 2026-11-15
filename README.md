@@ -17,11 +17,11 @@ and redeploys only when a frozen gate measures the new agent as better on tasks 
 </div>
 
 > [!IMPORTANT]
-> **The loop promoted its first candidate with no person involved.** One command, one $4 cap, 2 h 24 min: the
-> refused candidate ran the training tasks, its failures were classified, a teacher corrected each wrong turn, a new
-> adapter trained, and it passed all 8 gate checks. Invented order ids **40 → 0**, tool-call errors **44% → 6%**,
-> general tool calling (BFCL) **45 → 73**, task success **10% → 15%**, for **$0.015 per resolved ticket** on a 3.35B
-> model. It is the deployed system today.
+> **The agent healed itself with no person in the loop.** One command, one $4 cap, 2 h 24 min: the refused
+> candidate ran the training tasks, its failures were classified, a teacher corrected each wrong turn, a new adapter
+> trained, and it passed all 8 gate checks. The result is **7× fewer failing tool calls** (44% → 6%), tickets
+> resolved up from 10% to 15%, general tool use up from 45 to 73 on BFCL, and **$0.015 per resolved ticket, 2.5×
+> cheaper than the teacher model's API**, on a 3.35B model. It is the deployed system today.
 
 ## What it does
 
