@@ -230,8 +230,15 @@ def main() -> int:
     parser.add_argument("--per-rule-limit", type=int, default=2, help="wrong turns used per rule and run")
     parser.add_argument("--output-dir", type=Path, default=None)
     options = parser.parse_args()
+    # The student's view is rebuilt the way the candidate saw it: a candidate that served the short policy is corrected
+    # on the short policy (prompts.json keeps tau2's own text, converted at request time).
+    run_config_path = options.failures / "run_config.json"
+    if run_config_path.exists() and json.loads(run_config_path.read_text()).get("condensed_policy"):
+        from shipwright.llm import prompted_tools
 
-    traces = [json.loads(line) for line in (options.failures / "traces.jsonl").read_text().splitlines() if line.strip()]
+        prompted_tools.set_condensed_policy(True)
+
+    traces =[json.loads(line) for line in (options.failures / "traces.jsonl").read_text().splitlines() if line.strip()]
     prompts = json.loads((options.failures / "prompts.json").read_text())
     only_prompt = next(iter(prompts.values()))
 

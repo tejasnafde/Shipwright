@@ -23,6 +23,7 @@ import json
 from collections.abc import Iterable
 
 from shipwright.llm.context import (
+    AUTHENTICATION_RESULT,
     CONTEXT_LIMIT,
     OMITTED_NOTE,
     REPLY_TOKENS,
@@ -31,7 +32,7 @@ from shipwright.llm.context import (
     fit_messages,
     prompt_budget,
 )
-from shipwright.llm.prompted_tools import convert_messages
+from shipwright.llm.prompted_tools import condensed_system, convert_messages
 
 
 def trace_to_openai(messages: list[dict]) -> list[dict]:
@@ -179,6 +180,23 @@ def filter_records(
         else:
             kept_records.append(record)
     return kept_records, dropped_counts
+
+
+def lost_authentication(messages: list[dict]) -> bool:
+    """True when a pre-rendered row's prompt had old turns dropped and nothing in what is left says who the customer is.
+    Round 13: 52 of 176 correction rows were the teacher's reply to such a view, and many asked an identified customer
+    to authenticate again (context.still_true_note keeps the user id in new views)."""
+    prompt = " ".join(message["content"] for message in messages[:-1] if message["role"] != "system")
+    if OMITTED_NOTE not in prompt:
+        return False
+    return "authenticated as user id" not in prompt and not AUTHENTICATION_RESULT.search(prompt)
+
+
+def with_condensed_policy(messages: list[dict]) -> list[dict]:
+    """A pre-rendered row with its system prompt's policy condensed (prompted_tools.CONDENSED_POLICY), so a row built
+    before the switch trains the same prompt the candidate serves with."""
+    return [{**message, "content": condensed_system(message["content"])} if message["role"] == "system" else message
+            for message in messages]
 
 
 def stats(records: list[dict], dropped: dict, extra: dict | None = None) -> dict:

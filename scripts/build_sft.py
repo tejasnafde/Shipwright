@@ -76,6 +76,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--max-tokens", type=int, default=context.CONTEXT_LIMIT)
     parser.add_argument(
+        "--condensed-policy",
+        action="store_true",
+        help="render every row with the short retail policy (prompted_tools.CONDENSED_POLICY): for a candidate that "
+        "serves with condensed_policy: true",
+    )
+    parser.add_argument(
         "--estimate-tokens",
         action="store_true",
         help="count tokens with the chars estimate (no tokenizer download)",
@@ -223,10 +229,14 @@ def collect(
     return records
 
 
-def load_general_replay(path: Path, max_tokens: int) -> tuple[list[dict], dict]:
-    """The general function-calling examples with the token counts the data statistics and the length filter need."""
+def load_general_replay(path: Path, max_tokens: int, condensed_policy: bool = False) -> tuple[list[dict], dict]:
+    """Pre-rendered rows (general function-calling examples, corrections) with the token counts the data statistics and
+    the length filter need. ``condensed_policy`` rewrites a retail system prompt to the short policy (a BFCL row has no
+    policy block and stays as it is)."""
     records = read_json_lines(path)
     for record in records:
+        if condensed_policy:
+            record["messages"] = sft_data.with_condensed_policy(record["messages"])
         record["tokens"] = sft_data.count_messages(record["messages"])
         record["reply_tokens_max"] = sft_data.longest_reply_tokens(record["messages"])
     return sft_data.filter_records(records, max_tokens)
@@ -299,6 +309,11 @@ def main(argv: list[str] | None = None) -> int:
 
     token_counting_method = choose_token_counting_method(build_options)
     notes: list[str] = [f"token counting: {token_counting_method}"]
+    from shipwright.llm import prompted_tools
+
+    prompted_tools.set_condensed_policy(build_options.condensed_policy)
+    if build_options.condensed_policy:
+        notes.append("policy: condensed (prompted_tools.CONDENSED_POLICY)")
     build_options.patch_rows = None
     if build_options.tool_patches:
         patch_text = build_options.tool_patches.read_text()
@@ -329,7 +344,8 @@ def main(argv: list[str] | None = None) -> int:
 
     general_replay_count = 0
     if build_options.general_replay:
-        general_records, general_dropped = load_general_replay(build_options.general_replay, build_options.max_tokens)
+        general_records, general_dropped = load_general_replay(build_options.general_replay, build_options.max_tokens,
+                                                               build_options.condensed_policy)
         kept_records = kept_records + general_records
         general_replay_count = len(general_records)
         for reason, count in general_dropped.items():
@@ -338,7 +354,11 @@ def main(argv: list[str] | None = None) -> int:
 
     corrections_count = 0
     if build_options.corrections:
-        correction_records, correction_dropped = load_general_replay(build_options.corrections, build_options.max_tokens)
+        correction_records, correction_dropped = load_general_replay(build_options.corrections, build_options.max_tokens,
+                                                                     build_options.condensed_policy)
+        lost = [record for record in correction_records if sft_data.lost_authentication(record["messages"])]
+        correction_records = [record for record in correction_records if not sft_data.lost_authentication(record["messages"])]
+        correction_dropped["lost_authentication"] = len(lost)
         kept_records = kept_records + correction_records
         corrections_count = len(correction_records)
         for reason, count in correction_dropped.items():
