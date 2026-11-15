@@ -2,17 +2,19 @@
 
 **One-line claim.** A 3.35B Tiny Aya support agent on tau2-bench retail, with a self-healing loop that sorts each failure into a tool fix, a weight fix or no fix, and only redeploys when an AuditKIT/AgentTune gate measures an improvement. Across three gates the best adapter solves 17% of held-out tasks against 10% for the base model (13 paired wins, 0 losses) and cuts tool-call errors from 60% to 8%. The gate has refused every candidate so far, each time for a reason we could trace and fix.
 
-> DRAFT, 2026-11-15. Cells marked **PENDING** wait for the hidden split.
+> 2026-11-15.
 
 **Base model + method:** Tiny Aya Global 3.35B (CC-BY-NC-4.0) with a LoRA adapter (r 16), trained by an automatic detect → classify → route → distil → gate loop (AgentTune + AuditKIT) on DeepSeek V4.1 Flash teacher trajectories and on-policy corrections, plus runtime tool-call guards.
 
 **Headline, before → after (same 20 held-out tau2 retail tasks × 3 trials, pooled over 3 gates):** task success **10.0% → 17.2%** (13 paired wins, 0 losses); tool-call errors **60% → 8%**; BFCL **43 → 71**.
 
+**On the hidden split (20 tasks never used for any decision, opened once):** task success **0% → 10%** (6 paired wins, 0 losses, McNemar p = 0.031); tool-call errors **56% → 5%**.
+
 **How to read these numbers.** tau2-bench retail is a public benchmark we did not write: multi-turn, a simulated customer, a written policy, and a grader that checks the final shop database. Its tasks, grader and customer are fixed by others, so the model cannot learn the test's format from our own data. On it, the strongest teacher we tried (DeepSeek V4.1 Flash) solves 40% and base Tiny Aya 10%. The student's 17% is about a quarter of the way from base to teacher. A self-built task set, where tasks, training data and grader come from the same authors, can reach 90%+; the two kinds of number are not comparable.
 
 > **For judges: one minute**
 > - **What:** a 3.35B support agent that finds its own failures, decides whether each is a tool, model or environment fault, fixes it, and only redeploys if an 8-check gate measures an improvement.
-> - **Result:** task success 10% → 17% over 180 paired conversations (teacher 40%, so 24% of the gap closed); tool-call errors 60% → 8% (5% for the round 13 adapter); invented ids 35 → 2; BFCL 43 → 72, so no forgetting.
+> - **Result:** task success 10% → 17% over 180 paired conversations (teacher 40%, so 24% of the gap closed), and 0% → 10% on 20 never-used tasks (6 wins, 0 losses, p = 0.031); tool-call errors 60% → 8% (5% for the round 13 adapter); invented ids 35 → 2; BFCL 43 → 72, so no forgetting.
 > - **The gate:** AgentTune's own `DeploymentGate` approved our candidate in all four measured gates, so by AgentTune's definition the loop closed at gate 8. Our stricter 8-check gate refused every time, on a failure kind the base never shows: conversations that overflow the 8K window, because the student keeps working where the base gives up. Guards for its four causes cut those runs from 13 to 7 (gate 14); the gate allows 3.
 > - **Benchmark:** public tau2-bench retail, where the teacher itself solves only 40%.
 > - **Also found:** three bugs in the customer simulator; fixing two of them raised the teacher's own score from 32% to 40%.
@@ -38,7 +40,7 @@ Failures are detected and classified with AgentTune's `FailureDetector` and `Fai
 
 A candidate is deployed only if it passes all 8 checks of a frozen gate: AuditKIT pass^1 and pass^k on 20 held-out tasks × 3 trials, target and non-target failure rates, BFCL, and AgentTune's `DeploymentGate`. A further 20 tasks stay hidden for the final report. A gate that can say no is the point: a system that always approves its own updates isn't self-healing, it's retraining on a schedule.
 
-**Headline (the round 7 adapter + guards, gates 8, 11 and 12, 180 paired held-out conversations):** task success **10.0% to 17.2%**. The candidate solved 13 conversations the base failed and lost none (McNemar p = 0.0002, optimistic: the pairs share 20 tasks). Tool-call errors fell **60% to 8%** and BFCL rose 43 to 71. The teacher passes 40% in the same harness, so the student closes about **24%** of the gap.
+**Headline (the round 7 adapter + guards, gates 8, 11 and 12, 180 paired held-out conversations):** task success **10.0% to 17.2%**. The candidate solved 13 conversations the base failed and lost none (McNemar p = 0.0002, optimistic: the pairs share 20 tasks). Tool-call errors fell **60% to 8%** and BFCL rose 43 to 71. The teacher passes 40% in the same harness, so the student closes about **24%** of the gap. On 20 hidden tasks opened once at the end: **0% → 10%** (6 wins, 0 losses, p = 0.031).
 
 **On-policy corrections (round 13):** training on the teacher's fix for each of the student's own wrong turns cut invented ids from 35 failure labels to 2, early transfers from 18 to 0 and judge-flagged made-up answers from 8 to 0, and pass^k beat the base for the first time (15% vs 10%).
 
@@ -128,7 +130,7 @@ CuratorKIT is not used: its exporters have no tool-call schema, so every traject
 | Customer simulator and judge | gpt-oss-120b | HF router (DeepInfra); Vertex AI | Apache-2.0, open-weight |
 | Failure classifier | gpt-oss-120b via AgentTune `FailureClassifier` | Vertex AI | Apache-2.0 |
 
-**Base Aya model, exact setup.** `CohereLabs/tiny-aya-global` (3.35B, Hub default weights, no quantization), license CC-BY-NC-4.0. Served with vLLM 0.32.0, `max_model_len` 8,192, LoRA enabled (`max_lora_rank` 16, adapter 21 MB), GPU memory use 0.85, temperature 0. The base side of every gate runs on the same server without the adapter. Tool calling is prompted (JSON blocks), because Tiny Aya has no native tool-call format.
+**Base Aya model, exact setup.** `CohereLabs/tiny-aya-global` (3.35B, Hub default weights, bfloat16, no quantization), license CC-BY-NC-4.0. Served with vLLM 0.32.0, `max_model_len` 8,192, LoRA enabled (`max_lora_rank` 16, adapter 21 MB), GPU memory use 0.85, temperature 0. The base side of every gate runs on the same server without the adapter. Tool calling is prompted (JSON blocks), because Tiny Aya has no native tool-call format.
 
 **Why these models.** Tiny Aya is the smallest Aya model with usable instruction following, so it is the one where a self-healing loop matters most and where serving is cheapest. DeepSeek V4.1 Flash was the best open-weight teacher per dollar we tried: GLM-5.2 passed less (27–33%) at 4–5 times the price. gpt-oss-120b plays the customer because tau2 needs a capable, cheap, open simulator.
 
@@ -274,6 +276,20 @@ By AgentTune's own gate, the loop closed at gate 8: detect, classify, retrain an
 
 Gate 8 is the best single gate. The same model scored 13.3% and 15.0% in gates 11 and 12, so 23.3% was partly luck: with 20 tasks, two tasks flipping moves pass^1 by 10 points. The pooled number below is the one to quote.
 
+**Hidden split: the final check (20 tasks no gate, training run or design choice ever saw; opened once on 2026-11-15, after all decisions).** Base Tiny Aya against the round 7 adapter + guards (our best pooled candidate), 3 trials each, same harness:
+
+| Metric | Base Tiny Aya | Round 7 adapter + guards |
+|---|---|---|
+| pass^1 (95% Wilson CI) | **0.0%** (0 of 60; 0–6.0%) | **10.0%** (6 of 60; 4.7–20.1%) |
+| pass^k (k=3) | 0 of 20 tasks | 1 of 20 |
+| Tasks solved at least once | 0 of 20 | 3 of 20 |
+| Paired runs only one system passed | 0 | **6** (McNemar exact p = 0.031) |
+| Tool-call error rate | 55.7% (107 of 192) | **4.7%** (23 of 485) |
+| Runs that lost history (context overflow) | 0 | 6 |
+| Median conversation length (messages) | 20 | 27 |
+
+The hidden tasks are harder than the held-out ones (base 0% here vs 10% there). The direction matches the gates: more tasks solved, no task lost, tool errors cut by more than 10 times, and the same weakness (6 runs out of context). All 6 wins come from 3 tasks (17, 60 and 62), so this is small-sample evidence, not a precise rate. We did not run the teacher on the hidden tasks, so there is no gap-closed figure for them.
+
 **Teacher vs student (same harness, same 20 held-out tasks):**
 
 | System | pass^1 |
@@ -378,7 +394,7 @@ A full round (baseline, classify, teacher, data, train, gate) runs unattended in
 
 - Tiny Aya's 8,192-token window is the binding constraint: 2,700 tokens go to the fixed policy and tool prompt, and long lookup chains overflow.
 - Only 20 held-out tasks × 3 trials, so pass^1 moves by about 3 passes between equal candidates (the same model scored 23%, 13% and 15% in three gates). We report pooled numbers, intervals and paired tests.
-- Eleven gates looked at the same held-out tasks, which means selection on them, and the gate 14 guards were written from gate 13's runs. The final number should come from the hidden split (**PENDING**: opened once).
+- Eleven gates looked at the same held-out tasks, which means selection on them, and the gate 14 guards were written from gate 13's runs. The hidden split (opened once, after all decisions) is the check on that: 0% → 10%, but the gains sit on 3 of its 20 tasks, so it is small-sample evidence. It ran with today's code, so it also includes the gate 14 guards, a combination never gated on its own.
 - Gates 10 and 11 did not measure their label checks (the classifier's token expired inside the job). Their pass rates are valid; their label numbers are not.
 - The customer simulator and judge are an LLM. We found and fixed three failure modes, and there may be others.
 - No candidate passed our 8-check gate (AgentTune's own gate approved four), so "deployment" is a promotion ledger, not a live endpoint.
@@ -395,7 +411,7 @@ A full round (baseline, classify, teacher, data, train, gate) runs unattended in
 
 | Extension | Cost | Metric now | Expected after |
 |---|---|---|---|
-| Gate 14's guards, confirmed on the hidden split | ~$1.40 | Context overflow 13 of 60 runs | 3 or fewer, and the first promotion |
+| Gate 14's guards + one more on-policy correction round | ~$5 | Context overflow 7 of 60 runs | 3 or fewer, and the first promotion |
 | 2–3 more on-policy correction rounds | ~$3 per round | pass^1 15%, invented ids 2 | pass^1 20–25%; skipped policy steps down a third |
 | Condensed policy (1,500 → 500 tokens) + retrain | ~$3 | 36% of the window is fixed prompt | Under 25%, overflow near 0 without guards |
 | Reply-text grounding guard | free + one gate | Made-up facts in 7–13 failed runs per gate | Near 0 (the teacher has none) |
