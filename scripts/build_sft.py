@@ -82,6 +82,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "serves with condensed_policy: true",
     )
     parser.add_argument(
+        "--identity-note",
+        action="store_true",
+        help="trimmed training windows keep the user id and orders (context.still_true_note): for a candidate that "
+        "serves with identity_note: true",
+    )
+    parser.add_argument(
         "--estimate-tokens",
         action="store_true",
         help="count tokens with the chars estimate (no tokenizer download)",
@@ -312,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     from shipwright.llm import prompted_tools
 
     prompted_tools.set_condensed_policy(build_options.condensed_policy)
+    context.set_identity_note(build_options.identity_note)
     if build_options.condensed_policy:
         notes.append("policy: condensed (prompted_tools.CONDENSED_POLICY)")
     build_options.patch_rows = None

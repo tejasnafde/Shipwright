@@ -255,7 +255,7 @@ class Stages:
                      "--revision", f"round-{self.round_number}", "--repo", self.config["data"]["repo"],
                      "--boost", str(recipe.boost)]
         if recipe.capacity:
-            arguments.append("--condensed-policy")
+            arguments += ["--condensed-policy", "--identity-note"]
         failures = self.runs(self.state.failures_run)
         if failures is not None and (failures / "failures.jsonl").exists():
             arguments += ["--boost-from", str(failures)]
@@ -331,6 +331,7 @@ class Stages:
         system["name"] = f"r{self.round_number}-weight"
         system["tool_guards"] = self.state.recipe.tool_guards
         system["condensed_policy"] = self.state.recipe.capacity
+        system["identity_note"] = self.state.recipe.capacity
         for key, value in (self.config["gate"].get("candidate_extra") or {}).items():
             system[key] = value
         systems.validate_system(system)
@@ -520,7 +521,7 @@ def same_candidate(decision: dict, candidate_path: Path) -> bool:
     execution that died after its gate job can resume without paying for the gate twice."""
     gated = (decision.get("systems") or {}).get("candidate") or {}
     ours = yaml.safe_load(candidate_path.read_text())
-    for key in ("adapter", "tool_guards", "state_reminders", "condensed_policy"):
+    for key in ("adapter", "tool_guards", "state_reminders", "condensed_policy", "identity_note", "agent_voice_check"):
         if bool(gated.get(key)) != bool(ours.get(key)) or (gated.get(key) or None) != (ours.get(key) or None):
             return False
     return True

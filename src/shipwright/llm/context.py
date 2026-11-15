@@ -31,6 +31,19 @@ OMITTED_NOTE = "[earlier turns omitted]"
 _lock = threading.Lock()
 _encode: Callable[[str], int] | None = None
 
+# The identity note (still_true_note) is off by default (2026-11-15): round 16 was gated and promoted without it, so the
+# serving harness stays what was gated. A system turns it on with ``identity_note: true`` (baseline --identity-note).
+_identity_note = False
+
+
+def set_identity_note(enabled: bool) -> None:
+    global _identity_note
+    _identity_note = enabled
+
+
+def identity_note_enabled() -> bool:
+    return _identity_note
+
 
 def estimate_tokens(text: str) -> int:
     return math.ceil(len(text) / CHARS_PER_TOKEN)
@@ -214,7 +227,9 @@ def fit_messages(messages: list[dict], budget: int | None = None) -> tuple[list[
 
     def assemble(rest: list[dict], dropped: int) -> list[dict]:
         if dropped and rest:
-            note = OMITTED_NOTE + still_true_note(all_middle[:len(all_middle) - len(rest)])
+            note = OMITTED_NOTE
+            if _identity_note:
+                note += still_true_note(all_middle[:len(all_middle) - len(rest)])
             rest = [{**rest[0], "content": f"{note}\n{rest[0]['content']}"}] + rest[1:]
         return _merge_same_role(pinned + rest)
 

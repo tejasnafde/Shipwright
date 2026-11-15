@@ -14,6 +14,8 @@ One YAML file per system (see ``configs/systems/``):
     state_reminders: true          # optional (tool fix): a status note before each agent turn (reminders.py)
     condensed_policy: true         # optional: the retail policy in fewer words (prompted_tools.CONDENSED_POLICY);
                                    # an adapter trained on rows rendered with it (build_sft --condensed-policy)
+    identity_note: true            # optional: a trimmed request keeps the user id and orders (context.still_true_note)
+    agent_voice_check: true        # optional: re-ask a simulated customer that talks as the agent (set on both systems)
     route: tool_fix                # none | tool_fix | weight_fix (for the record)
     targets: [tool_example_copied] # failure labels this candidate should lower
 
@@ -57,6 +59,8 @@ def validate_system(system_config: dict, root: Path | None = None) -> dict:
         "tool_guards": bool(system_config.get("tool_guards", False)),
         "state_reminders": bool(system_config.get("state_reminders", False)),
         "condensed_policy": bool(system_config.get("condensed_policy", False)),
+        "identity_note": bool(system_config.get("identity_note", False)),
+        "agent_voice_check": bool(system_config.get("agent_voice_check", False)),
         "route": system_config.get("route", "none"),
         "targets": list(system_config.get("targets") or []),
     }
@@ -128,6 +132,10 @@ def baseline_args(system: dict, patch_ids: list[str], root: Path) -> list[str]:
         extra_arguments.append("--state-reminders")
     if system.get("condensed_policy"):
         extra_arguments.append("--condensed-policy")
+    if system.get("identity_note"):
+        extra_arguments.append("--identity-note")
+    if system.get("agent_voice_check"):
+        extra_arguments.append("--agent-voice-check")
     return extra_arguments
 
 

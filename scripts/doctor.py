@@ -308,7 +308,11 @@ def capacity_fixes_behave() -> Check:
                 {"role": "user", "content": 'Tool result for find_user_id_by_email: "sara_doe_1"'},
                 {"role": "assistant", "content": "x " * 400}, {"role": "user", "content": "y " * 400},
                 {"role": "assistant", "content": "ok?"}, {"role": "user", "content": "yes"}]
-    fitted, info = context.fit_messages(messages, budget=300)
+    context.set_identity_note(True)
+    try:
+        fitted, info = context.fit_messages(messages, budget=300)
+    finally:
+        context.set_identity_note(False)
     if not info["dropped_messages"] or not any("authenticated as user id sara_doe_1" in m["content"] for m in fitted):
         return fail(name, f"a trimmed request lost the customer's user id: {info}")
     history = [{"role": "user", "content": "hi"}]

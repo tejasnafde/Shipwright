@@ -437,3 +437,4 @@ def test_a_simulated_customer_that_answers_as_the_agent_is_asked_again():
     assert patches.is_agent_voiced_reply(reply("I understand this is frustrating. I’ll transfer you to a supervisor."))
     assert not patches.is_agent_voiced_reply(reply("I’m sorry, but I can’t share my credit-card details."))
     assert not patches.is_agent_voiced_reply(reply("Yes, please go ahead with the exchange."))
+    assert not patches.agent_voice_check_enabled(), "off by default: round 16 was gated without it"

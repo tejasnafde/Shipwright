@@ -134,6 +134,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="the student reads the retail policy in fewer words (prompted_tools.CONDENSED_POLICY, about 950 tokens less)",
     )
+    parser.add_argument(
+        "--identity-note",
+        action="store_true",
+        help="a request that drops old turns still names the customer's user id and orders (context.still_true_note)",
+    )
+    parser.add_argument(
+        "--agent-voice-check",
+        action="store_true",
+        help="also ask the user simulator again when it talks as the agent (patches.is_agent_voiced_reply)",
+    )
     return parser
 
 
@@ -346,6 +356,10 @@ def write_run_config(
     run_config["tool_list_version"] = prompted_tools.TOOL_LIST_VERSION
     run_config["observation_version"] = prompted_tools.OBSERVATION_VERSION
     run_config["condensed_policy"] = prompted_tools.condensed_policy_enabled()
+    from shipwright.llm import context, patches
+
+    run_config["identity_note"] = context.identity_note_enabled()
+    run_config["agent_voice_check"] = patches.agent_voice_check_enabled()
     (run_directory / "run_config.json").write_text(json.dumps(run_config, indent=2))
 
 
@@ -401,6 +415,10 @@ def prepare(
     from shipwright.llm import prompted_tools
 
     prompted_tools.set_condensed_policy(bool(getattr(run_options, "condensed_policy", False)))
+    from shipwright.llm import context, patches
+
+    context.set_identity_note(bool(getattr(run_options, "identity_note", False)))
+    patches.set_agent_voice_check(bool(getattr(run_options, "agent_voice_check", False)))
     log.note_repro(tool_patch_ids_active=active_patches)
     write_run_config(run_options, run_directory, active_patches)
     return RunSetup(
@@ -489,6 +507,8 @@ def finish_run(
     summary["tool_guards"] = bool(getattr(run_options, "tool_guards", False))
     summary["state_reminders"] = bool(getattr(run_options, "state_reminders", False))
     summary["condensed_policy"] = bool(getattr(run_options, "condensed_policy", False))
+    summary["identity_note"] = bool(getattr(run_options, "identity_note", False))
+    summary["agent_voice_check"] = bool(getattr(run_options, "agent_voice_check", False))
     (run_directory / "summary.json").write_text(json.dumps(summary, indent=2))
 
     recorded_prompts = prompted_tools.recorded_prompts()

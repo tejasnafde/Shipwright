@@ -87,6 +87,20 @@ NL_JUDGE_JSON_RETRIES = 2
 # "UserMessage must have either content or tool_calls" and the run is an infra error (round 1).
 EMPTY_USER_REPLY_RETRIES = 2
 
+# The extra agent-voice check (is_agent_voiced_reply) is off by default (2026-11-15): round 16 was gated without it.
+# Mitushi's speaks_as_agent is always on. A run turns it on with baseline --agent-voice-check (system key
+# agent_voice_check); in a gate set it on both systems, it changes the customer, not the agent.
+_agent_voice_check = False
+
+
+def set_agent_voice_check(enabled: bool) -> None:
+    global _agent_voice_check
+    _agent_voice_check = enabled
+
+
+def agent_voice_check_enabled() -> bool:
+    return _agent_voice_check
+
 
 def is_empty_reply(response: Any) -> bool:
     choices = getattr(response, "choices", None) or []
@@ -436,7 +450,8 @@ def install(
                     cut_leaked_turn(response)
                     # Mitushi's speaks_as_agent and is_agent_voiced_reply catch different wordings of the same fault.
                     usable = not (is_empty_reply(response) or is_unexplained_stop(response)
-                                  or speaks_as_agent(response) or is_agent_voiced_reply(response))
+                                  or speaks_as_agent(response)
+                                  or (_agent_voice_check and is_agent_voiced_reply(response)))
                     if usable:
                         break
                 else:

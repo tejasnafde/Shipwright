@@ -33,6 +33,16 @@ def test_validate_system_defaults_and_rules():
         systems.validate_system({**BASE, "tool_patches": {"ids": "all"}})
 
 
+def test_the_identity_note_and_agent_voice_check_are_off_unless_a_system_asks():
+    # 2026-11-15: round 16 was promoted without them, so the serving harness keeps what was gated
+    base = systems.validate_system(dict(BASE))
+    assert not base["identity_note"] and not base["agent_voice_check"]
+    assert "--identity-note" not in systems.baseline_args(base, [], ROOT)
+    switched = systems.validate_system({**BASE, "identity_note": True, "agent_voice_check": True})
+    arguments = systems.baseline_args(switched, [], ROOT)
+    assert "--identity-note" in arguments and "--agent-voice-check" in arguments
+
+
 def test_repo_system_configs_load():
     for name in ("base", "r1-tool", "r1-weight"):
         s = systems.load_system(ROOT / "configs" / "systems" / f"{name}.yaml", ROOT)

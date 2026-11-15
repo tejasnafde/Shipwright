@@ -237,6 +237,10 @@ def main() -> int:
         from shipwright.llm import prompted_tools
 
         prompted_tools.set_condensed_policy(True)
+    if run_config_path.exists() and json.loads(run_config_path.read_text()).get("identity_note"):
+        from shipwright.llm import context
+
+        context.set_identity_note(True)
 
     traces =[json.loads(line) for line in (options.failures / "traces.jsonl").read_text().splitlines() if line.strip()]
     prompts = json.loads((options.failures / "prompts.json").read_text())

@@ -105,6 +105,7 @@ def test_is_json_reply():
 
 def test_dropped_turns_leave_a_note_with_the_authenticated_user_and_their_orders():
     """Round 13: once the find_user_id result was dropped, the agent asked an identified customer to authenticate again."""
+    from shipwright.llm import context
     from shipwright.llm.context import OMITTED_NOTE, fit_messages
 
     messages = [
@@ -119,10 +120,15 @@ def test_dropped_turns_leave_a_note_with_the_authenticated_user_and_their_orders
         {"role": "assistant", "content": "Which order?"},
         {"role": "user", "content": "The first one."},
     ]
-    fitted, info = fit_messages(messages, budget=400)
+    fitted, _ = fit_messages(messages, budget=400)
+    assert not any("authenticated as user id" in message["content"] for message in fitted), "off by default"
+    context.set_identity_note(True)
+    try:
+        fitted, info = fit_messages(messages, budget=400)
+        unauthenticated_fitted, _ = fit_messages(messages[:2] + messages[6:], budget=400)
+    finally:
+        context.set_identity_note(False)
     assert info["dropped_messages"] > 0
     note = next(message["content"] for message in fitted if OMITTED_NOTE in message["content"])
     assert "authenticated as user id noah_ito_3850" in note and "#W1, #W2" in note
-    unauthenticated = messages[:2] + messages[6:]
-    fitted, _ = fit_messages(unauthenticated, budget=400)
-    assert not any("authenticated as user id" in message["content"] for message in fitted)
+    assert not any("authenticated as user id" in message["content"] for message in unauthenticated_fitted)
