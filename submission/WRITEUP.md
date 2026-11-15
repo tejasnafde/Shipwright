@@ -4,7 +4,7 @@
 
 **Base model + method:** Tiny Aya Global 3.35B (CC-BY-NC-4.0) + a LoRA adapter (r 16), trained by an automatic detect → classify → route → distil → gate loop (AgentTune + AuditKIT) on DeepSeek V4.1 Flash teacher corrections, plus runtime tool-call guards.
 
-**See it in one page:** [HF Space](https://huggingface.co/spaces/mitushigoyal5/shipwright) · [blog post](blog.md) · [models](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6) · [data and every gate trace](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb)
+**See it in one page:** [HF Space](https://huggingface.co/spaces/mitushigoyal5/shipwright) · [demo video, 3 min](https://huggingface.co/spaces/mitushigoyal5/shipwright/resolve/main/video/shipwright-demo.mp4) · [blog post](blog.md) · [models](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6) · [data and every gate trace](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb)
 
 <table>
 <tr>
@@ -13,7 +13,7 @@
 <td align="center"><h2>7× fewer</h2>tool calls that fail<br><sub>44% → 6% of calls</sub></td>
 </tr>
 <tr>
-<td align="center"><h2>69% → 21%</h2>wasted tool calls<br><sub>teacher 5%</sub></td>
+<td align="center"><h2>69% → 21%</h2>wasted tool calls<br><sub>base → round 16; teacher 5%</sub></td>
 <td align="center"><h2>0 people</h2>between launch and promotion<br><sub>2 h 24 min, $3.89</sub></td>
 <td align="center"><h2>8 / 8</h2>gate checks passed<br><sub>after 11 refusals</sub></td>
 </tr>
@@ -59,14 +59,32 @@ The customer simulator and judge is gpt-oss-120b, identical in every gate.
 | BFCL v3, general tool calling (no forgetting) | 45 | **73** |
 | Still failing: skipped a policy step / went in circles | 25 / 8 | 31 / 12 |
 
+### 4. Round 16's biggest jump: it uses tools like the teacher
+
+Pass rates on 20 tasks are noisy, so we also measure *how* the agent works. tau2 stores the calls an expert makes for every task; `scripts/trajectory_efficiency.py` compares each conversation with that path and counts **wasted calls** (repeats of an earlier call with nothing changed in between, calls the shop rejected, and calls our guards had to block) and **expert steps taken** (the expert's calls the agent also made, same tool and arguments).
+
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="img/wasted-calls-dark.png">
-  <img src="img/wasted-calls-light.png" alt="Wasted tool calls: base 69%, round 7 + guards 46%, round 13 26%, round 13 + guards 29%, round 16 21%, teacher 5%." width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="img/round16-jump-dark.png">
+  <img src="img/round16-jump-light.png" alt="Base Tiny Aya vs round 16, teacher as reference: wasted tool calls 69% to 21% (teacher 4.9%), calls the shop rejected 44% to 6% (teacher 4.5%), exact repeats by AuditKIT 6.8% to 0.3% (teacher 0.4%), expert steps taken 8% to 47% (teacher 52%)." width="100%">
 </picture>
 
-Measured against tau2's expert path (`scripts/trajectory_efficiency.py`). The student also needs its guards less each round (4.3 → 1.3 blocked calls per conversation): the guards' lessons moved into the weights.
+| Same 20 held-out tasks × 3 | Base | **Round 16** | Teacher | Change, base → round 16 (95% interval) |
+|---|---|---|---|---|
+| Wasted tool calls | 69% | **21%** | 5% | −48 points (−56 to −38) |
+| Calls the shop rejected | 44% | **6%** | 4.5% | −39 points (−55 to −27) |
+| Exact repeats, AuditKIT `RedundantToolCalls` | 6.8% | **0.3%** | 0.4% | −6.5 points (−11.9 to −2.0) |
+| Expert steps taken | 8% | **47%** | 52% | +39 points (+24 to +53) |
+| Calls that were on the expert's path | 15% | **36%** | 52% | +22 points (+11 to +33) |
 
-### 4. Why a business would care
+Intervals are a task bootstrap (5,000 resamples of the 20 tasks).
+
+- **The base wastes most of what it does.** 69% of its tool calls are wasted, mostly because 44% of them fail, and it takes only 8% of the steps an expert would. It looks frugal only because it gives up early.
+- **Round 16 behaves like the teacher on three of the four measures.** Its rejected calls (6% vs 4.5%) and exact repeats (0.3% vs 0.4%) are at the teacher's level, and it takes nearly as many of the expert's steps (47% vs 52%).
+- **AuditKIT agrees.** The exact-repeat row is AuditKIT's own `RedundantToolCalls`, not our code, and it shows the same jump.
+- **Why:** round 16 trained on the teacher's fix for exactly the turns where the student had gone wrong, including every call our guards had blocked, so the guards' lessons moved into the weights.
+- **What is still behind the teacher:** a fifth of round 16's calls are still wasted (teacher 5%), its conversations run about twice as long (31 messages vs 20), and AuditKIT's `AgentLoopDetection` flags a loop in half of them (base: the same; teacher: 1 in 10). That is the next target.
+
+### 5. Why a business would care
 
 **Serving the self-healed student instead of the teacher's API costs about $22 instead of $117 per 10,000 conversations, on hardware the shop controls.** It resolves 15% of tickets end to end against the teacher's 32%, so today it is a first-line agent that never invents an order id and hands the rest to people.
 
@@ -153,6 +171,7 @@ The loop also caught faults in its own environment: fixing two simulator bugs ra
 | Train | `agenttune.create_distill_trainer(...)` (TRL SFTTrainer + LoRA) | Our trainer subclass skips logits for untrained positions, which Tiny Aya's 262k-token vocabulary needs to fit memory |
 | Gate | `agenttune.decide.closed_loop.deployment_gate.DeploymentGate.evaluate_decision` | One of the 8 checks, with an explicit minimum-sample floor above its permissive default |
 | Gate scoring | AuditKIT `agent_eval`: reliability (pass^1, pass^k) and the BFCL comparison | AuditKIT produces the scores; it has no gate of its own |
+| Trajectory check | AuditKIT `metrics.agent.RedundantToolCalls` and `AgentLoopDetection` (`scripts/trajectory_efficiency.py`) | An independent check on our expert-path efficiency metric: repeated calls 6.8% (base) → 0.3% (round 16), teacher 0.4% |
 
 **How they connect:** tau2 traces → AgentTune detect and classify → our router → AgentTune distill trainer → candidate → AuditKIT scores + AgentTune `DeploymentGate` → promote or reject.
 
@@ -407,7 +426,7 @@ What it shows:
 - **The guards' lessons moved into the weights.** Round 7 needed a guard to block 4.3 calls per conversation; round 16, trained on the teacher's corrections of exactly those turns, needs 1.3. This is the self-healing loop working at the level of single turns, and it fits overflowing runs falling from 13 (round 13) to 4.
 - **Still twice the expert's calls and five times its context per solved task** (490K vs 100K prompt tokens). That is the gap to close next: fewer calls is cheaper, faster and leaves room in the 8K window.
 
-The metric is evaluation only: it never feeds training or the gate. Making "wasted share must not rise" a ninth gate check is a one-line config change we did not make mid-hackathon, since the thresholds were frozen on 2026-11-11.
+Round 16 against the base, with AuditKIT's own trajectory metrics as a cross-check, is in section 4 at the top. The metric is evaluation only: it never feeds training or the gate. Making "wasted share must not rise" a ninth gate check is a one-line config change we did not make mid-hackathon, since the thresholds were frozen on 2026-11-11.
 
 **Sample (gate 13, task 9, trial 2; this run passed).** The customer asked to exchange a desk lamp. The adapter wrote the exchange before the customer had said yes:
 

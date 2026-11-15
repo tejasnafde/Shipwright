@@ -36,7 +36,8 @@ def bars(ax, t, labels, values, highlight, fmt):
     for rect, value in zip(rects, values):
         ax.annotate(fmt(value), (rect.get_x() + rect.get_width() / 2, rect.get_height()),
                     xytext=(0, 4), textcoords="offset points", ha="center", va="bottom",
-                    fontsize=11, color=t["text"], fontweight="bold")
+                    fontsize=11, color=t["text"], fontweight="bold",
+                    bbox={"facecolor": t["surface"], "edgecolor": "none", "pad": 1.5})
 
 
 def title(fig, t, text, sub):
@@ -111,9 +112,36 @@ def gates(t):
     return fig
 
 
+def round16_jump(t):
+    # scripts/trajectory_efficiency.py, gate 16: base vs round 16, same 20 held-out tasks x 3; teacher = its ceiling run.
+    # 95% task-bootstrap intervals of the change: wasted -56 to -38 pts, failed -55 to -27, repeated -11.9 to -2.0,
+    # expert steps taken +24 to +53.
+    panels = [("Wasted tool calls", [69.2, 20.8], 4.9, 80, "−48 pts"),
+              ("Calls the shop rejected", [44.3, 5.7], 4.5, 52, "−39 pts"),
+              ("Exact repeats (AuditKIT)", [6.8, 0.3], 0.4, 8, "−6.5 pts"),
+              ("Expert steps taken", [8.2, 46.8], 51.7, 72, "+39 pts")]
+    fig, axes = plt.subplots(1, 4, figsize=(10, 4.3), facecolor=t["surface"])
+    for ax, (label, values, teacher, top, change) in zip(axes, panels):
+        style(ax, t)
+        bars(ax, t, ["Base", "Round 16"], values, {1}, lambda v: f"{v:.0f}%" if v >= 1 else f"{v:.1f}%")
+        ax.axhline(teacher, color=t["muted"], linewidth=1.2, linestyle=(0, (4, 3)))
+        ax.set_ylim(0, top)
+        ax.set_yticks([])
+        ax.yaxis.grid(False)
+        ax.set_title(label, loc="left", fontsize=10.5, color=t["text"], pad=20)
+        ax.text(0, 1.03, f"teacher (dashed): {teacher:g}%", transform=ax.transAxes, fontsize=9, color=t["muted"])
+        ax.text(0.98, 0.97, change, transform=ax.transAxes, ha="right", va="top",
+                fontsize=12, fontweight="bold", color=t["accent"])
+    title(fig, t, "Round 16 uses its tools like the teacher, not like the base",
+          "Base Tiny Aya vs round 16, same 20 held-out tasks x 3 trials; dashed line: the teacher. All four hold under a task bootstrap.")
+    fig.subplots_adjust(left=0.02, right=0.99, top=0.74, bottom=0.12, wspace=0.16)
+    return fig
+
+
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    for name, make in {"cost-vs-success": cost_vs_success, "wasted-calls": wasted_calls, "gates": gates}.items():
+    for name, make in {"cost-vs-success": cost_vs_success, "wasted-calls": wasted_calls, "gates": gates,
+                       "round16-jump": round16_jump}.items():
         for mode, theme in THEMES.items():
             figure = make(theme)
             figure.savefig(OUT / f"{name}-{mode}.png", dpi=160, facecolor=theme["surface"])
