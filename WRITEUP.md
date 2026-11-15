@@ -8,13 +8,13 @@
 
 **Headline, before → after (same 20 held-out tau2 retail tasks × 3 trials, pooled over 3 gates):** task success **10.0% → 17.2%** (13 paired wins, 0 losses); tool-call errors **60% → 8%**; BFCL **43 → 71**.
 
-**On the hidden split (20 tasks never used for any decision, opened once):** task success **0% → 10%** (6 paired wins, 0 losses, McNemar p = 0.031); tool-call errors **56% → 5%**.
+**On the hidden split (20 tasks never used for any decision, opened once):** task success **0% → 10%** (6 paired wins, 0 losses, McNemar p = 0.031) against a teacher at 30%, so about a third of the gap closed; tool-call errors **56% → 5%**.
 
 **How to read these numbers.** tau2-bench retail is a public benchmark we did not write: multi-turn, a simulated customer, a written policy, and a grader that checks the final shop database. Its tasks, grader and customer are fixed by others, so the model cannot learn the test's format from our own data. On it, the strongest teacher we tried (DeepSeek V4.1 Flash) solves 40% and base Tiny Aya 10%. The student's 17% is about a quarter of the way from base to teacher. A self-built task set, where tasks, training data and grader come from the same authors, can reach 90%+; the two kinds of number are not comparable.
 
 > **For judges: one minute**
 > - **What:** a 3.35B support agent that finds its own failures, decides whether each is a tool, model or environment fault, fixes it, and only redeploys if an 8-check gate measures an improvement.
-> - **Result:** task success 10% → 17% over 180 paired conversations (teacher 40%, so 24% of the gap closed), and 0% → 10% on 20 never-used tasks (6 wins, 0 losses, p = 0.031); tool-call errors 60% → 8% (5% for the round 13 adapter); invented ids 35 → 2; BFCL 43 → 72, so no forgetting.
+> - **Result:** task success 10% → 17% over 180 paired conversations (teacher 40%, so 24% of the gap closed), and 0% → 10% on 20 never-used tasks against a teacher at 30% (6 wins, 0 losses, p = 0.031); tool-call errors 60% → 8% (5% for the round 13 adapter); invented ids 35 → 2; BFCL 43 → 72, so no forgetting.
 > - **The gate:** AgentTune's own `DeploymentGate` approved our candidate in all four measured gates, so by AgentTune's definition the loop closed at gate 8. Our stricter 8-check gate refused every time, on a failure kind the base never shows: conversations that overflow the 8K window, because the student keeps working where the base gives up. Guards for its four causes cut those runs from 13 to 7 (gate 14); the gate allows 3.
 > - **Benchmark:** public tau2-bench retail, where the teacher itself solves only 40%.
 > - **Also found:** three bugs in the customer simulator; fixing two of them raised the teacher's own score from 32% to 40%.
@@ -40,7 +40,7 @@ Failures are detected and classified with AgentTune's `FailureDetector` and `Fai
 
 A candidate is deployed only if it passes all 8 checks of a frozen gate: AuditKIT pass^1 and pass^k on 20 held-out tasks × 3 trials, target and non-target failure rates, BFCL, and AgentTune's `DeploymentGate`. A further 20 tasks stay hidden for the final report. A gate that can say no is the point: a system that always approves its own updates isn't self-healing, it's retraining on a schedule.
 
-**Headline (the round 7 adapter + guards, gates 8, 11 and 12, 180 paired held-out conversations):** task success **10.0% to 17.2%**. The candidate solved 13 conversations the base failed and lost none (McNemar p = 0.0002, optimistic: the pairs share 20 tasks). Tool-call errors fell **60% to 8%** and BFCL rose 43 to 71. The teacher passes 40% in the same harness, so the student closes about **24%** of the gap. On 20 hidden tasks opened once at the end: **0% → 10%** (6 wins, 0 losses, p = 0.031).
+**Headline (the round 7 adapter + guards, gates 8, 11 and 12, 180 paired held-out conversations):** task success **10.0% to 17.2%**. The candidate solved 13 conversations the base failed and lost none (McNemar p = 0.0002, optimistic: the pairs share 20 tasks). Tool-call errors fell **60% to 8%** and BFCL rose 43 to 71. The teacher passes 40% in the same harness, so the student closes about **24%** of the gap. On 20 hidden tasks opened once at the end: **0% → 10%**, teacher 30% (6 wins, 0 losses, p = 0.031).
 
 **On-policy corrections (round 13):** training on the teacher's fix for each of the student's own wrong turns cut invented ids from 35 failure labels to 2, early transfers from 18 to 0 and judge-flagged made-up answers from 8 to 0, and pass^k beat the base for the first time (15% vs 10%).
 
@@ -281,6 +281,8 @@ Gate 8 is the best single gate. The same model scored 13.3% and 15.0% in gates 1
 | Metric | Base Tiny Aya | Round 7 adapter + guards |
 |---|---|---|
 | pass^1 (95% Wilson CI) | **0.0%** (0 of 60; 0–6.0%) | **10.0%** (6 of 60; 4.7–20.1%) |
+| Teacher (DeepSeek V4.1 Flash), same 20 tasks × 3 | 30.0% (18 of 60) | |
+| Gap closed, (student − base) / (teacher − base) | | **33%** (task bootstrap 95%: 0–62%) |
 | pass^k (k=3) | 0 of 20 tasks | 1 of 20 |
 | Tasks solved at least once | 0 of 20 | 3 of 20 |
 | Paired runs only one system passed | 0 | **6** (McNemar exact p = 0.031) |
@@ -288,7 +290,7 @@ Gate 8 is the best single gate. The same model scored 13.3% and 15.0% in gates 1
 | Runs that lost history (context overflow) | 0 | 6 |
 | Median conversation length (messages) | 20 | 27 |
 
-The hidden tasks are harder than the held-out ones (base 0% here vs 10% there). The direction matches the gates: more tasks solved, no task lost, tool errors cut by more than 10 times, and the same weakness (6 runs out of context). All 6 wins come from 3 tasks (17, 60 and 62), so this is small-sample evidence, not a precise rate. We did not run the teacher on the hidden tasks, so there is no gap-closed figure for them.
+The hidden tasks are harder than the held-out ones (base 0% here vs 10% there). The direction matches the gates: more tasks solved, no task lost, tool errors cut by more than 10 times, and the same weakness (6 runs out of context). All 6 wins come from 3 tasks (17, 60 and 62), so this is small-sample evidence, not a precise rate. The teacher solves 12 of the 20 hidden tasks at least once; on the 3 the student solves, it matches the teacher exactly (1, 2 and 3 of 3), and on the other 9 it solves none. The student learned some tasks completely rather than all tasks a little. The teacher run (`teacher_runs.py --hidden-ceiling`, 2026-11-15) is evaluation only and never training data.
 
 **Teacher vs student (same harness, same 20 held-out tasks):**
 
