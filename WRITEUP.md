@@ -27,7 +27,7 @@
 </picture>
 
 > [!IMPORTANT]
-> **Why the smallest model.** Other tau2 entries moved to Aya Expanse 32B, which needs an 80 GB GPU. We kept Tiny Aya 3.35B on purpose: it fits the hackathon's small credit budget, serves on a $1.50-an-hour A10G, and is the model where self-healing matters most because it fails most. Its 8,192-token window is the limit our gate kept catching; **Aya Expanse 32B (128K context) is the first thing we would run with more credit.**
+> **Why the smallest model.** We chose Tiny Aya 3.35B on purpose: it fits the hackathon's small credit budget, serves on a $1.50-an-hour A10G, and is the model where self-healing matters most because it fails most. Its 8,192-token window is the limit our gate kept catching; **Aya Expanse 32B (128K context) is the first thing we would run with more credit.**
 
 ### 1. Three models
 
@@ -507,7 +507,7 @@ A full round (baseline, classify, teacher, data, train, gate) runs unattended in
 
 What 14 rounds taught us decides the order: the gate is too noisy to see a 5-point gain on 20 tasks, and the one failure it keeps refusing (overflowing conversations) is the model's behaviour, not noise. So first a better measurement, then changes aimed at that behaviour.
 
-**First: the same loop on Aya Expanse 32B.** We stayed on Tiny Aya to fit the hackathon credits, and its 8,192-token window caused most of our refusals (overflowing conversations). Aya Expanse 32B has a 128K window and much stronger reasoning; another Track 3 entry on tau2 reports 14.5% → 51.5% with it. Our loop, router, guards and gate run unchanged on it; a round costs about 10× more (an 80 GB GPU instead of an A10G). We would keep Tiny Aya as the cheap tier and use the 32B for the tickets it hands off.
+**First: the same loop on Aya Expanse 32B.** We stayed on Tiny Aya to fit the hackathon credits, and its 8,192-token window caused most of our refusals (overflowing conversations). Aya Expanse 32B has a 128K window and much stronger reasoning. Our loop, router, guards and gate run unchanged on it; a round costs about 10× more (an 80 GB GPU instead of an A10G). We would keep Tiny Aya as the cheap tier and use the 32B for the tickets it hands off.
 
 **1. A k-fold gate instead of one 20-task held-out set.** Pool the 74 train and 20 held-out tasks (94) into 5 folds of about 19. For each fold, train the candidate's recipe on the other four and gate it on that fold; pool the five results so the gate decides on 94 tasks, not 20; on a pass, train the deployed adapter on all 94.
 - *Fixes:* noise. Today two tasks flipping moves pass^1 by 10 points (the same model scored 23%, 13% and 15% in three gates). On 94 tasks a 5–7 point gain is visible, and no single lucky gate can promote.
@@ -533,7 +533,7 @@ What 14 rounds taught us decides the order: the gate is too noisy to see a 5-poi
 | 2–3 more on-policy correction rounds | ~$3 per round | pass^1 15%, invented ids 2 | pass^1 20–25%; skipped policy steps down a third |
 | Condensed policy (1,500 → 500 tokens) + retrain | ~$3 | 36% of the window is fixed prompt | Under 25%, overflow near 0 without guards |
 | Reply-text grounding guard | free + one gate | Made-up facts in 7–13 failed runs per gate | Near 0 (the teacher has none) |
-| Aya Expanse 32B student, same loop | ~$15–20 per round | Tiny Aya: base 10%, healed 15%; overflow causes most refusals | No overflow (128K window); another tau2 entry reports base 14.5% → 51.5% with Expanse 32B |
+| Aya Expanse 32B student, same loop | ~$15–20 per round | Tiny Aya: base 10%, healed 15%; overflow causes most refusals | No overflow (128K window); a higher base and more headroom per round |
 
 ## Artifacts
 
