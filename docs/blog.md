@@ -1,5 +1,5 @@
 ---
-title: "Self-healing on a $1.50-an-hour GPU: a 3B support agent that fixes its own mistakes"
+title: "Shipwright: a 3B support agent that fixes its own mistakes"
 thumbnail: docs/img/cost-vs-success-light.png
 authors:
 - user: mitushigoyal5
@@ -7,7 +7,9 @@ authors:
 - user: tejasnafde
 ---
 
-# Self-healing on a $1.50-an-hour GPU: a 3B support agent that fixes its own mistakes
+# Shipwright: a 3B support agent that fixes its own mistakes
+
+**A 3.35B Tiny Aya support agent that fixes its own mistakes for $4 a round, and refused to ship itself 11 times until the fix was real. On its first unattended promotion, invented order ids fell 40 → 0, tool errors 44% → 6% and wasted tool calls 69% → 21%, and it now resolves retail tickets for $0.015 each, 2.5× less than the teacher API it learned from.**
 
 *Shipwright, Lexsi Labs AI Safety & Alignment Hackathon, Track 3 (problem statement 8: self-healing agents).*
 
