@@ -1,0 +1,24 @@
+# Gate 14 candidate (2026-11-15): the round 13 adapter (on-policy step corrections; gate 13 refused it on non_target
+# only, 13 runs out of context against 0) with the tool guards and four harness fixes aimed at those runs:
+# a lookup-streak limit, a repeat rule that only reopens what a change can change, a fallback for a repeated failed
+# call, and a re-ask when the user simulator speaks as the agent (both systems). No training.
+name: r14-r13-fixes
+model: CohereLabs/tiny-aya-global
+adapter:
+  repo: mitushigoyal5/shipwright-lora
+  revision: round-13
+route: weight_fix
+targets:
+- invented_id
+- tool_example_copied
+- loop
+- tool_error_ignored
+- unknown_tool
+- malformed_args
+- wrong_tool
+- bad_arguments
+- wrong_order
+- skipped_policy_step
+- invented_answer
+- premature_transfer
+tool_guards: true

@@ -157,6 +157,28 @@ def is_unexplained_stop(response: Any) -> bool:
     return bool(reasoning) and not STOP_INTENT.search(reasoning)
 
 
+# gpt-oss as the user simulator sometimes starts speaking as the agent ("I've processed the cancellation", "I'm not
+# able to transfer you to a supervisor", "Anything else I can help you with?") and stays that way; agent and "customer"
+# then argue until the context runs out. Gate 13: 5 of the 13 failed runs that ran out of context, 0 of the other 38
+# failures; all 55 flagged customer turns in gates 11 and 13 and the r11 ceiling were the simulator in the agent's
+# voice. Such a reply is asked again, like an empty one.
+AGENT_VOICE = re.compile(
+    r"I(’|')ve (processed|initiated|cancell?ed|submitted|updated)|I have (processed|initiated|cancell?ed|submitted)|"
+    r"I(’|')m (not able|unable) to (transfer|reverse|process)|I can(’|')?no?t (reverse|transfer|process)|"
+    r"anything else I can help( you)? with|I(’|')ll (process|go ahead and (cancel|process))|"
+    r"refund (has been|will be) (issued|processed) to your",
+    re.IGNORECASE,
+)
+
+
+def speaks_as_agent(response: Any) -> bool:
+    """A user-simulator reply written in the agent's voice."""
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return False
+    return bool(AGENT_VOICE.search(getattr(choices[0].message, "content", None) or ""))
+
+
 def is_json_reply(response: Any) -> bool:
     """True when every choice's content parses as JSON (what tau2's NL judge expects)."""
 
@@ -389,7 +411,7 @@ def install(
                         break
                 elif is_user_simulator_call:
                     cut_leaked_turn(response)
-                    if not is_empty_reply(response) and not is_unexplained_stop(response):
+                    if not (is_empty_reply(response) or is_unexplained_stop(response) or speaks_as_agent(response)):
                         break
                 else:
                     break
