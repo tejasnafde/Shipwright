@@ -4,7 +4,7 @@
 
 **Base model + method:** Tiny Aya Global 3.35B (CC-BY-NC-4.0) + a LoRA adapter (r 16), trained by an automatic detect → classify → route → distil → gate loop (AgentTune + AuditKIT) on DeepSeek V4.1 Flash teacher corrections, plus runtime tool-call guards.
 
-**See it in one page:** [HF Space](https://huggingface.co/spaces/mitushigoyal5/shipwright) · [demo video, 3 min](https://huggingface.co/spaces/mitushigoyal5/shipwright/resolve/main/video/shipwright-demo.mp4) · [blog post](blog.md) · [models](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6) · [data and every gate trace](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb)
+**See it in one page:** [HF Space](https://huggingface.co/spaces/mitushigoyal5/shipwright) · [GitHub](https://github.com/tejasnafde/Shipwright) · [demo video, 3 min](https://huggingface.co/spaces/mitushigoyal5/shipwright/resolve/main/video/shipwright-demo.mp4) · [blog post](blog.md) · [models](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6) · [data and every gate trace](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb)
 
 <table>
 <tr>
@@ -120,7 +120,7 @@ A candidate is deployed only if it passes all 8 checks of a frozen gate: AuditKI
 
 **The first unattended promotion (round 16).** One command, a $4 cap and no person after launch: the last refused candidate ran the train tasks, its failures were classified, the teacher corrected each wrong turn (235 corrections over three rounds), a new adapter trained, and it passed all 8 checks: task success 10% → 15%, invented ids 40 → 0, early handoffs 11 → 0, made-up answers 8 → 0, tool-call errors 44% → 6%, BFCL 45 → 73. It is now the deployed system in the promotion ledger.
 
-**The gate earned that approval.** AgentTune's `DeploymentGate` alone would have approved 10 of the 11 refused candidates (it caught only gate 4, whose task success fell); our checks refused all 11, each for a traceable reason: forgetting general tool use, new failure kinds, and conversations overflowing the 8,192-token window because the student kept working where the base gives up. We traced the overflow to lookup streaks, repeated calls and a customer simulator that answers as the agent, and fixed each.
+**The gate earned that approval.** AgentTune's `DeploymentGate` alone would have approved 10 of the 11 refused candidates; our checks refused all 11, each for a traceable reason: forgetting general tool use, new failure kinds, and conversations overflowing the 8,192-token window because the student kept working where the base gives up. We traced and fixed each cause.
 
 **A new metric, trajectory efficiency,** compares each conversation with tau2's expert path. Wasted tool calls fell from 69% (base) and 46% (round 7 + guards) to 21% in round 16 (teacher 5%), and the student needed its guards a third as often: the guards' lessons moved into the weights.
 
@@ -531,8 +531,9 @@ What 14 rounds taught us decides the order: the gate is too noisy to see a 5-poi
 - **HF datasets collection:** https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb (`mitushigoyal5/shipwright-sft`, and `mitushigoyal5/shipwright-runs` with all gate traces and decisions)
 - **HF Space (results page):** https://huggingface.co/spaces/mitushigoyal5/shipwright (source in `submission/space/`)
 - **Blog post:** `submission/blog.md` (charts from `submission/make_charts.py`)
-- **GitHub:** TODO public link
-- **Demo:** control-room, a read-only replay of a real round's artifacts step by step, including a genuine gate refusal. It never calls a model; it only reads what the pipeline wrote. It runs locally (`streamlit run src/shipwright/control_room/app.py`). A public Space is ready in `infra/space/`, but a live-server Space needs an HF PRO account.
+- **GitHub:** https://github.com/tejasnafde/Shipwright
+- **Demo video (3 min):** https://huggingface.co/spaces/mitushigoyal5/shipwright/resolve/main/video/shipwright-demo.mp4: the control room replaying round 16, the unattended promotion, step by step; also embedded on the Space
+- **Demo:** control-room, a read-only replay of a real round's artifacts step by step, including a genuine gate refusal. It never calls a model; it only reads what the pipeline wrote. It runs locally (`streamlit run src/shipwright/control_room/app.py`), and the demo video above records it; `infra/space/` packages it as a Docker Space.
 
 ## Documentation and reproduction
 

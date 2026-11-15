@@ -11,6 +11,8 @@ authors:
 
 **A 3.35B Tiny Aya support agent that heals itself: one command runs a whole round with no person in the loop for about $4, and it refused to ship itself 11 times until the fix was measured. Its first unattended promotion made its tool calls 7× more reliable (errors 44% → 6%), lifted tickets resolved from 10% to 15%, cut wasted tool calls from 69% to 21%, and serves retail tickets for $0.015 each, 2.5× less than the teacher API it learned from.**
 
+▶ **[Watch the 3-minute demo](https://huggingface.co/spaces/mitushigoyal5/shipwright/resolve/main/video/shipwright-demo.mp4)**: the control room replaying round 16 step by step. Code: [github.com/tejasnafde/Shipwright](https://github.com/tejasnafde/Shipwright).
+
 *Shipwright, Lexsi Labs AI Safety & Alignment Hackathon, Track 3 (problem statement 8: self-healing agents).*
 
 Most AI agents fail quietly. A support bot invents an order number, cancels the wrong thing, or loops until the customer gives up, and tomorrow it does the same again. The usual fix is a bigger model behind an API. We wanted the opposite: the **smallest** Aya model, **Tiny Aya Global (3.35B)**, on one cheap GPU, made better by a loop that finds its own failures, fixes them and only redeploys when the fix is measured.
@@ -83,7 +85,9 @@ Running the self-healed student instead of the teacher's API for first-line reta
 
 ## Links
 
-- Code and full write-up: GitHub (link at submission)
+- Code and full write-up: https://github.com/tejasnafde/Shipwright (write-up: `submission/WRITEUP.md`)
+- Demo video (3 min), the control room replaying round 16: https://huggingface.co/spaces/mitushigoyal5/shipwright/resolve/main/video/shipwright-demo.mp4
+- Results page with the video and charts: https://huggingface.co/spaces/mitushigoyal5/shipwright
 - Models: https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6
 - Data, every gate trace and decision: https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb
 
