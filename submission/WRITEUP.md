@@ -559,10 +559,11 @@ What 14 rounds taught us decides the order: the gate is too noisy to see a 5-poi
 
 ## Author contributions
 
-**TODO (team):** one line per person on what they owned. Commits: Ishank 93, Tejas 86, Mitushi 20 (commit counts do not show ownership).
-- Tejas Nafde: TODO
-- Ishank Giri: TODO
-- Mitushi Goyal: TODO
+All three of us worked across the whole loop, ran rounds and analysed traces; each also led some parts.
+
+- **Tejas Nafde:** cloud infrastructure (Cloud Run Jobs, Cloud Build, GCP), the baseline harness and observability, tool patches, SFT data rendering, on-policy corrections.
+- **Ishank Giri:** the unattended loop service and its controller, the tool guards and context handling, the gate stages, the control room and the demo video.
+- **Mitushi Goyal:** the customer-simulator and context fixes, rule labels, the round 16 run, the efficiency analysis, the write-up, blog and Space.
 
 ## Related work
 
