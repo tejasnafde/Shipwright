@@ -1,23 +1,33 @@
 # Shipwright: a support agent that finds, sorts and fixes its own failures
 
-**One-line claim.** A 3.35B Tiny Aya support agent that, with no person in the loop, found its own failures on tau2-bench retail, had a teacher correct them, retrained itself, and redeployed only after AuditKIT, AgentTune's `DeploymentGate` and six more checks all passed: task success 10% → 15%, invented order ids 40 → 0, wasted tool calls 69% → 21%, general tool use (BFCL) 45 → 73.
+**One-line claim.** Self-healing on a $1.50-an-hour GPU: a 3.35B Tiny Aya support agent found its own failures on tau2-bench retail, had a teacher correct them, retrained and redeployed itself with no person in the loop, and now resolves tickets for **$0.015 each, 2.5× cheaper than the teacher API it learned from**. One unattended round costs $3.89; all 16 rounds used about $25 of GPU. Invented order ids 40 → 0, tool errors 44% → 6%, wasted tool calls 69% → 21%, BFCL 45 → 73, and AuditKIT, AgentTune's `DeploymentGate` and six more checks all approved the deploy.
 
 > 2026-11-15. Round 16, the loop's first promotion, ran from 12:15 to 14:38 UTC for $3.89.
+
+**See it in one page:** [HF Space](https://huggingface.co/spaces/mitushigoyal5/shipwright) · [blog post](docs/blog.md) · [models](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6) · [data and every gate trace](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb)
 
 **Base model + method:** Tiny Aya Global 3.35B (CC-BY-NC-4.0) with a LoRA adapter (r 16), trained by an automatic detect → classify → route → distil → gate loop (AgentTune + AuditKIT) on DeepSeek V4.1 Flash teacher trajectories and on-policy corrections, plus runtime tool-call guards.
 
 <table>
 <tr>
-<td align="center"><h2>15%</h2>tasks solved end to end<br><sub>base 10% · teacher 32%</sub></td>
+<td align="center"><h2>$0.015</h2>per resolved ticket<br><sub>2.5× cheaper than the teacher API</sub></td>
+<td align="center"><h2>3.35B</h2>parameters, one 24 GB GPU<br><sub>tasks solved 10% → 15%</sub></td>
 <td align="center"><h2>40 → 0</h2>invented order ids<br><sub>per 60 conversations</sub></td>
-<td align="center"><h2>44% → 6%</h2>tool calls that error<br><sub>round 16 vs base</sub></td>
 </tr>
 <tr>
 <td align="center"><h2>69% → 21%</h2>wasted tool calls<br><sub>teacher 5%</sub></td>
 <td align="center"><h2>0 people</h2>between launch and promotion<br><sub>2 h 24 min, $3.89</sub></td>
-<td align="center"><h2>8 / 8</h2>gate checks passed<br><sub>after 6 refused candidates</sub></td>
+<td align="center"><h2>8 / 8</h2>gate checks passed<br><sub>after 11 refusals</sub></td>
 </tr>
 </table>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/cost-vs-success-dark.png">
+  <img src="docs/img/cost-vs-success-light.png" alt="Tickets resolved: base Tiny Aya 10%, self-healed Tiny Aya 15%, teacher API 32%. Cost per resolved ticket: $0.015 self-healed vs $0.037 teacher API." width="100%">
+</picture>
+
+> [!IMPORTANT]
+> **Why the smallest model.** Other tau2 entries moved to Aya Expanse 32B, which needs an 80 GB GPU. We kept Tiny Aya 3.35B on purpose: it fits the hackathon's small credit budget, serves on a $1.50-an-hour A10G, and is the model where self-healing matters most because it fails most. Its 8,192-token window is the limit our gate kept catching; **Aya Expanse 32B (128K context) is the first thing we would run with more credit.**
 
 ### 1. Three models
 
@@ -56,6 +66,11 @@ Round 16 against the base, 60 conversations each (gate 16):
 
 Every round of corrections made the student need its guards less (4.3 → 2.5 → 1.3 blocks per conversation): the guards' lessons moved into the weights.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/wasted-calls-dark.png">
+  <img src="docs/img/wasted-calls-light.png" alt="Wasted tool calls: base 69%, round 7 + guards 46%, round 13 26%, round 13 + guards 29%, round 16 21%, teacher 5%." width="100%">
+</picture>
+
 ### 3. A full loop, with no person in it
 
 One command (`shipwright run --config configs/rounds/r16-corrections.yaml --launch`, spend cap $4) ran one Cloud Run execution end to end:
@@ -69,7 +84,7 @@ One command (`shipwright run --config configs/rounds/r16-corrections.yaml --laun
 | Gate | Base and candidate on 20 held-out tasks × 3, BFCL, 8 checks | $2.02 |
 | Promote | Written to the promotion ledger on the Hub (`promotions/ledger.jsonl`), with one-step rollback | – |
 
-**Who approved it:** AuditKIT computed pass^1, pass^k and BFCL; tau2-bench's database grader decided each conversation; AgentTune's `DeploymentGate` gave its verdict; our checks confirmed the targeted failures fell (90% → 85% of runs, the 0.05 minimum) and no other kind rose by more than 0.05. All 8 passed. The same gate had refused six earlier candidates for traceable reasons (forgetting, new failure kinds, conversations overflowing the context), so the approval means something.
+**Who approved it:** AuditKIT computed pass^1, pass^k and BFCL; tau2-bench's database grader decided each conversation; AgentTune's `DeploymentGate` gave its verdict; our checks confirmed the targeted failures fell (90% → 85% of runs, the 0.05 minimum) and no other kind rose by more than 0.05. All 8 passed. The same gate had refused 11 times before for traceable reasons (forgetting, new failure kinds, conversations overflowing the context), so the approval means something.
 
 ### 4. Why a business would care
 
@@ -111,7 +126,7 @@ A candidate is deployed only if it passes all 8 checks of a frozen gate: AuditKI
 
 **The first unattended promotion (round 16).** One command, a $4 cap and no person after launch: the last refused candidate ran the train tasks, its failures were classified, the teacher corrected each wrong turn (235 corrections over three rounds), a new adapter trained, and it passed all 8 checks: task success 10% → 15%, invented ids 40 → 0, early handoffs 11 → 0, made-up answers 8 → 0, tool-call errors 44% → 6%, BFCL 45 → 73. It is now the deployed system in the promotion ledger.
 
-**The gate earned that approval.** AgentTune's `DeploymentGate` approved every candidate we measured; our checks refused six, each for a traceable reason: forgetting general tool use, new failure kinds, and conversations overflowing the 8,192-token window because the student kept working where the base gives up. We traced the overflow to lookup streaks, repeated calls and a customer simulator that answers as the agent, and fixed each.
+**The gate earned that approval.** AgentTune's `DeploymentGate` approved every candidate we measured; our checks refused 11 times, each for a traceable reason: forgetting general tool use, new failure kinds, and conversations overflowing the 8,192-token window because the student kept working where the base gives up. We traced the overflow to lookup streaks, repeated calls and a customer simulator that answers as the agent, and fixed each.
 
 **A new metric, trajectory efficiency,** compares each conversation with tau2's expert path. Wasted tool calls fell from 69% (base) and 46% (round 7 + guards) to 21% in round 16 (teacher 5%), and the student needed its guards a third as often: the guards' lessons moved into the weights.
 
@@ -304,7 +319,13 @@ AgentTune's `FailureDetector`, `FailureClassifier` (gpt-oss-120b), `RetrainingTr
 
 **Tool-fix round 1 (no training).** 35 tool-description patches, all from the deterministic regex. Failures from copying example ids out of a tool's description fell from 13 to 2, and tool-call errors fell 50%. The pass rate didn't move: the 10 remaining failures were the model picking the wrong tool, which no rewording fixes. The classifier routed those 10 to the weight fix, which is the tool-fix vs weight-fix split working as designed.
 
-**Gated rounds.** Six candidates were refused, each for a reason we could trace and fix, before round 16 passed:
+**Gated rounds.** The gate refused 11 times, each for a reason we could trace and fix, before round 16 passed:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/gates-dark.png">
+  <img src="docs/img/gates-light.png" alt="Candidate task success per gate: eleven refusals between 7% and 23%, then gate 16 promoted at 15% against a 10% base." width="100%">
+</picture>
+
 
 | Gate | Change | pass^1 (base to candidate) | Why refused / what it taught |
 |---|---|---|---|
@@ -501,6 +522,8 @@ A full round (baseline, classify, teacher, data, train, gate) runs unattended in
 
 What 14 rounds taught us decides the order: the gate is too noisy to see a 5-point gain on 20 tasks, and the one failure it keeps refusing (overflowing conversations) is the model's behaviour, not noise. So first a better measurement, then changes aimed at that behaviour.
 
+**First: the same loop on Aya Expanse 32B.** We stayed on Tiny Aya to fit the hackathon credits, and its 8,192-token window caused most of our refusals (overflowing conversations). Aya Expanse 32B has a 128K window and much stronger reasoning; another Track 3 entry on tau2 reports 14.5% → 51.5% with it. Our loop, router, guards and gate run unchanged on it; a round costs about 10× more (an 80 GB GPU instead of an A10G). We would keep Tiny Aya as the cheap tier and use the 32B for the tickets it hands off.
+
 **1. A k-fold gate instead of one 20-task held-out set.** Pool the 74 train and 20 held-out tasks (94) into 5 folds of about 19. For each fold, train the candidate's recipe on the other four and gate it on that fold; pool the five results so the gate decides on 94 tasks, not 20; on a pass, train the deployed adapter on all 94.
 - *Fixes:* noise. Today two tasks flipping moves pass^1 by 10 points (the same model scored 23%, 13% and 15% in three gates). On 94 tasks a 5–7 point gain is visible, and no single lucky gate can promote.
 - *Does not fix:* the overflow refusal. It is a systematic gap (base 0%, student 10–20% of runs), so a bigger gate only measures it more precisely.
@@ -515,7 +538,6 @@ What 14 rounds taught us decides the order: the gate is too noisy to see a 5-poi
 - **A reply-text guard** for invented order ids, emails and dates in messages to the customer, not only in tool calls. Offline, a grounding check flags 7 to 13 failed student runs per gate and none of the teacher's.
 - **A fair "same budget" baseline:** base with fresh resampling at temperature > 0 and the same number of model calls, and base + guards without training, to separate what the guards and the training each add. (Best-of-3 at temperature 0, already measured, stays below the student's single attempt: 10% vs 15–23% held-out, 0% vs 10% hidden.)
 
-**3. A larger student.** Aya Expanse 32B (128K context) would remove the overflow, at roughly 10× the cost of a round. The runs that overflow are stuck conversations, so a bigger window alone would turn them into a different failure, not a pass.
 
 **Expected before → after (forecasts, not measured):**
 
@@ -526,12 +548,14 @@ What 14 rounds taught us decides the order: the gate is too noisy to see a 5-poi
 | 2–3 more on-policy correction rounds | ~$3 per round | pass^1 15%, invented ids 2 | pass^1 20–25%; skipped policy steps down a third |
 | Condensed policy (1,500 → 500 tokens) + retrain | ~$3 | 36% of the window is fixed prompt | Under 25%, overflow near 0 without guards |
 | Reply-text grounding guard | free + one gate | Made-up facts in 7–13 failed runs per gate | Near 0 (the teacher has none) |
-| Aya Expanse 32B student, same loop | ~$15–20 per round | Base Tiny Aya 10% | Base 25–35%, so a smaller but cheaper-to-show gain |
+| Aya Expanse 32B student, same loop | ~$15–20 per round | Tiny Aya: base 10%, healed 15%; overflow causes most refusals | No overflow (128K window); another tau2 entry reports base 14.5% → 51.5% with Expanse 32B |
 
 ## Artifacts
 
 - **HF models collection:** https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6 (adapters `mitushigoyal5/shipwright-lora`, a branch per round; deployed: `round-16`, the first promoted; `round-7`, best pooled; `round-13`, first on-policy corrections)
 - **HF datasets collection:** https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb (`mitushigoyal5/shipwright-sft`, and `mitushigoyal5/shipwright-runs` with all gate traces and decisions)
+- **HF Space (results page):** https://huggingface.co/spaces/mitushigoyal5/shipwright (source in `docs/space/`)
+- **Blog post:** `docs/blog.md` (charts from `docs/make_charts.py`)
 - **GitHub:** TODO public link
 - **Demo:** control-room, a read-only replay of a real round's artifacts step by step, including a genuine gate refusal. It never calls a model; it only reads what the pipeline wrote. It runs locally (`streamlit run src/shipwright/control_room/app.py`). A public Space is ready in `infra/space/`, but a live-server Space needs an HF PRO account.
 

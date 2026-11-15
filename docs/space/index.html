@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shipwright</title>
+<meta name="description" content="A 3.35B Tiny Aya support agent that finds, fixes and redeploys itself on a $1.50-an-hour GPU.">
+<style>
+:root {
+  --bg: #fcfcfb; --surface: #ffffff; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #7a7973;
+  --line: #e1e0d9; --accent: #2a78d6; --accent-soft: #e8f1fb; --good: #0f7b3f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1a1a19; --surface: #222220; --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #9a998f;
+    --line: #2f2f2c; --accent: #3987e5; --accent-soft: #1d2a3a; --good: #4cc27f;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1a1a19; --surface: #222220; --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #9a998f;
+  --line: #2f2f2c; --accent: #3987e5; --accent-soft: #1d2a3a; --good: #4cc27f;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
+main { max-width: 920px; margin: 0 auto; padding: 48px 16px 80px; }
+.kicker { color: var(--accent); font-weight: 600; font-size: 14px; letter-spacing: .02em; }
+h1 { font-size: clamp(28px, 5vw, 42px); line-height: 1.15; margin: 8px 0 16px; letter-spacing: -.01em; }
+h2 { font-size: 24px; margin: 56px 0 12px; }
+p { color: var(--ink-2); margin: 0 0 14px; }
+.lede { font-size: 18px; color: var(--ink-2); max-width: 760px; }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 32px 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 16px; }
+.card b { display: block; font-size: 28px; line-height: 1.1; color: var(--ink); font-variant-numeric: tabular-nums; }
+.card span { display: block; color: var(--ink-2); font-size: 14px; margin-top: 6px; }
+.card small { display: block; color: var(--ink-3); font-size: 12.5px; margin-top: 2px; }
+.card.hero { background: var(--accent-soft); border-color: transparent; }
+.card.hero b { color: var(--accent); }
+figure { margin: 24px 0; }
+figure img { width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); display: block; }
+figcaption { color: var(--ink-3); font-size: 13px; margin-top: 8px; }
+.steps { counter-reset: s; list-style: none; padding: 0; margin: 16px 0; display: grid; gap: 8px; }
+.steps li { counter-increment: s; background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px 12px 52px; position: relative; color: var(--ink-2); }
+.steps li::before { content: counter(s); position: absolute; left: 14px; top: 11px; width: 26px; height: 26px;
+  border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700; font-size: 13px;
+  display: grid; place-items: center; }
+.steps b { color: var(--ink); }
+.table-wrap { overflow-x: auto; margin: 16px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+th { color: var(--ink-3); font-weight: 600; font-size: 13px; }
+td:not(:first-child), th:not(:first-child) { text-align: right; white-space: nowrap; }
+td strong { color: var(--good); }
+.callout { border-left: 3px solid var(--accent); background: var(--surface); padding: 14px 18px; border-radius: 0 10px 10px 0; margin: 24px 0; }
+.callout p { margin: 0; }
+code { font: 13.5px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; color: var(--ink); }
+a { color: var(--accent); }
+ul { color: var(--ink-2); padding-left: 20px; }
+li { margin: 6px 0; }
+footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 14px; }
+@media (max-width: 640px) {
+  .cards { grid-template-columns: repeat(2, 1fr); }
+  .card b { font-size: 22px; }
+  main { padding-top: 32px; }
+}
+</style>
+</head>
+<body>
+<main>
+  <div class="kicker">Lexsi Labs AI Safety &amp; Alignment Hackathon · Track 3 · Self-healing agents</div>
+  <h1>Self-healing on a $1.50-an-hour GPU</h1>
+  <p class="lede">Shipwright is a 3.35B Tiny Aya support agent that finds its own failures, has a teacher correct them, retrains, and redeploys only when an 8-check gate measures an improvement. On 15 November it ran that loop end to end with no person in it: one command, a $4 cap, 2 hours 24 minutes.</p>
+
+  <div class="cards">
+    <div class="card hero"><b>$0.015</b><span>per resolved ticket</span><small>2.5× cheaper than the teacher API</small></div>
+    <div class="card"><b>3.35B</b><span>parameters, one 24 GB GPU</span><small>tickets solved 10% → 15%</small></div>
+    <div class="card"><b>40 → 0</b><span>invented order ids</span><small>per 60 conversations</small></div>
+    <div class="card"><b>69% → 21%</b><span>wasted tool calls</span><small>teacher: 5%</small></div>
+    <div class="card"><b>0 people</b><span>from launch to promotion</span><small>2 h 24 min, $3.89</small></div>
+    <div class="card"><b>8 / 8</b><span>gate checks passed</span><small>after 11 refusals</small></div>
+  </div>
+
+  <figure>
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="img/cost-vs-success-dark.png">
+      <img src="img/cost-vs-success-light.png" alt="Tickets resolved: base Tiny Aya 10%, self-healed Tiny Aya 15%, teacher API 32%. Cost per resolved ticket: $0.015 self-healed vs $0.037 teacher API.">
+    </picture>
+    <figcaption>tau2-bench retail, 20 held-out tasks × 3 trials. Cost uses measured model calls per conversation: the student on one A10G, the teacher at API list price without caching.</figcaption>
+  </figure>
+
+  <div class="callout"><p><b>Why the smallest model.</b> Other tau2 entries moved to Aya Expanse 32B, which needs an 80 GB GPU. We kept Tiny Aya on purpose: it fits a small credit budget, serves on a $1.50-an-hour A10G, and is the model where self-healing matters most, because it fails most. Its 8,192-token window is the limit our gate kept catching, and Aya Expanse 32B is the first thing we would run with more credit.</p></div>
+
+  <h2>Three models</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Role</th><th>Model</th><th>Tickets solved</th></tr>
+    <tr><td>Base</td><td>Tiny Aya Global 3.35B, unchanged</td><td>10%</td></tr>
+    <tr><td>Student, what the loop deploys</td><td>Tiny Aya + a LoRA adapter (under 1% of the model)</td><td>15%</td></tr>
+    <tr><td>Teacher, never deployed</td><td>DeepSeek V4.1 Flash (API)</td><td>32%</td></tr>
+  </table></div>
+  <p>The benchmark is <b>tau2-bench retail</b>: a simulated customer, 16 shop tools, a written policy, and a grader that checks whether the shop database ends up right, not whether the reply sounded right.</p>
+
+  <h2>The loop</h2>
+  <ol class="steps">
+    <li><b>Run</b> the student on training tasks; every turn's raw output is logged.</li>
+    <li><b>Detect</b> failures with tau2's grader and AgentTune's <code>FailureDetector</code>.</li>
+    <li><b>Classify and route</b> with AgentTune's <code>FailureClassifier</code>: tool fault → tool fix, model fault → weight fix, environment fault → no fix, never trained on.</li>
+    <li><b>Correct:</b> at every turn where the student went wrong, the teacher answers from the student's exact context.</li>
+    <li><b>Train</b> a fresh adapter with AgentTune's <code>create_distill_trainer</code>.</li>
+    <li><b>Gate</b> on 8 checks: AuditKIT pass^1 and pass^k, targeted failures down, no new failure kind, BFCL (no forgetting) and AgentTune's <code>DeploymentGate</code>.</li>
+    <li><b>Promote or keep the old one</b>, recorded in a ledger with rollback.</li>
+  </ol>
+
+  <h2>A gate that can say no</h2>
+  <p>It refused 11 times before it said yes, each time for a reason we could trace: forgetting general tool use, new failure kinds, conversations overflowing the 8K window. AgentTune's own <code>DeploymentGate</code> approved four of the candidates ours refused.</p>
+  <figure>
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="img/gates-dark.png">
+      <img src="img/gates-light.png" alt="Candidate task success per gate: eleven refusals between 7% and 23%, then gate 16 promoted at 15% against a 10% base.">
+    </picture>
+  </figure>
+
+  <h2>What the student stopped doing</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Per 60 conversations</th><th>Base</th><th>Self-healed</th></tr>
+    <tr><td>Invented an order or item id</td><td>40</td><td><strong>0</strong></td></tr>
+    <tr><td>Handed off to a human too early</td><td>11</td><td><strong>0</strong></td></tr>
+    <tr><td>Made up an answer</td><td>8</td><td><strong>0</strong></td></tr>
+    <tr><td>Tool-call error rate</td><td>44%</td><td><strong>6%</strong></td></tr>
+    <tr><td>BFCL, general tool calling</td><td>45</td><td><strong>73</strong></td></tr>
+  </table></div>
+
+  <h2>Leaner conversations</h2>
+  <p>tau2 stores the calls an expert makes for every task. Comparing each conversation with that path, wasted calls (repeated, failed or blocked by a guard) fell from 69% to 21%. Round 7 needed a guard to block 4.3 bad calls per conversation; round 16 needs 1.3. The guards' lessons moved into the weights.</p>
+  <figure>
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="img/wasted-calls-dark.png">
+      <img src="img/wasted-calls-light.png" alt="Wasted tool calls: base 69%, round 7 + guards 46%, round 13 26%, round 13 + guards 29%, round 16 21%, teacher 5%.">
+    </picture>
+  </figure>
+
+  <h2>For a business</h2>
+  <p>Running the self-healed student instead of the teacher's API costs about <b>$22 instead of $117 per 10,000 conversations</b>, with every conversation on hardware the shop controls. It resolves 15% of tickets end to end against the teacher's 32%, so today it is a first-line agent that never invents an order id and hands the rest to people. Each unattended healing round costs about $4.</p>
+
+  <h2>Honest limits</h2>
+  <ul>
+    <li>Three more passes in 60 conversations is not significant on its own. Pooled over three gates the round 7 adapter solved 17.2% vs 10% (13 paired wins, 0 losses), and 10% vs 0% on 20 hidden tasks opened once.</li>
+    <li>Tasks that need two or more changes stay unsolved; the 8K window is the wall.</li>
+    <li>A student that acts more errs more: 13% of its conversations made a wrong change, against 3% for the base, which mostly gives up, and 10% for the teacher.</li>
+  </ul>
+
+  <h2>Links</h2>
+  <ul>
+    <li><a href="https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6">Models</a>: the adapter per round; <code>round-16</code> is the promoted one.</li>
+    <li><a href="https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb">Datasets</a>: training data, and every gate's traces and decision.</li>
+    <li>Code and the full write-up: GitHub, linked at submission.</li>
+  </ul>
+
+  <footer>Team on Hugging Face: <a href="https://huggingface.co/mitushigoyal5">mitushigoyal5</a>, <a href="https://huggingface.co/ishankgiri">ishankgiri</a>, <a href="https://huggingface.co/tejasnafde">tejasnafde</a> · Built with Lexsi Labs' AgentTune and AuditKIT, Cohere Labs' Tiny Aya, and Sierra's tau2-bench.</footer>
+</main>
+</body>
+</html>
