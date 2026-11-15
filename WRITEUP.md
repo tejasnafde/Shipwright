@@ -2,16 +2,19 @@
 
 **One-line claim.** A 3.35B Tiny Aya support agent on tau2-bench retail, with a self-healing loop that sorts each failure into a tool fix, a weight fix or no fix, and only redeploys when an AuditKIT/AgentTune gate measures an improvement. Across three gates the best adapter solves 17% of held-out tasks against 10% for the base model (13 paired wins, 0 losses) and cuts tool-call errors from 60% to 8%. The gate has refused every candidate so far, each time for a reason we could trace and fix.
 
-> DRAFT, 2026-11-15. Cells marked **PENDING** wait for gate 14 (running now) and the hidden split.
+> DRAFT, 2026-11-15. Cells marked **PENDING** wait for the hidden split.
 
 **Base model + method:** Tiny Aya Global 3.35B (CC-BY-NC-4.0) with a LoRA adapter (r 16), trained by an automatic detect → classify → route → distil → gate loop (AgentTune + AuditKIT) on DeepSeek V4.1 Flash teacher trajectories and on-policy corrections, plus runtime tool-call guards.
 
 **Headline, before → after (same 20 held-out tau2 retail tasks × 3 trials, pooled over 3 gates):** task success **10.0% → 17.2%** (13 paired wins, 0 losses); tool-call errors **60% → 8%**; BFCL **43 → 71**.
 
+**How to read these numbers.** tau2-bench retail is a public benchmark we did not write: multi-turn, a simulated customer, a written policy, and a grader that checks the final shop database. Its tasks, grader and customer are fixed by others, so the model cannot learn the test's format from our own data. On it, the strongest teacher we tried (DeepSeek V4.1 Flash) solves 40% and base Tiny Aya 10%. The student's 17% is about a quarter of the way from base to teacher. A self-built task set, where tasks, training data and grader come from the same authors, can reach 90%+; the two kinds of number are not comparable.
+
 > **For judges: one minute**
 > - **What:** a 3.35B support agent that finds its own failures, decides whether each is a tool, model or environment fault, fixes it, and only redeploys if an 8-check gate measures an improvement.
 > - **Result:** task success 10% → 17% over 180 paired conversations (teacher 40%, so 24% of the gap closed); tool-call errors 60% → 8% (5% for the round 13 adapter); invented ids 35 → 2; BFCL 43 → 72, so no forgetting.
-> - **Honest part:** the gate refused every candidate. Our two best adapters passed 7 of 8 checks each time and failed the same one (conversations overflowing the 8K window, which the base never reaches because it gives up early). We traced it to four causes and guarded them; gate 14 tests that (**PENDING**).
+> - **The gate:** AgentTune's own `DeploymentGate` approved our candidate in all four measured gates, so by AgentTune's definition the loop closed at gate 8. Our stricter 8-check gate refused every time, on a failure kind the base never shows: conversations that overflow the 8K window, because the student keeps working where the base gives up. Guards for its four causes cut those runs from 13 to 7 (gate 14); the gate allows 3.
+> - **Benchmark:** public tau2-bench retail, where the teacher itself solves only 40%.
 > - **Also found:** three bugs in the customer simulator; fixing two of them raised the teacher's own score from 32% to 40%.
 > - **Cost:** 12.2 GPU-hours (about $20) for 14 rounds; serving costs $0.13–0.75 per 1,000 replies against $1.19 for the teacher's API.
 
@@ -39,9 +42,9 @@ A candidate is deployed only if it passes all 8 checks of a frozen gate: AuditKI
 
 **On-policy corrections (round 13):** training on the teacher's fix for each of the student's own wrong turns cut invented ids from 35 failure labels to 2, early transfers from 18 to 0 and judge-flagged made-up answers from 8 to 0, and pass^k beat the base for the first time (15% vs 10%).
 
-**Why nothing was promoted yet:** the round 7 and round 13 adapters passed 7 of 8 checks in every measured gate, and failed the same one: runs that overflow Tiny Aya's 8,192-token window, which the base model never reaches because it gives up early. We traced those runs to long chains of lookups with no reply, repeated lookups and failed calls, and a customer simulator that starts speaking as the agent. Gate 14 re-tests the round 13 adapter with guards for all four: **PENDING**.
+**AgentTune's gate said yes; ours said no.** AgentTune's `DeploymentGate` approved our candidate in all four measured gates, so by AgentTune's definition the loop closed at gate 8. Our stricter gate refused every time on one failure the base never shows: conversations overflowing Tiny Aya's 8,192-token window, because the student keeps working where the base gives up. We traced them to lookup streaks, repeated and failed calls, and a customer simulator that answers as the agent. Guards for these cut overflowing runs from 13 to 7 (gate 14); the gate allows 3.
 
-The loop also caught faults in its own environment. The gpt-oss customer simulator sometimes wrote past its turn, sent the end-of-conversation signal while its reasoning said it meant to answer, or answered as the agent. Fixing the first two raised the teacher from 31.7% to 40%.
+The loop also caught faults in its own environment: fixing two simulator bugs raised the teacher from 31.7% to 40%.
 
 ## Problem and approach
 
@@ -101,12 +104,18 @@ flowchart TD
 |---|---|---|
 | Detect | `agenttune.decide.closed_loop.failure_detector.FailureDetector` | Loop and tool-crash patterns from the audit log, combined with tau2's reward |
 | Classify | `ShipwrightFailureClassifier`, a subclass of AgentTune's `FailureClassifier` | Gets the full raw trace instead of the default 2,000-character cut, which removed the reasoning a wrong-reasoning failure needs |
-| Retrain trigger | `agenttune.decide.closed_loop.retraining_trigger.RetrainingTrigger` | Decides whether a round is worth training before any GPU time is spent |
+| Heal loop | `agenttune.agentic.heal_loop.SelfHealLoop` | Each round's weight-fix failures go through AgentTune's loop (`scripts/round_status.py`, `heal/agenttune_bridge.retrain_status`) with our classified failures and our generator injected (below). It fills AgentTune's `TrainingBuffer`; training itself runs as a separate HF Job |
+| Retrain trigger | `agenttune.decide.closed_loop.retraining_trigger.RetrainingTrigger` (with `TrainingBuffer`, `RewardDriftTracker`) | Decides whether a round is worth training before any GPU time is spent |
 | Train | `agenttune.create_distill_trainer(...)` (TRL SFTTrainer + LoRA) | Our trainer subclass skips logits for untrained positions, which Tiny Aya's 262k-token vocabulary needs to fit memory |
 | Gate | `agenttune.decide.closed_loop.deployment_gate.DeploymentGate.evaluate_decision` | One of the 8 checks, with an explicit minimum-sample floor above its permissive default |
 | Gate scoring | AuditKIT `agent_eval`: reliability (pass^1, pass^k) and the BFCL comparison | AuditKIT produces the scores; it has no gate of its own |
 
 **How they connect:** tau2 traces → AgentTune detect and classify → our router → AgentTune distill trainer → candidate → AuditKIT scores + AgentTune `DeploymentGate` → promote or reject.
+
+**Where we replaced an AgentTune default, and why.**
+- **Generating fixes: teacher replay and on-policy corrections instead of `TrainingExampleGenerator`.** AgentTune's generator returns no example for any root cause except `wrong_tool` and `loop_collapse` (checked on 2026-11-09). Most of our failures are invented ids, skipped policy steps and early transfers, so it would have produced almost no data. We plug our own generator into `SelfHealLoop` instead: the teacher replays the failed task (a full passing conversation), and for each wrong turn of the student the teacher answers from the student's exact context (one corrected turn).
+- **Retraining: SFT instead of adapter-only DPO/BCO.** AgentTune's preference path needs a chosen and a rejected answer for the same context. Our training data is mostly whole teacher conversations, which have no rejected side, and SFT on them is what moved the targeted failures (invented ids 35 to 2). We do have about 300 natural preference pairs (a call our guards rejected vs the corrected call in the same turn); DPO on them is in "With more credits".
+- **Gating: AgentTune's `DeploymentGate` plus seven checks.** `DeploymentGate` asks one question, "is task success not worse?". It approved our candidate in every measured gate (table in Results). We added the checks that catch what it cannot: whether the targeted failures really fell, whether a new failure kind appeared, BFCL forgetting, and a minimum sample size.
 
 CuratorKIT is not used: its exporters have no tool-call schema, so every trajectory would have to be flattened to text and rebuilt.
 
@@ -236,7 +245,18 @@ AgentTune's `FailureDetector`, `FailureClassifier` (gpt-oss-120b), `RetrainingTr
 | 11 | Gate 8's adapter + simulator fixes + context savers (no training) | 10 to 13% | Its label checks were not measured: the classifier's token expired inside the job (fixed: classify outside the job) |
 | 12 | Gate 11's candidate again, on the fixed gate | 10 to 15% | 7 of 8 passed; 5 runs out of context against 0 (allowed: 3) |
 | 13 | Round 7's recipe + 176 on-policy corrections of the round 7 adapter's own wrong turns | 10 to 15%, pass^k 10 to 15% | 7 of 8 passed; 13 runs out of context against 0 |
-| 14 | Round 13's adapter + guards against what filled the context (no training) | **PENDING** | **PENDING** |
+| 14 | Round 13's adapter + guards against what filled the context (no training) | 10 to 13%, pass^k 10 to 10% | 6 of 8 passed. Overflowing runs 13 to 7 (allowed: 3); targeted labels fell 0.033 (needs 0.05; gate 13: 0.05, one run apart) |
+
+**AgentTune's gate vs ours.** AgentTune's `DeploymentGate` is one of our 8 checks. Read alone, it would have deployed:
+
+| Gate | Candidate | pass^1 (base → candidate) | AgentTune `DeploymentGate` | Our 8-check gate | What only our checks saw |
+|---|---|---|---|---|---|
+| 8 | Round 7 + guards | 10 → 23% | **approve** | refuse (7 of 8) | 13 runs overflow the context, base 1 |
+| 12 | Round 7 + guards | 10 → 15% | **approve** | refuse (7 of 8) | 5 runs overflow, base 0 |
+| 13 | Round 13 | 10 → 15% | **approve** | refuse (7 of 8) | 13 runs overflow, base 0 |
+| 14 | Round 13 + overflow guards | 10 → 13% | **approve** | refuse (6 of 8) | 7 runs overflow; targeted labels fell less than 0.05 |
+
+By AgentTune's own gate, the loop closed at gate 8: detect, classify, retrain and an approved redeploy. Our gate held the deploy back because a stuck conversation that ends in overflow is worse for a customer than the base model's early handoff to a human, and because promoting would make overflow the new baseline for every later gate.
 
 ## Results
 
@@ -361,7 +381,7 @@ A full round (baseline, classify, teacher, data, train, gate) runs unattended in
 - Eleven gates looked at the same held-out tasks, which means selection on them, and the gate 14 guards were written from gate 13's runs. The final number should come from the hidden split (**PENDING**: opened once).
 - Gates 10 and 11 did not measure their label checks (the classifier's token expired inside the job). Their pass rates are valid; their label numbers are not.
 - The customer simulator and judge are an LLM. We found and fixed three failure modes, and there may be others.
-- No candidate has been promoted yet (**PENDING**: gate 14), so "deployment" is a promotion ledger, not a live endpoint.
+- No candidate passed our 8-check gate (AgentTune's own gate approved four), so "deployment" is a promotion ledger, not a live endpoint.
 - The guards and simulator repairs were written by us after reading the failures. The loop detected and routed them (context overflow routes to "fix the harness"), but its automatic tool-fix proposer did not write them.
 
 ## With more credits
