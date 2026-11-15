@@ -1,5 +1,5 @@
 ---
-title: "Self-healing on a $1.50-an-hour GPU: a 3B support agent that fixes its own mistakes"
+title: "Shipwright: a 3B support agent that fixes its own mistakes"
 thumbnail: img/cost-vs-success-light.png
 authors:
 - user: mitushigoyal5
@@ -7,7 +7,9 @@ authors:
 - user: tejasnafde
 ---
 
-# Self-healing on a $1.50-an-hour GPU: a 3B support agent that fixes its own mistakes
+# Shipwright: a 3B support agent that fixes its own mistakes
+
+**A 3.35B Tiny Aya support agent that fixes its own mistakes for $4 a round, and refused to ship itself 11 times until the fix was real. On its first unattended promotion, invented order ids fell 40 → 0, tool errors 44% → 6% and wasted tool calls 69% → 21%, and it now resolves retail tickets for $0.015 each, 2.5× less than the teacher API it learned from.**
 
 *Shipwright, Lexsi Labs AI Safety & Alignment Hackathon, Track 3 (problem statement 8: self-healing agents).*
 
@@ -58,13 +60,15 @@ Round 16 against the base, 60 conversations each:
 | BFCL general tool calling | 45 | **73** |
 | Tickets resolved end to end | 10% | **15%** |
 
-## A new metric: wasted tool calls
+## Round 16's biggest jump: it uses tools like the teacher
 
-Pass rates on 20 tasks are noisy, so we added a metric that looks inside each conversation. tau2 stores the calls an expert agent makes for every task. We compare each conversation with that path and count the calls that were repeated, failed, or blocked by one of our runtime guards.
+Pass rates on 20 tasks are noisy, so we added a metric that looks inside each conversation. tau2 stores the calls an expert agent makes for every task. We compare each conversation with that path and count the wasted calls (repeats of an earlier call with nothing changed in between, calls the shop rejected, and calls our runtime guards had to block) and the expert's steps the agent also took.
 
-![Wasted tool calls by round](img/wasted-calls-light.png)
+![Base vs round 16, with the teacher as reference](img/round16-jump-light.png)
 
-Wasted calls fell from 69% (base) to 21% (round 16); the teacher wastes 5%. The base looks frugal only because it gives up early. The more interesting part: round 7 needed a guard to block 4.3 bad calls per conversation, round 16 needs 1.3. Training on the teacher's corrections of exactly those turns moved the guards' lessons into the weights.
+The base wastes 69% of its tool calls, mostly calls the shop rejects, and takes only 8% of the steps an expert would; it looks frugal only because it gives up early. Round 16 wastes 21%, and on three measures it is at the teacher's level: rejected calls 6% (teacher 4.5%), exact repeats 0.3% (teacher 0.4%), expert steps taken 47% (teacher 52%). All four changes hold under a task bootstrap, and the exact-repeat numbers come from AuditKIT's own `RedundantToolCalls`, not our code.
+
+The reason is the most satisfying result of the project: round 16 trained on the teacher's fix for exactly the turns where the student went wrong, including every call our guards had blocked, so the guards' lessons moved into the weights. What it did not fix: a fifth of its calls are still wasted (teacher 5%), and its conversations run about twice as long as the teacher's. That is the next target.
 
 ## Why it matters for a business
 

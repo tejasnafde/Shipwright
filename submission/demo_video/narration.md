@@ -29,7 +29,7 @@ healed student verifies the customer first, looks up the real orders, and solves
 ## corrections
 Where did that come from? The previous candidate replayed the training tasks with policy guards switched on. Every call
 a guard blocked became a lesson. Here, the student made up an order number. The teacher, seeing exactly what the
-student saw, looks up the real customer instead. Fifty-nine corrections, for twelve cents of teacher time, and only the
+student saw, looks up the real customer instead. Fifty-nine new corrections this round, for twelve cents of teacher time, two hundred and thirty-five across three rounds, and only the
 corrected turn is trained.
 
 ## gate

@@ -100,7 +100,7 @@ def diagram(mode: str, animated: bool) -> str:
     body.append(chip(660, "Model fault", "→ weight fix", "continues below", extra_class="weight"))
     body.append(chip(850, "Environment", "→ no fix", "never trained on"))
     body.append(arrow("M745,250 V296"))
-    body.append(box(640, 300, 210, 84, "5  Correct", "teacher fixes each wrong turn", "235 corrections · $0.12", ["ours"]))
+    body.append(box(640, 300, 210, 84, "5  Correct", "teacher fixes each wrong turn", "59 new (235 in all) · $0.12", ["ours"]))
     body.append(box(390, 300, 210, 84, "6  Train", "distill trainer, fresh LoRA", "789 examples · $1.17", ["AgentTune"]))
     body.append(box(110, 300, 230, 84, "7  Gate", "8 checks, all required", "8 of 8 passed · $2.02", ["AgentTune", "AuditKIT"]))
     body.append(arrow("M640,342 H604"))
