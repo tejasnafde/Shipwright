@@ -1,5 +1,4 @@
-# control-room, the read-only demo UI (docs/system-design.html, "Demo: the
-# loop, round by round"). Deliberately its own, minimal image: no GPU, no
+# control-room, the read-only demo UI (infra/space/README.md). Deliberately its own, minimal image: no GPU, no
 # agenttune/auditkit, no secrets - it only reads the run-dir artifacts the
 # harness scripts already produced (baseline.py, classify.py, tool_fix.py,
 # round_status.py, gate_eval.py) and renders them. Meant to run as a Hugging

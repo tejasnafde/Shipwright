@@ -1,4 +1,4 @@
-"""DETECT, CLASSIFY and ROUTE failed runs (steps 03 and 04 in docs/system-design.html).
+"""DETECT, CLASSIFY and ROUTE failed runs (docs/pipeline/classify.md).
 
 Input: trace records from ``traces.jsonl`` (see ``shipwright.heal.traces``).
 

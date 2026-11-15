@@ -330,7 +330,7 @@ def read_traces(run_directory: Path) -> list[dict]:
 
 def has_simulator_leak(trace: dict) -> bool:
     """A user-simulator turn that wrote past its own turn (``patches.SIMULATOR_LEAK_MARKERS``): the conversation may have
-    been ended by the simulator, not by the agent (AGENTS.md, 2026-11-14)."""
+    been ended by the simulator, not by the agent (docs/ops/known-issues.md, user simulator)."""
     from shipwright.llm.patches import SIMULATOR_LEAK_MARKERS
 
     messages = trace.get("messages") or []

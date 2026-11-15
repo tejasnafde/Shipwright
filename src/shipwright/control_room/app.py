@@ -1,6 +1,6 @@
 """Control-room: read-only replay of a round, step by step. Reads only the run-dir
 files the harness scripts already produce - it never calls a teacher API, a trainer,
-or the gate itself (docs/system-design.html, "Demo: the loop, round by round").
+or the gate itself (docs/system-design.html, "Observability").
 
 The sidebar offers a few named scenarios (a real round, a staged walkthrough), each a fixed
 set of run dirs, so a judge never aligns paths by hand. "Custom (advanced)" exposes the

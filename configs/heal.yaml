@@ -1,9 +1,6 @@
 # AgentTune RetrainingTrigger config (TriggerConfig fields). Read by the train stage of the loop and scripts/round_status.py.
-#
-# status: proposed. Freeze with configs/gate.yaml before round 1 (AGENTS.md, Evaluation rules).
-# Values are AgentTune's defaults, except where a comment says why.
-status: proposed
-frozen_on: null
+# Values are AgentTune's defaults, except where a comment says why. The trigger decides whether a round trains;
+# the gate (configs/gate.yaml) decides whether its candidate ships.
 
 retrain_trigger:
   total_failures_threshold: 50   # T1: buffer size

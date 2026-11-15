@@ -4,7 +4,7 @@
 
 **Base model + method:** Tiny Aya Global 3.35B (CC-BY-NC-4.0) + a LoRA adapter (r 16), trained by an automatic detect → classify → route → distil → gate loop (AgentTune + AuditKIT) on DeepSeek V4.1 Flash teacher corrections, plus runtime tool-call guards.
 
-**See it in one page:** [HF Space](https://huggingface.co/spaces/mitushigoyal5/shipwright) · [blog post](docs/blog.md) · [models](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6) · [data and every gate trace](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb)
+**See it in one page:** [HF Space](https://huggingface.co/spaces/mitushigoyal5/shipwright) · [blog post](blog.md) · [models](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6) · [data and every gate trace](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb)
 
 <table>
 <tr>
@@ -20,8 +20,8 @@
 </table>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/cost-vs-success-dark.png">
-  <img src="docs/img/cost-vs-success-light.png" alt="Tickets resolved: base Tiny Aya 10%, self-healed Tiny Aya 15%, teacher API 32%. Cost per resolved ticket: $0.015 self-healed vs $0.037 teacher API." width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="img/cost-vs-success-dark.png">
+  <img src="img/cost-vs-success-light.png" alt="Tickets resolved: base Tiny Aya 10%, self-healed Tiny Aya 15%, teacher API 32%. Cost per resolved ticket: $0.015 self-healed vs $0.037 teacher API." width="100%">
 </picture>
 
 > [!IMPORTANT]
@@ -32,8 +32,8 @@
 One command with a $4 cap (`shipwright run --config configs/rounds/r16-corrections.yaml --launch`) ran round 16 end to end on 15 November. Numbers on each step are that round's; badges show which kit runs it ([animated version](https://huggingface.co/spaces/mitushigoyal5/shipwright)):
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/loop-dark.svg">
-  <img src="docs/img/loop-light.svg" alt="The self-healing loop. 1 Run Tiny Aya on 74 train tasks. 2 Detect failures (tau2 grader + AgentTune FailureDetector). 3 Classify (rules, then AgentTune FailureClassifier). 4 Route by root cause: tool fault to guards and tool text with a person approving; model fault to the weight fix; environment fault to no fix, never trained on. 5 Correct: the teacher fixes each wrong turn (235 corrections). 6 Train with AgentTune's distill trainer (789 examples). 7 Gate: 8 checks from AuditKIT and AgentTune. Promote to the ledger with rollback (once, round 16) or refuse and keep the old model (11 times). Round 16: 2 h 24 min, $3.89, no person in the loop." width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="img/loop-dark.svg">
+  <img src="img/loop-light.svg" alt="The self-healing loop. 1 Run Tiny Aya on 74 train tasks. 2 Detect failures (tau2 grader + AgentTune FailureDetector). 3 Classify (rules, then AgentTune FailureClassifier). 4 Route by root cause: tool fault to guards and tool text with a person approving; model fault to the weight fix; environment fault to no fix, never trained on. 5 Correct: the teacher fixes each wrong turn (235 corrections). 6 Train with AgentTune's distill trainer (789 examples). 7 Gate: 8 checks from AuditKIT and AgentTune. Promote to the ledger with rollback (once, round 16) or refuse and keep the old model (11 times). Round 16: 2 h 24 min, $3.89, no person in the loop." width="100%">
 </picture>
 
 **Who approved it:** AuditKIT scored pass^1, pass^k and BFCL; tau2-bench's database grader decided each conversation; AgentTune's `DeploymentGate` approved; our checks confirmed the targeted failures fell and no new kind appeared. The same gate had refused 11 times before, each for a traced reason, so the approval means something.
@@ -60,8 +60,8 @@ The customer simulator and judge is gpt-oss-120b, identical in every gate.
 | Still failing: skipped a policy step / went in circles | 25 / 8 | 31 / 12 |
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/wasted-calls-dark.png">
-  <img src="docs/img/wasted-calls-light.png" alt="Wasted tool calls: base 69%, round 7 + guards 46%, round 13 26%, round 13 + guards 29%, round 16 21%, teacher 5%." width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="img/wasted-calls-dark.png">
+  <img src="img/wasted-calls-light.png" alt="Wasted tool calls: base 69%, round 7 + guards 46%, round 13 26%, round 13 + guards 29%, round 16 21%, teacher 5%." width="100%">
 </picture>
 
 Measured against tau2's expert path (`scripts/trajectory_efficiency.py`). The student also needs its guards less each round (4.3 → 1.3 blocked calls per conversation): the guards' lessons moved into the weights.
@@ -278,8 +278,8 @@ AgentTune's `FailureDetector`, `FailureClassifier` (gpt-oss-120b), `RetrainingTr
 **Gated rounds.** The gate refused 11 times, each for a reason we could trace and fix, before round 16 passed:
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/gates-dark.png">
-  <img src="docs/img/gates-light.png" alt="Candidate task success per gate: eleven refusals between 7% and 23%, then gate 16 promoted at 15% against a 10% base." width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="img/gates-dark.png">
+  <img src="img/gates-light.png" alt="Candidate task success per gate: eleven refusals between 7% and 23%, then gate 16 promoted at 15% against a 10% base." width="100%">
 </picture>
 
 
@@ -510,26 +510,26 @@ What 14 rounds taught us decides the order: the gate is too noisy to see a 5-poi
 
 - **HF models collection:** https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6 (adapters `mitushigoyal5/shipwright-lora`, a branch per round; deployed: `round-16`, the first promoted; `round-7`, best pooled; `round-13`, first on-policy corrections)
 - **HF datasets collection:** https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb (`mitushigoyal5/shipwright-sft`, and `mitushigoyal5/shipwright-runs` with all gate traces and decisions)
-- **HF Space (results page):** https://huggingface.co/spaces/mitushigoyal5/shipwright (source in `docs/space/`)
-- **Blog post:** `docs/blog.md` (charts from `docs/make_charts.py`)
+- **HF Space (results page):** https://huggingface.co/spaces/mitushigoyal5/shipwright (source in `submission/space/`)
+- **Blog post:** `submission/blog.md` (charts from `submission/make_charts.py`)
 - **GitHub:** TODO public link
 - **Demo:** control-room, a read-only replay of a real round's artifacts step by step, including a genuine gate refusal. It never calls a model; it only reads what the pipeline wrote. It runs locally (`streamlit run src/shipwright/control_room/app.py`). A public Space is ready in `infra/space/`, but a live-server Space needs an HF PRO account.
 
 ## Documentation and reproduction
 
 - **Repo layout:**
-  - `src/shipwright/heal/`: classify, router, tool ledger, SFT data, gate metrics;
-  - `src/shipwright/loop/`: the unattended loop (controller, stages, recipe, jobs);
-  - `src/shipwright/llm/`: prompted tools, guards, reminders, context, provider patches;
-  - `src/shipwright/observability/`: logs and traces;
-  - `src/shipwright/control_room/`: the demo;
-  - `scripts/`: flat entry points;
-  - `configs/`: frozen splits and gate, systems, rounds;
-  - `docs/`: setup, pipeline, ops;
-  - `docs/system-design.html`: the full design.
-- **Setup and runs:** `docs/setup/*.md`, `docs/pipeline/*.md`. The loop, unattended: `shipwright run --config configs/rounds/<name>.yaml --launch`. Offline: `--dry-run`. Tests: `pytest` (372 pass).
-- **Reproducibility:** every run writes `run_config.json` (models, seeds, code sha, observation version) and `repro.json`, and every gate records the sha256 of the frozen configs.
-- **Check our numbers:** `python scripts/reproduce.py` recomputes the headline numbers (gate 16 and the hidden split, 19 claims) from the public run files on the Hub and prints MATCH or MISMATCH for each against this write-up; no GPU, no token, about 2 MB. Each adapter from here on also carries AgentTune's lineage record (`lexsi_provenance.json`).
+  - `src/shipwright/loop/`: the unattended loop (CLI, controller, recipe, stages, jobs);
+  - `src/shipwright/heal/`: detect, classify, route, tool ledger, SFT data, gate and AuditKIT metrics;
+  - `src/shipwright/llm/`: the serving harness (prompted tools, context, guards, reminders, providers);
+  - `src/shipwright/observability/`: logs, failure reports and traces;
+  - `src/shipwright/control_room/`: the read-only replay;
+  - `scripts/`: one entry point per stage;
+  - `configs/`: frozen splits and gate, systems, round configs;
+  - `docs/`: system design, evaluation protocol, pipeline, setup and operations;
+  - `submission/`: this write-up, the blog post, charts and the Space page.
+- **Setup and runs:** `README.md`, then `docs/`. The loop, unattended: `shipwright run --config configs/rounds/<name>.yaml --launch`. Offline: `--dry-run`. Tests: `pytest` (371 pass).
+- **Reproducibility:** every run writes `run_config.json` (models, seeds, code sha, observation version) and `repro.json`; every round manifest records the image and the hashes of the frozen configs, and every gate decision the gate's `config_sha`.
+- **Check our numbers:** `python scripts/reproduce.py` recomputes the headline numbers (gate 16 and the hidden split, 17 claims) from the public run files on the Hub and prints MATCH or MISMATCH for each against this write-up; no GPU, no token, about 2 MB.
 - **Declaration of work done outside the hackathon:** none. All code, data and models were produced between Nov 1 and Nov 15, 2026.
 
 ## Teammates

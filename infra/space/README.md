@@ -1,57 +1,34 @@
-# Deploying control-room as a Hugging Face Space
+# Control room image
 
-## Why a Space, not a Job
+The control room (`src/shipwright/control_room/`) is a read-only Streamlit replay of a round: run, detect, classify,
+route, fix, train, gate, outcome, task by task. It never calls a model, a trainer or the gate; it only reads run
+directories. This image packages it with a fixed set of runs, for hosting as a Docker Hugging Face Space. It contains
+no GPU code, no AgentTune or AuditKIT, and no secrets.
 
-Cloud Run Jobs and HF Jobs are for the compute-and-cost services (agent runs, training, gate
-evals) - they run once per round and stop. control-room is the opposite: a small, always-available,
-read-only UI for judges to open on Demo Day, which is exactly what a Space is for. No GPU, no
-secrets, no AgentTune/AuditKIT - it only reads the run-dir artifacts the harness scripts already
-produced (`docs/system-design.html`, "Demo: the loop, round by round").
+## Build and run
 
-## Populate the artifacts before building
-
-`infra/space/Dockerfile` copies `runs/` into the image (control-room cannot produce its own
-artifacts - it is read-only by design). Before building or pushing, make sure `runs/` holds the
-run dir(s) you want the demo to show - a real round's output (`scripts/baseline.py`,
-`scripts/classify.py`, `scripts/round_status.py`, `scripts/gate_eval.py`, in that order, per
-`docs/pipeline/baseline.md`/`docs/pipeline/gate.md`), or a `--dry-run`/`--no-llm`/`--local-dry-run` pass of the same
-scripts for a quick offline check with no model calls.
-
-## Build (context is the repo root, same as the main harness image)
+`infra/space/Dockerfile` copies `runs/` into the image, so pull the rounds to show first
+(`scripts/pull_runs.py`, and `hub_runs.pull_gate_results` for gate results). The build context is the repository root.
 
 ```sh
-docker build -f infra/space/Dockerfile -t shipwright-control-room:latest .
-docker run -p 7860:7860 shipwright-control-room:latest   # open http://localhost:7860
+docker build -f infra/space/Dockerfile -t shipwright-control-room .
+docker run -p 7860:7860 shipwright-control-room      # http://localhost:7860
 ```
 
-## Create the Space (Docker SDK)
+Without Docker: `streamlit run src/shipwright/control_room/app.py`.
 
-Hugging Face Spaces need a `README.md` with a YAML metadata header at the Space repo's root. This
-project's own root `README.md` is the GitHub one; the Space gets its own copy with this header
-prepended when pushed - do not overwrite the main repo README with it.
+## Publish as a Space
+
+A Docker Space needs the Dockerfile, the paths its `COPY` lines reference, and a `README.md` with this header at the
+Space repository's root (not in this repository's root):
 
 ```yaml
 ---
 title: Shipwright Control Room
-emoji: 🛟
 sdk: docker
 app_port: 7860
-pinned: false
 ---
 ```
 
-```sh
-# first time: create the Space
-hf repo create <org>/shipwright-control-room --type space --space_sdk docker
-
-# push: the Space repo's root needs Dockerfile, the metadata README above, and
-# everything infra/space/Dockerfile's COPY lines reference (src/shipwright/control_room/,
-# src/shipwright/__init__.py, runs/) - a small sync script or a dedicated git remote
-# for the Space repo is the usual pattern, not committing Space-specific files into
-# this repo's own root.
-```
-
-The exact push mechanics (a separate git remote pointed at the Space repo vs. the `huggingface_hub`
-Python API's `upload_folder`) are a one-time setup step once someone is ready to actually publish
-the demo - this file documents the shape, not a tested end-to-end push, since that needs a real
-`HF_TOKEN` this environment does not have.
+Upload those files with `huggingface_hub.upload_folder` to a Space created with `hf repo create <name> --type space
+--space_sdk docker`.

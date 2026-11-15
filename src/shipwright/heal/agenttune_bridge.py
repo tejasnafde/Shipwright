@@ -15,9 +15,6 @@ classes; it does not replace them:
   2 safety gates) decides if a weight-fix round trains (the loop's train stage, ``scripts/round_status.py``).
 - GATE: ``agenttune_gate_check`` calls ``DeploymentGate.evaluate_decision`` on the paired
   held-out runs. It cannot approve by default: fewer than ``min_test_samples`` cases rejects.
-
-Approach for the classifier subclass, the gate floor and the loop wiring ported from
-ig/main (Ishank): src/shipwright/self_heal/classifier.py, gate.py, loop.py.
 """
 
 from __future__ import annotations
@@ -74,7 +71,7 @@ def trace_audit_records(trace: dict, traj_id: str) -> list[dict]:
     sorted JSON arguments, so only an identical call counts as a revisit), tool_name,
     stage_type, state_snapshot, status, error_details. A malformed call, an unknown tool or
     a tool result with an error is status ``error``. The snapshot also keeps the task id,
-    the message index and the raw model output of that turn (AGENTS.md: log raw output).
+    the message index and the raw model output of that turn (the classifier reads the raw text).
     """
     records = []
     for turn in trace.get("agent_turns") or []:
@@ -618,8 +615,7 @@ def retrain_status_for_run(run_directory: Path, sft_path: Path | None, heal_conf
         rewards = [float(t["reward"]) for t in read_jsonl(Path(run_directory) / "traces.jsonl") if t.get("reward") is not None]
     status = retrain_status(read_jsonl(Path(run_directory) / "failures.jsonl"), corrections,
                             heal_config.get("retrain_trigger"), baseline_rewards=baseline_rewards, rewards=rewards)
-    status.update(run_dir=str(run_directory), sft=str(sft_path) if sft_path else None,
-                  config_status=heal_config.get("status"))
+    status.update(run_dir=str(run_directory), sft=str(sft_path) if sft_path else None)
     (Path(run_directory) / "round_status.json").write_text(json.dumps(status, indent=2, default=str))
     return status
 

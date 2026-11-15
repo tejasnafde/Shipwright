@@ -1,9 +1,0 @@
-# Round 2 weight-fix candidate: the round-2 LoRA adapter alone, no tool patches.
-# Alone on purpose: the base system has no patches either, so any gain is the weights.
-name: r2-weight
-model: CohereLabs/tiny-aya-global
-adapter:
-  repo: mitushigoyal5/shipwright-lora
-  revision: round-2
-route: weight_fix
-targets: [invented_id, loop, tool_error_ignored, unknown_tool, malformed_args]

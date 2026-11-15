@@ -15,7 +15,7 @@ Usage:
 --task <id>                      only that task (scripts with --task-ids: baseline, teacher_runs).
 
 Without --execute nothing runs. A command that calls model APIs (HF credits, Vertex billing)
-also needs --allow-spend, and a human on the team must have asked for that run (AGENTS.md).
+also needs --allow-spend, so a paid rerun is always a deliberate choice.
 """
 
 from __future__ import annotations

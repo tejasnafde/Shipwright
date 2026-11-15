@@ -262,10 +262,6 @@ def set_root(span: trace_api.Span | None) -> None:
         _root_ctx = trace_api.set_span_in_context(span)
 
 
-def root_context() -> otel_context.Context | None:
-    return _root_ctx
-
-
 def traceparent() -> str | None:
     """W3C traceparent of the current span (or the root), for a child process."""
     carrier: dict[str, str] = {}

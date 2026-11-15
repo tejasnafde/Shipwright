@@ -3,7 +3,7 @@
     shipwright doctor            # free: accounts, tokens, configs, data, every command the loop builds
     shipwright doctor --cloud    # also a vLLM start on an HF GPU with the adapter (about $0.1)
 
-Every check below exists because the thing it checks broke a real run (AGENTS.md, "Known traps"): a token without the Jobs
+Every check below exists because the thing it checks broke a real run (docs/ops/known-issues.md): a token without the Jobs
 scope, a training row the chat template rejects, a launcher that does not take an option, vLLM that needs a compiler. `shipwright
 run --launch` runs the free checks before it starts the cloud execution and starts nothing if one fails. Each check says what it saw, so a
 red line names its own fix.

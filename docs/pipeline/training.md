@@ -1,137 +1,73 @@
-# Weight fix: teacher data and LoRA training
+# The weight fix: teacher data and LoRA training
 
-The weight-fix path. Round 2 had no tool patches, so the teacher replays the failures routed to `tool_fix` too (`--routes`, default `tool_fix,weight_fix`); only `no_fix` is left out:
+Failures routed `weight_fix` are fixed in the weights: a teacher shows the right behaviour, the examples are rendered
+exactly as the student sees its requests, and a LoRA adapter is trained on HF Jobs with AgentTune. The loop runs these
+as the `teacher`, `corrections`, `data` and `train` stages; each is also a script that runs alone.
 
-1. **Teacher runs** (`scripts/teacher_runs.py`): a strong model plays the agent on train tasks.
-2. **SFT data** (`scripts/build_sft.py`, `src/shipwright/heal/sft_data.py`): its successful runs,
-   rendered exactly as Tiny Aya sees them.
-3. **Training** (`scripts/train_job.py` launches `scripts/train_lora.py` on HF Jobs): a LoRA on
-   Tiny Aya Global with AgentTune, pushed to the Hub on a round branch.
+## Three sources of examples
 
-Nothing here spends credits unless you run a command that says so (teacher runs call Vertex AI
-or the HF router; `build_sft.py --push` writes to the Hub; `train_job.py --launch` starts a paid GPU job).
+| Source | Script | What it teaches |
+|---|---|---|
+| Teacher replay | `scripts/teacher_runs.py` | whole passing conversations on the train tasks the student failed |
+| On-policy corrections | `scripts/build_corrections.py` | the right next turn at each point the current candidate went wrong |
+| General function calling | `scripts/build_bfcl_replay.py` | BFCL samples outside the ones the gate scores, so narrow training does not erase general tool use |
 
-## The teacher sees the student's prompt
+**Teacher replay.** The teacher plays the agent with the student's prompted view (`prompted_tools.force_prompted`):
+the same compact tool list, reply protocol and 8,192-token prompt budget; only its reply budget is larger, because a
+reasoning model spends tokens before it answers. Only passing runs (`kept.jsonl`) become data. A task the teacher
+solved before passes again about half the time, so the harvest modes in the round config (`teacher.only_solved_from`,
+`skip_unsolved_from`, `skip_solved_from`) aim spend at the tasks that pay. The teacher must allow training on its
+outputs.
 
-`scripts/teacher_runs.py` calls `prompted_tools.force_prompted(teacher)`, so the teacher gets the
-same request as Tiny Aya: no native tools, the compact tool list and the ```json block protocol
-in the system prompt, tool results as user turns, and the same 8192-token prompt budget
-(`context.fit_messages`). Only its reply budget is larger (`--reply-tokens`, default 4096),
-because a reasoning teacher spends tokens before it answers. Replies over 700 tokens (the
-student's budget) are dropped in `build_sft.py`.
+**On-policy corrections.** The refused candidate runs the train tasks with the guards on (`candidate_train`). Every
+turn a guard rejected is a wrong turn; the teacher is shown the candidate's view at that point (trimmed the same way)
+and gives the right next reply. A correction row trains only that final reply (`train_last_only`), never the
+candidate's own earlier turns. Answers are cached (`asked.jsonl`), so a rerun does not pay twice. Each correction
+round trains on all earlier rounds' corrections.
 
-The teacher (`--teacher-model`) and the user simulator (`--user-model`) are required arguments,
-with no default. The teacher must allow training on its outputs (no closed Claude or GPT models).
+**General function calling.** 100 BFCL v3 samples per category, taken after the first 100 that the gate scores
+(`tests/test_bfcl_replay.py` checks they never overlap).
 
-**Team choice (2026-11-09):** teacher `vertex/deepseek-ai/deepseek-v4.1-flash-maas`, user simulator
-`vertex/openai/gpt-oss-120b-maas`, both on Vertex AI (GCP budget, not HF credits; setup and auth in
-`docs/pipeline/baseline.md`, "Vertex AI models"). Other ids still work, for example on the HF router
-`openai/openai/gpt-oss-120b:cerebras` (pass `--reasoning-effort medium`) or
-`openai/CohereLabs/aya-expanse-32b:cohere`.
+## Building the dataset
 
-The teacher's requests start with the same system message (policy plus tool list) on every call,
-so Vertex implicit prefix caching can apply; `summary.json` and `teacher_summary.json` report the
-cache hit rate, and the cost estimate prices cached tokens at $0.03 per 1M ("Prompt caching" in
-`docs/pipeline/baseline.md`).
+`scripts/build_sft.py` renders every example with the recorded prompt (`prompts.json`) and the same conversion the live
+request uses, then filters:
 
-If the teacher is the same model as the user simulator, that is fine for retail: the user
-simulator has no tools, so it never gets the prompted view.
+- train-split runs only (`run_config.json`);
+- no conversation with a leaked user-simulator turn;
+- no correction whose view had lost the customer's identity;
+- no reply longer than the student's 512-token reply budget, no row over the context;
+- every row is rendered once with Tiny Aya's real chat template before it is accepted.
 
-## Record of the agent prompt
+A conversation longer than the window is cut into the windows the student would see. `--boost` repeats the examples
+of tasks the candidate failed. The dataset is pushed to `mitushigoyal5/shipwright-sft` on branch `round-N`, with
+`sft_stats.json`.
 
-Every prompted request records its un-converted system prompt and tool schemas
-(`prompted_tools.recorded_prompts()`, key `prompt_sha`, also in each trace turn).
-`scripts/baseline.py` writes them to `prompts.json` in the run dir. `build_sft.py` renders
-training data from it with `convert_messages`, the same function the live request uses. For
-older runs without `prompts.json` it rebuilds the prompt from tau2 (policy plus the English
-language guidance); this rebuild was checked equal to a recorded prompt on 2026-11-08.
+## Training
 
-## SFT format
+`scripts/train_job.py` launches `scripts/train_lora.py` on an HF Job (`l40sx1` by default; it prints price x timeout
+before launching and always passes a timeout). The training script:
 
-`sft.jsonl`, one example per line:
+- turns each row into an AgentTune `EventLog` (user turns are observations, assistant turns are trained text) and calls
+  `agenttune.create_distill_trainer`, checking that the rows AgentTune builds equal the dataset;
+- passes its own trainer factory: labels are masked outside the assistant turns (and outside the last assistant turn
+  of a correction row), the end-of-turn token is trained, and the loss is computed only over the trained window
+  (`logits_to_keep`), because Tiny Aya's 262,144-token vocabulary makes full logits the memory bottleneck;
+- compares its first-step loss with the model's own `labels=` loss and refuses to train if they differ;
+- trains LoRA r 16, alpha 32 on all attention and MLP projections. The promoted recipe: a fresh adapter from the base
+  model, 2 epochs, learning rate 1e-4;
+- pushes the adapter, `training_meta.json`, AgentTune's lineage record `lexsi_provenance.json` and a model card to
+  `mitushigoyal5/shipwright-lora` on branch `round-N`.
 
-```json
-{"messages": [{"role": "system", "content": "..."}, {"role": "assistant", "content": "Hi! ..."},
-              {"role": "user", "content": "..."}, {"role": "assistant", "content": "```json\n{...}\n```"}, ...],
- "source": "teacher", "task_id": "3", "simulation_id": "...", "window": 0,
- "tokens": 4120, "reply_tokens_max": 96}
-```
+A sound first step on real rows is a loss of a few nats that equals the model's own; a loss near ln(262,144) = 12.5
+means the labels are wrong.
 
-- Roles are only system, user and assistant (Tiny Aya's template). Tool calls are the ```json
-  block from `format_tool_call`; tool results are `Tool result for <name>: <minified JSON>`.
-- Every assistant message is a target. System and user messages are context (loss-masked).
-- A run whose whole conversation fits the prompt budget is one example. A longer run is cut into
-  windows (`--long-mode window`, default): each window is the trimmed prompt Tiny Aya would get
-  before one of its turns, plus that turn; each assistant turn is a target once.
-  `--long-mode drop` drops long runs instead.
-- Duplicates (same messages) are removed. Examples over `--max-tokens` (8192) are dropped.
-- `--replay RUN_DIR` mixes in Tiny Aya's own successful runs (`source: replay`).
-- `--tool-patches patches/ledger.jsonl` renders every example with the ledger's applied tool
-  patches, so the LoRA trains on the tool list the gated system sees (teacher runs used the
-  original descriptions; fields a run already had patched stay as they are).
-- Only runs from the train split are accepted (`run_config.json`); `--allow-split` overrides.
-- `sft_stats.json`: examples, per source, tasks, assistant turns, average and max tokens, drops.
-
-## Training with AgentTune
-
-`scripts/train_lora.py` (PEP 723 script, `agenttune==1.1.3`, which pins `trl==1.7.1` and
-`transformers>=5.15`):
-
-- Each example becomes a full-tier AgentTune `EventLog`: user turns are `OBSERVATION` events,
-  assistant turns are `TEXT` events. AgentTune's `EventLog` has no system event, so a small
-  subclass (`SystemPromptEventLog`) puts the system prompt back as the first, masked message of
-  its SFT row.
-- `agenttune.create_distill_trainer(student, trajectories=logs, trainer_factory=...)` runs
-  `Project.distill`. The script checks that the rows AgentTune builds equal `sft.jsonl`.
-- Our `trainer_factory` (`MaskedSFTFactory`) tokenizes each row with Tiny Aya's chat template and
-  sets labels to -100 outside the assistant turns, from AgentTune's `loss_mask`. The assistant
-  end-of-turn token is trained, so the model learns to stop. It returns a TRL `SFTTrainer` with
-  LoRA (r 16, alpha 32, dropout 0.05, all attention and MLP projections), lr 2e-4 cosine,
-  3 epochs, bf16, batch 1 x grad accum 8, max_seq_len 8192, gradient checkpointing.
-  AgentTune's built-in factory trains on every token, and TRL's `assistant_only_loss` depends on
-  chat template generation markers (not verified for Tiny Aya), so we pass our own factory.
-- The adapter, `training_meta.json` and a model card go to `mitushigoyal5/shipwright-lora`,
-  branch `--revision` (e.g. `round-1`).
-
-## Commands
+## By hand
 
 ```sh
-# 0. Offline checks (no network, no credits)
-.venv/bin/python -m pytest -q
 .venv/bin/python scripts/teacher_runs.py --dry-run --teacher-model vertex/deepseek-ai/deepseek-v4.1-flash-maas \
-    --user-model vertex/openai/gpt-oss-120b-maas --task-ids 0 1 --trials 1 --output-dir runs/teacher-dry
-
-# 1a. Vertex access check (2 tiny calls, GCP billing)
-.venv/bin/python scripts/check_vertex.py
-
-# 1b. Teacher runs (Vertex: spends GCP budget). Default tasks: the tool_fix and weight_fix ids of the baseline run.
-#     Teammates: export SHIPWRIGHT_GCLOUD_CONFIG=lexsi first.
-.venv/bin/python scripts/teacher_runs.py --teacher-model vertex/deepseek-ai/deepseek-v4.1-flash-maas \
-    --user-model vertex/openai/gpt-oss-120b-maas --trials 3 --from-run runs/baseline-20261108-214337
-#    add --skip-unsolved-from runs/<earlier teacher run> to leave out tasks it failed 3 decided trials in a row;
-#    add --all-train to also run every train task; outputs kept.jsonl and teacher_summary.json
-
-# 2. Build the SFT data (downloads only the Tiny Aya tokenizer; --estimate-tokens avoids that)
-.venv/bin/python scripts/build_sft.py --teacher runs/teacher-<stamp> \
-    --replay runs/baseline-20261108-214337 --output-dir runs/sft-round-1
-
-# 3. Push the dataset (writes to the Hub)
-.venv/bin/python scripts/build_sft.py --teacher runs/teacher-<stamp> \
-    --replay runs/baseline-20261108-214337 --output-dir runs/sft-round-1 \
-    --push --revision round-1
-
-# 4. Training job: plan and cost first, then launch (paid GPU)
-.venv/bin/python scripts/train_job.py --dataset-revision round-1 --revision round-1
-.venv/bin/python scripts/train_job.py --dataset-revision round-1 --revision round-1 --launch
-#    fallback flavor: --flavor a10g-small; extra train args after "--", e.g. -- --epochs 2
-hf jobs logs <job id>      # follow
-hf jobs cancel <job id>    # stop early
+    --user-model openai/openai/gpt-oss-120b:deepinfra --task-ids 0 1 --trials 1 --output-dir runs/teacher-dry
+.venv/bin/python scripts/build_sft.py --teacher runs/<teacher run> --output-dir runs/sft-dry --estimate-tokens
+.venv/bin/python scripts/train_job.py --dataset-revision round-N --revision round-N            # plan and cost only
+.venv/bin/python scripts/train_job.py --dataset-revision round-N --revision round-N --launch   # paid GPU
 ```
-
-`train_job.py` prints the flavor price times the timeout (worst case) before it launches.
-Default `l4x1` at $0.80/h with a 2 h timeout: at most $1.60. The timeout is always passed:
-HF Jobs stop after 30 minutes by default.
-
-Memory risk: Tiny Aya's vocabulary is large, so the logits of an 8192-token row
-take several GB. If the job runs out of memory on 24 GB, lower `--max-seq-len` (rows over it are
-dropped and counted) or use a larger flavor with `--price-per-hour`.

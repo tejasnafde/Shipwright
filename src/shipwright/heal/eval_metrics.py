@@ -236,11 +236,9 @@ def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, flo
     """Wilson score interval for a binomial proportion (default: 95%).
 
     More reliable than the normal approximation at small n or p near 0/1 - exactly the
-    regime our held-out set (20 tasks) and gate samples sit in. A result like "20/20" is
-    not the same claim as "the true rate is 100%"; this is the same framing a different
-    Track 3 team used for their own 30-task held-out claim ("consistent with a true rate
-    of 88-100%", github.com/Timidan/lexsi-hack) rather than reporting a bare percentage
-    the sample size cannot support.
+    regime our held-out set (20 tasks) and gate samples sit in. A result like "30/30" is
+    not the same claim as "the true rate is 100%": it is consistent with a true rate of
+    about 88% to 100%, and the interval says so where a bare percentage cannot.
     """
     if n == 0:
         return None

@@ -71,11 +71,6 @@ def test_the_loop_stops_after_the_most_rounds_of_corrections_even_if_it_improves
     assert recipe.exhausted and "stop" in recipe.reasons[0]
 
 
-def test_an_old_manifest_with_only_the_corrections_flag_counts_one_round():
-    from shipwright.loop.recipe import recipe_from_dict
-
-    assert recipe_from_dict({"corrections": True}).corrections_rounds == 1
-    assert recipe_from_dict({}).corrections_rounds == 0
 
 
 def test_context_overflow_with_the_guards_on_turns_the_short_policy_on_before_more_corrections():

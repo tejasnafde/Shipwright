@@ -69,16 +69,6 @@ def recipe_to_dict(recipe: Recipe) -> dict:
             "capacity": recipe.capacity, "exhausted": recipe.exhausted, "reasons": list(recipe.reasons)}
 
 
-def recipe_from_dict(saved: dict) -> Recipe:
-    """A recipe from a manifest (older manifests lack the newer fields)."""
-    return Recipe(
-        epochs=saved.get("epochs", DEFAULT_EPOCHS), learning_rate=saved.get("learning_rate", DEFAULT_LEARNING_RATE),
-        boost=saved.get("boost", DEFAULT_BOOST), general_replay=saved.get("general_replay", 0),
-        tool_guards=saved.get("tool_guards", False), corrections=saved.get("corrections", False),
-        corrections_rounds=saved.get("corrections_rounds", 1 if saved.get("corrections") else 0),
-        capacity=saved.get("capacity", False), exhausted=saved.get("exhausted", False), reasons=list(saved.get("reasons", [])))
-
-
 def failed_check_names(gate_decision: dict) -> set[str]:
     return {check["name"] for check in gate_decision.get("checks", []) if not check["passed"]}
 

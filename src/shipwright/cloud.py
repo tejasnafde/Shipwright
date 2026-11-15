@@ -28,8 +28,8 @@ IMAGE = "asia-south1-docker.pkg.dev/lexsi-hackathon/shipwright/harness"
 DEFAULT_BUCKET = "lexsi-hackathon-runs"
 OWNERS = ("tejas", "ishank", "mitushi", "main")
 HOMEBREW_GCLOUD = "/opt/homebrew/share/google-cloud-sdk/bin/gcloud"
-TEAM_GCLOUD_CONFIG = "lexsi"        # docs/setup/gcp-setup.md, step 2 (Ishank, Mitushi)
-FALLBACK_GCLOUD_CONFIG = "personal"  # Tejas's config name
+TEAM_GCLOUD_CONFIG = "lexsi"        # the named gcloud config made in docs/setup/gcp-setup.md
+FALLBACK_GCLOUD_CONFIG = "personal"  # used when no "lexsi" config exists
 
 # ---------------------------------------------------------------- Hugging Face
 
@@ -39,7 +39,7 @@ RUNS_REPO = "mitushigoyal5/shipwright-runs"    # gate results, candidate-on-trai
 SFT_REPO = "mitushigoyal5/shipwright-sft"      # one branch per round: round-N
 LORA_REPO = "mitushigoyal5/shipwright-lora"    # one branch per round: round-N
 
-# HF Jobs, USD per hour (AGENTS.md, 2026-11-08). A job is billed for its running seconds, not its time in the queue.
+# HF Jobs, USD per hour (checked 2026-11-08). A job is billed for its running seconds, not its time in the queue.
 GPU_PRICES = {"t4-small": 0.40, "l4x1": 0.80, "a10g-small": 1.00, "a10g-large": 1.50, "l40sx1": 1.80,
               "a100-large": 2.50, "rtx-pro-6000": 2.75}
 
@@ -107,7 +107,7 @@ def gcloud_binary() -> str | None:
 def gcloud_config(binary: str | None = None) -> str:
     """$SHIPWRIGHT_GCLOUD_CONFIG, else `lexsi` if this machine has it, else `personal`.
 
-    AGENTS.md: every gcloud command names the account config; the active one is never trusted."""
+    Every gcloud command names the account config; the active one is never trusted."""
     from_environment = os.environ.get("SHIPWRIGHT_GCLOUD_CONFIG")
     if from_environment:
         return from_environment
@@ -125,7 +125,7 @@ def gcloud_config(binary: str | None = None) -> str:
 
 
 def gcloud_command(*arguments: str) -> list[str]:
-    """gcloud with the project and the account config named, as AGENTS.md requires."""
+    """gcloud with the project and the account config named, never the active ones."""
     binary = gcloud_binary()
     if binary is None:
         raise SystemExit("gcloud not found: install it or set SHIPWRIGHT_GCLOUD")

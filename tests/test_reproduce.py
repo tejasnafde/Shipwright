@@ -49,14 +49,14 @@ def published_runs(cache: Path, base_pass_1=0.1) -> None:
 def test_every_claim_matches_files_that_say_what_the_write_up_says(tmp_path, capsys):
     published_runs(tmp_path)
     assert reproduce.main(["--offline", "--cache-dir", str(tmp_path)]) == 0
-    assert "19 of 19 claims match" in capsys.readouterr().out
+    assert "17 of 17 claims match" in capsys.readouterr().out
 
 
 def test_a_number_the_files_do_not_support_fails_the_check(tmp_path, capsys):
     published_runs(tmp_path, base_pass_1=0.05)
     assert reproduce.main(["--offline", "--cache-dir", str(tmp_path)]) == 1
     output = capsys.readouterr().out
-    assert "MISMATCH" in output and "18 of 19 claims match" in output
+    assert "MISMATCH" in output and "16 of 17 claims match" in output
 
 
 def test_exact_mcnemar():

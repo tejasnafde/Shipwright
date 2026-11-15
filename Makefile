@@ -1,5 +1,4 @@
-# Short names for common commands. Adapted from ig/main (Ishank), Makefile.
-# The baseline and classify targets spend HF credits: run them only when the team asked for that run.
+# Short names for common commands. `baseline` calls model APIs and spends credits; the others are free.
 PY := .venv/bin/python
 RUN ?= runs/dry
 

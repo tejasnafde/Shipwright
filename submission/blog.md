@@ -1,6 +1,6 @@
 ---
 title: "Self-healing on a $1.50-an-hour GPU: a 3B support agent that fixes its own mistakes"
-thumbnail: docs/img/cost-vs-success-light.png
+thumbnail: img/cost-vs-success-light.png
 authors:
 - user: mitushigoyal5
 - user: ishankgiri

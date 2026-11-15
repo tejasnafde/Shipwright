@@ -1,0 +1,1 @@
+{"action": "promote", "round": 16, "candidate": "r16-weight", "adapter": {"repo": "mitushigoyal5/shipwright-lora", "revision": "round-16"}, "tool_guards": true, "state_reminders": false, "decision_file": "/app/runs/gate-r16/gate_decision.json", "promoted_at": "2026-11-15T14:38:31+00:00"}

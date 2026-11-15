@@ -1,4 +1,4 @@
-"""Deploy gate (step 05 GATE in docs/system-design.html): promote or reject a candidate.
+"""Deploy gate (docs/evaluation.md, docs/pipeline/gate.md): promote or reject a candidate.
 
 Pure logic: two metric dicts (``shipwright.heal.eval_metrics.compute_metrics``) and the gate
 config (``configs/gate.yaml``) in, a decision dict out. No I/O except ``load_config``.

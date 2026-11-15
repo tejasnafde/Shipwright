@@ -1,5 +1,4 @@
 # Harness image for the Cloud Run Jobs shipwright-<owner> (docs/setup/cloud-runs.md).
-# Adapted from Ishank's ig/main infra/docker/Dockerfile.
 #
 # CPU only: the agent, user simulator, teacher and judge are remote APIs (HF router, Vertex AI).
 # No model weights in the image. Build it with Cloud Build only (infra/cloudbuild.yaml), never on a laptop.

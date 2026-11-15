@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 ALLOWED_MODELS = {
-    # AGENTS.md hard rule: only these base models.
+    # Hackathon rule: only these base models.
     "CohereLabs/tiny-aya-base", "CohereLabs/tiny-aya-global", "CohereLabs/tiny-aya-fire",
     "CohereLabs/tiny-aya-water", "CohereLabs/tiny-aya-earth",
     "CohereLabs/aya-expanse-8b", "CohereLabs/aya-expanse-32b",

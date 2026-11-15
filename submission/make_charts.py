@@ -1,6 +1,6 @@
 """The write-up's charts, light and dark, from numbers measured in the gate runs (sources in comments).
 
-    pip install matplotlib && python docs/make_charts.py      # writes docs/img/*.png
+    pip install matplotlib && python submission/make_charts.py      # writes submission/img/*.png
 """
 
 from pathlib import Path

@@ -1,4 +1,4 @@
-# Round 6 candidate, written by scripts/run_loop.py.
+# Round 6 candidate, written by the loop (gate 6).
 # Adapter: the same as the round before. Tool guards: on.
 # Why: loop, context_overflow, tool_error_ignored failed: turn the tool guards on (a repeated lookup, a change to another product type and a second change to one order are rejected). No training needed
 name: r6-weight

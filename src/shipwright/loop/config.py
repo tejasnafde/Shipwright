@@ -85,7 +85,7 @@ def validate(config: dict) -> list[str]:
             problems.append(f"{stage}: worst case ${worst_case_gpu_usd(settings):.2f} (price x timeout) passes its "
                             f"cap ${caps[stage]:.2f}")
     if config["gate"].get("timeout") and cloud.timeout_hours(config["gate"]["timeout"]) < 1:
-        problems.append("gate.timeout: under 60m; a gate needs 45 to 50 minutes of wall time (AGENTS.md, gate 8)")
+        problems.append("gate.timeout: under 60m; a gate needs 45 to 50 minutes of wall time (docs/ops/known-issues.md)")
     for key in config["gate"].get("candidate_extra") or {}:
         if key not in CANDIDATE_EXTRA_KEYS:
             problems.append(f"gate.candidate_extra: {key} is not one of {sorted(CANDIDATE_EXTRA_KEYS)}")

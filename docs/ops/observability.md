@@ -56,6 +56,3 @@ d='runs/<dir>'; export_run([json.loads(l) for l in open(d+'/traces.jsonl')], d+'
 records (`src/shipwright/observability/otel_import.py`). Spans from our harness convert without loss
 (CI checks this on the dry run). Spans from another GenAI tracer convert on a best-effort
 basis: `chat` spans become agent turns and `execute_tool` spans become tool calls.
-
-Ported from ig/main (Ishank): `JsonlFileSpanExporter` and the turn and tool span layout,
-from `src/shipwright/common/otel_setup.py` and `docs/observability-setup.md`.

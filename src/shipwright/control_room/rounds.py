@@ -6,7 +6,7 @@ A round is one pass of the loop. Its dirs follow the naming of the loop (shipwri
   before   rN-baseline            the base student on the training tasks (a loop round, N >= 4, starts from
            rN-cand-train          the previous adapter on the training tasks instead)
   teacher  rN-teacher / rN-sft    the corrections the student is trained on
-  gate     gate-rN                the gate's results (scripts/pull_gate.py or the sidebar button pulls them)
+  gate     gate-rN                the gate's results (the sidebar button pulls them: hub_runs.pull_gate_results)
   after    r(N+1)-cand-train      this round's adapter on the same training tasks, run at the start of the next round
 
 Each round's manifest, runs/round-N.json, says which stages ran and what the gate decided.

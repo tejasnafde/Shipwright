@@ -1,4 +1,4 @@
-"""configs/splits.yaml and the hidden-set guard (AGENTS.md, Evaluation rules)."""
+"""configs/splits.yaml and the hidden-set guard (docs/evaluation.md)."""
 
 from __future__ import annotations
 

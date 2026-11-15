@@ -1,4 +1,4 @@
-# The self-healing loop: one command, unattended (`shipwright`)
+# The self-healing loop: one command, unattended
 
 The whole loop is one command, `shipwright` (`scripts/loop.py` before `pip install -e .`; code in `src/shipwright/loop/`).
 A real run is ONE Cloud Run execution that runs every stage itself with nobody watching, and ends in one of five
@@ -6,9 +6,9 @@ statuses. The laptop only checks, plans, launches and reads.
 
 ```sh
 shipwright doctor                                                   # free preflight: tokens, configs, every command the loop builds
-shipwright plan --config configs/rounds/r10-fixes.yaml              # free: what it would run and may spend
-shipwright run  --config configs/rounds/r10-fixes.yaml --dry-run    # free, offline: fake models, fake HF jobs (CI runs it)
-shipwright run  --config configs/rounds/r10-fixes.yaml --launch     # spends: runs doctor, then starts the cloud execution
+shipwright plan --config configs/rounds/default.yaml               # free: what it would run and may spend
+shipwright run  --config configs/rounds/default.yaml --dry-run     # free, offline: fake models, fake HF jobs (CI runs it)
+shipwright run  --config configs/rounds/default.yaml --launch      # spends: runs doctor, then starts the cloud execution
 shipwright status                                                   # the round manifests (after scripts/pull_runs.py)
 shipwright show | rollback | promote <gate_decision.json>           # the deployed system
 shipwright stage ceiling|smoke --config X --launch                  # side stages, by hand
@@ -76,7 +76,7 @@ reads them.
 - **Nothing to commit mid-run**: the candidate's system config is written into its round dir and packed into the gate's
   code bundle (`configs/systems/generated/`). The promotion ledger is kept in the runs dataset on the Hub
   (`promotions/ledger.jsonl`) and mirrored to `promotions/ledger.jsonl` and `configs/systems/current.yaml` here, so a
-  promotion made in the cloud survives the container. Commit the mirror when convenient; the Hub copy is the record.
+  promotion made in the cloud survives the container. The Hub copy is the record; `shipwright show` refreshes the mirror.
 - **Resume**: each stage is written to `runs/rN-round/round.json` (mirrored to `runs/round-N.json` for the control room)
   as it finishes, and uploaded at once.
 
@@ -96,3 +96,16 @@ Each stage is a script you can still run alone to debug (`scripts/baseline.py`, 
 `build_corrections.py`, `build_sft.py`, `round_status.py`, `train_job.py`, `gate_job.py`); the loop calls the same ones.
 Held-out failures are never training data; the hidden split is opened once, for the final report
 (`scripts/baseline.py --open-hidden`).
+
+## The round configs in this repository
+
+| Config | What it ran |
+|---|---|
+| `default.yaml` | a fresh round from the base model; CI runs it offline (`--dry-run --rounds 2`) |
+| `r10-fixes.yaml` | round 10: a fresh adapter on the pooled teacher data, with tool guards and status reminders |
+| `r12-final.yaml` | rounds 12 and 13: a re-gate of the round 7 adapter, then a corrections round |
+| `r14-regate.yaml` | round 14: a re-gate of the round 13 adapter with the context guards |
+| `r16-corrections.yaml` | round 16: a third corrections round from gate 14's refusal; promoted, the deployed system |
+
+Each is the exact config of a run that happened (or, for `default.yaml`, the template). Copy one to start a new run;
+never edit one that has run, because its manifest records it.

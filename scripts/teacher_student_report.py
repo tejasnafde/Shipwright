@@ -62,12 +62,6 @@ def parse_options(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 
-def message_list(trace: dict) -> list[dict]:
-    messages = trace.get("messages") or []
-    if isinstance(messages, str):
-        import ast
-        messages = ast.literal_eval(messages)
-    return messages
 
 
 

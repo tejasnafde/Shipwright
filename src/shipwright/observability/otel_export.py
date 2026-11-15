@@ -17,8 +17,6 @@ inside tau2 for tracing, and ``export_run`` catches every error: tracing never b
 Export: always a JSONL file (``otel_spans.jsonl`` in the run dir). Also OTLP/HTTP when
 ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set (Phoenix, Langfuse, any OTel backend), see
 docs/ops/observability.md. ``scripts/otel_to_traces.py`` converts spans back to trace records.
-
-JsonlFileSpanExporter is ported from ig/main (Ishank), src/shipwright/common/otel_setup.py.
 """
 
 from __future__ import annotations
@@ -114,10 +112,6 @@ def _ns(ts: Any) -> int | None:
         return int(datetime.fromisoformat(str(ts)).timestamp() * NS)
     except (TypeError, ValueError):
         return None
-
-
-def _json(value: Any) -> str:
-    return value if isinstance(value, str) else json.dumps(value, default=str)
 
 
 def _set(span: trace_api.Span, attrs: dict[str, Any]) -> None:

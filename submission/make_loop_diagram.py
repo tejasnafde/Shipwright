@@ -1,6 +1,6 @@
 """The self-healing loop as an SVG: static light and dark versions (README, blog) and an animated one (HF Space).
 
-    python docs/make_loop_diagram.py     # writes docs/img/loop-{light,dark}.svg and docs/space/img/loop-animated.svg
+    python submission/make_loop_diagram.py     # writes submission/img/loop-{light,dark}.svg and submission/space/img/loop-animated.svg
 
 Numbers on the steps are round 16's (the first unattended promotion, 2026-11-15).
 """

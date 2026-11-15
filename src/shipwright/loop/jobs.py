@@ -65,7 +65,7 @@ class GateJob:
     candidate: Path
     user_model: str
     flavor: str = "a10g-large"
-    timeout: str = "60m"                # never shorter: a gate needs about 40 minutes of running time (AGENTS.md, gate 8)
+    timeout: str = "60m"                # never shorter: a gate needs about 40 minutes of running time (docs/ops/known-issues.md)
     mode: str = "gate"                  # gate | bfcl_screen | train_eval | hidden
     task_ids: list[str] = field(default_factory=list)  # train_eval only
     trials: int = 1                     # train_eval only
@@ -170,7 +170,7 @@ def launch_gate(job: GateJob, needs_vertex_token: bool) -> str:
     """Upload the code bundle, then submit gate_eval.py --in-job. Returns the HF job id.
 
     ``needs_vertex_token``: the user simulator or the classifier is on Vertex. An HF Job cannot run gcloud, so a token is
-    minted now and passed as a secret; it lasts about 1 hour with no refresh (AGENTS.md, Known traps)."""
+    minted now and passed as a secret; it lasts about 1 hour with no refresh (docs/ops/known-issues.md)."""
     from huggingface_hub import HfApi, run_uv_job
 
     from shipwright.llm import vertex

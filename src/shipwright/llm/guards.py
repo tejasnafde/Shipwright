@@ -1,6 +1,6 @@
 """Tool-call guards: policy checks on the agent's tool call before tau2 runs it.
 
-This is the "add validation" half of the tool-fix branch (docs/system-design.html): the
+This is the "add validation" half of the tool-fix branch (docs/pipeline/tool_fix.md): the
 round 1 baseline showed that tool-description patches alone do not stop Tiny Aya from
 making up ids, skipping authentication, changing orders without a "yes", transferring to
 a human at the first message, or repeating a call that already failed.
@@ -281,7 +281,7 @@ def check_order_status_fits_tool(messages: list[dict], call: ToolCall) -> GuardV
     )
 
 
-# ---- guards added after rounds 3 to 5: the adapter over-acts and loops (docs/pipeline/gate.md, AGENTS.md) ----
+# ---- guards added after rounds 3 to 5: the adapter over-acts and loops (docs/ops/known-issues.md) ----
 
 CHANGE_TOOLS = ("exchange_delivered_order_items", "modify_pending_order_items")
 

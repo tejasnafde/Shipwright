@@ -1,4 +1,4 @@
-# Round 16 (2026-11-15, Mitushi): a third round of on-policy corrections, total cap $4.
+# Round 16 (2026-11-15), the promoted round: a third round of on-policy corrections, total cap $4.
 #   shipwright run --config configs/rounds/r16-corrections.yaml --launch
 # Continues from gate 14's refusal of the round 13 adapter (configs/systems/r14-weight.yaml, the candidate as the loop
 # wrote it). The recipe picks corrections round 3: the round 13 adapter runs on the train tasks with today's guards
@@ -21,7 +21,7 @@ start:                    # continue from gate 14's refusal
   candidate: configs/systems/r14-weight.yaml
   regate: false           # gate 14 measured it on the fixed gate: choose the remedy from that
 
-recipe:                   # how the round 7 adapter was made (AGENTS.md, rounds 5 to 7)
+recipe:                   # how the round 7 adapter was made (gates 5 to 7, docs/pipeline/loop.md)
   tool_guards: true       # gate 6 on
   general_replay: 100     # general function-calling examples per BFCL category (BFCL 35 to 72, gate 5)
   boost: 1

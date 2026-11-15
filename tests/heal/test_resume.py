@@ -1,6 +1,5 @@
 """A crashing task becomes an infra error (the run goes on), and a rerun into the same dir
-resumes: decided runs are kept, infra errors are run again (tau2 auto_resume, scripts/baseline.py).
-From Tejas's branch (the Agent-R half of the test was dropped with Agent-R)."""
+resumes: decided runs are kept, infra errors are run again (tau2 auto_resume, scripts/baseline.py)."""
 
 import json
 import subprocess

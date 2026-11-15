@@ -124,8 +124,7 @@ def test_load_run_needs_failures(tmp_path):
 
 
 def test_wilson_interval_matches_published_reference():
-    # 30/30, 95%: "consistent with a true rate of about 88% to 100%"
-    # (github.com/Timidan/lexsi-hack's own 30-task held-out claim) - same n and k.
+    # 30/30, 95%: consistent with a true rate of about 88% to 100%
     lo, hi = em.wilson_interval(30, 30)
     assert 0.88 < lo < 0.89 and hi == 1.0
 

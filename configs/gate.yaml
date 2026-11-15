@@ -1,8 +1,8 @@
-# Deploy gate config (step 05 GATE, docs/system-design.html). Read by scripts/gate_eval.py.
+# The deploy gate. Read by scripts/gate_eval.py; the checks are described in docs/evaluation.md.
 #
-# Frozen 2026-11-11 on the 20-task held-out split of configs/splits.yaml (not all 40 test tasks) -
-# why: AGENTS.md, "Evaluation rules". Changing a threshold now needs a line with the change and
-# the reason added there first.
+# Frozen 2026-11-11, sized for the 20-task held-out split of configs/splits.yaml (20 tasks x k=3 = 60
+# runs per system). A change to any value here is recorded with its reason in docs/evaluation.md,
+# "Frozen values and their changes", before it is used.
 status: frozen
 frozen_on: "2026-11-11"
 
@@ -16,12 +16,12 @@ agent_temperature: 0.0    # same as the baseline; the user simulator gives the v
 max_steps: 100
 max_concurrency: 8
 
-# The user simulator model is NOT set here: the team has not chosen it. It is a required
-# argument of scripts/gate_job.py and scripts/gate_eval.py (--user-model).
+# The user simulator is not set here: the round config sets it (models.user), and by hand it is the
+# required --user-model of scripts/gate_job.py and scripts/gate_eval.py.
 
 classify:
-  # AgentTune's FailureClassifier on every failed run of both systems (2026-11-13, AGENTS.md
-  # "Evaluation rules"). Not a threshold. null or gate_eval.py --no-llm: detector + rules only (free).
+  # AgentTune's FailureClassifier on every failed run of both systems (since 2026-11-13, see
+  # docs/evaluation.md). Not a threshold. null or gate_eval.py --no-llm: detector + rules only (free).
   classifier_model: vertex/openai/gpt-oss-120b-maas
 
 thresholds:

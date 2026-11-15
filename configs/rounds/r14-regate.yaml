@@ -1,4 +1,4 @@
-# Round 14 (2026-11-15, Mitushi): one gate, no training, total cap $2.5.
+# Round 14 (2026-11-15): one gate, no training, total cap $2.5.
 #   shipwright run --config configs/rounds/r14-regate.yaml --launch
 # Gate 13 refused the round 13 adapter on non_target only: 13 of 60 runs ran out of context (0 for the base). Those runs
 # were long lookup streaks (6 to 38 calls without a word to the customer), lookups repeated after an unrelated change,
@@ -21,7 +21,7 @@ start:                    # continue from gate 13's candidate (same adapter, new
   candidate: configs/systems/r14-r13-fixes.yaml
   regate: true            # same adapter as gate 13, new harness: measure it again
 
-recipe:                   # how the round 7 adapter was made (AGENTS.md, rounds 5 to 7)
+recipe:                   # how the round 7 adapter was made (gates 5 to 7, docs/pipeline/loop.md)
   tool_guards: true       # gate 6 on
   general_replay: 100     # general function-calling examples per BFCL category (BFCL 35 to 72, gate 5)
   boost: 1

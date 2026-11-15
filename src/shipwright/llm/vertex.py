@@ -15,7 +15,7 @@ Auth, in this order:
      ``SHIPWRIGHT_VERTEX_AUTH=metadata``): the service account token from the metadata server.
      It comes with ``expires_in``; ``TokenProvider`` refreshes 5 minutes before that.
   3. Laptops: ``gcloud --configuration=$SHIPWRIGHT_GCLOUD_CONFIG auth print-access-token``. Never
-     Application Default Credentials: on Tejas's machine they are a work identity.
+     Application Default Credentials: on a developer machine they may be another identity.
 A token lives about 1 hour, so ``TokenProvider`` caches it and gets a new one after 45 minutes
 (or after a 401). The token is never logged or written to disk.
 
@@ -113,7 +113,7 @@ def gcloud_token() -> str:
         raise RuntimeError(
             f"gcloud --configuration={gcloud_config} auth print-access-token failed"
             f" (exit {completed_process.returncode}): {completed_process.stderr.strip()[:300]}. Set SHIPWRIGHT_GCLOUD_CONFIG to a config with access"
-            f" to {project()} (Tejas: personal, others: lexsi)."
+            f" to {project()}."
         )
     return token
 

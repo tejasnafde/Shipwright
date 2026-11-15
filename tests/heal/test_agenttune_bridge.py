@@ -269,5 +269,5 @@ def test_round_status_script(tmp_path):
     sft.write_text("".join(json.dumps({"task_id": str(i), "messages": SFT}) + "\n" for i in range(12)))
     assert round_status.main([str(run), "--sft", str(sft)]) == 0
     st = json.loads((run / "round_status.json").read_text())
-    assert st["should_train"] and st["config_status"] == "proposed"
+    assert st["should_train"]
     assert st["trigger_config"]["max_drop_rate"] == 0.6

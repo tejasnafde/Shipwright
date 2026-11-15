@@ -4,10 +4,9 @@ GCP budgets only alert. This function listens on the shared budget topic
 (teejayproject/gcp-cost-alerts) and unlinks billing from lexsi-hackathon when
 its budget's actual spend reaches the budget amount. That stops every paid
 resource in the project. Relink with:
-  gcloud --configuration=personal billing projects link lexsi-hackathon \
-    --billing-account=014156-885762-D612A7
+  gcloud billing projects link lexsi-hackathon --billing-account=<billing account id>
 
-ponytail: billing data lags a few hours, so real spend can pass the cap
+Billing data lags a few hours, so real spend can pass the cap
 before this fires. Lower the budget if that margin matters.
 """
 import base64

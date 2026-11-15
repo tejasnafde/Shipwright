@@ -13,13 +13,13 @@ Every script run writes a failure report, a repro record and structured logs. Th
 | Form | Example |
 |---|---|
 | local run dir | `runs/baseline-20261109-120000` |
-| GCS run dir (Cloud Run Jobs) | `gs://lexsi-hackathon-runs/tejas/baseline-20261109-120000` |
-| Cloud Run execution name (the run id) | `shipwright-tejas-x7k2p` |
-| job index | `gs://lexsi-hackathon-runs/tejas/jobs/shipwright-tejas-x7k2p.json` |
+| GCS run dir (Cloud Run Jobs) | `gs://lexsi-hackathon-runs/main/baseline-20261109-120000` |
+| Cloud Run execution name (the run id) | `shipwright-main-x7k2p` |
+| job index | `gs://lexsi-hackathon-runs/main/jobs/shipwright-main-x7k2p.json` |
 | local run id | `local-20261109-120000-ab12` (looked up in `runs/*/repro.json`) |
 
-GCS reads use `gcloud --configuration=$SHIPWRIGHT_GCLOUD_CONFIG` (default `personal`; Ishank and
-Mitushi set `lexsi`) and only small files (traces.jsonl only with `--task`).
+GCS reads use the named gcloud config (`docs/setup/gcp-setup.md`) and only small files (`traces.jsonl` only with
+`--task`).
 
 ## 1. why.py
 
@@ -35,7 +35,7 @@ other errors, a timeline (start, end, errors), the links, and the next commands.
 
 - **Logs**: Logs Explorer, filtered by `jsonPayload.run_id="<run id>"` (and `jsonPayload.task_id`
   for a task). On Cloud Run every stdout line is a JSON log entry. From a shell:
-  `gcloud --configuration=personal --project=lexsi-hackathon logging read 'jsonPayload.run_id="<id>"' --freshness=1d`.
+  `gcloud --configuration=lexsi --project=lexsi-hackathon logging read 'jsonPayload.run_id="<id>"' --freshness=1d`.
 - **Trace**: Cloud Trace, one trace per run: `job <script>` > `<script>` > `task <id>` >
   `agent_turn` > `chat <model>`, plus `execute_tool <name>`, `gcs_upload`, `token_fetch`, ...
   Each log line has `logging.googleapis.com/trace` and `spanId`, so Logs Explorer shows the
@@ -59,8 +59,7 @@ Reads `repro.json` and prints the command. Nothing runs without `--execute`.
   run on a laptop.
 - `cloud` runs `gcloud run jobs execute shipwright-<owner>` with the same flags. The job runs the
   latest image of its branch; the note shows the image and git sha of the original run.
-- A command that calls model APIs needs `--execute --allow-spend`, and a human on the team must
-  have asked for that run (AGENTS.md).
+- A command that calls model APIs needs `--execute --allow-spend`, so a paid rerun is always deliberate.
 - `--output-dir` becomes `runs/rerun-<run id>-<stamp>`; `--fail-at` is kept (it reproduces the failure).
 
 ## What every run writes
@@ -139,6 +138,6 @@ On Cloud Run, spans also go to Cloud Trace (v2 REST API, metadata-server token o
 file export goes on. `SHIPWRIGHT_CLOUD_TRACE=0` turns it off, `=1` forces it on. Read a trace from a shell:
 
 ```sh
-curl -s -H "Authorization: Bearer $(gcloud --configuration=personal auth print-access-token)" \
+curl -s -H "Authorization: Bearer $(gcloud --configuration=lexsi auth print-access-token)" \
   https://cloudtrace.googleapis.com/v1/projects/lexsi-hackathon/traces/<trace id> | head -c 2000
 ```

@@ -223,12 +223,9 @@ def windowed_sft_trainer():
     tensor the memory bottleneck, not the base model's own weights or LoRA's ~30M
     trainable params - at our own 8192-token ``--max-seq-len``, one bf16 logits
     tensor alone is already seq_len x vocab x 2 bytes ~= 4.3 GB before gradients or
-    activations. Independently found and fixed the same way for the same model on a
-    16 GB T4 by a different team's DPO trainer: github.com/Timidan/lexsi-hack,
-    ``scripts/train_dpo.py`` (``logits_to_keep`` + a windowed loss, there for
-    ``trl.DPOTrainer``; here for our own ``SFTTrainer`` subclass instead, since
-    ``create_distill_trainer``'s default factory builds a plain TRL ``SFTTrainer``,
-    confirmed by reading ``agenttune.agentic.distill_trainer`` source directly).
+    activations. ``logits_to_keep`` plus a windowed loss skips the masked prefix. It is
+    applied to our own ``SFTTrainer`` subclass, since ``create_distill_trainer``'s
+    default factory builds a plain TRL ``SFTTrainer``.
 
     Safe to apply here specifically because ``per_device_train_batch_size=1`` (no
     per-example window to reconcile across a batch), and ``logits_to_keep`` as a

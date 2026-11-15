@@ -1,73 +1,53 @@
-# Hugging Face setup for the Lexsi hackathon
+# Hugging Face
 
-Give this whole file to your agent, same as `gcp-setup.md`.
+Shipwright uses Hugging Face for the student model (Inference Providers), the GPUs (HF Jobs) and every published
+artifact (Hub repos).
 
-## Accounts and tokens
+## Token and model access
 
-```sh
-pip install -U huggingface_hub
-huggingface-cli login   # paste a token with write access, from huggingface.co/settings/tokens
-```
+- One token with write access to the repos below and the Jobs permissions (read and write): a token that can list jobs
+  but lacks `job.write` fails at launch with `403 missing permissions`. `shipwright doctor` checks this.
+- The code reads it from `$SWITCHBOARD_SECRETS_DIR/HF_TOKEN`, then `$HF_TOKEN`; in Cloud Run it is the
+  `SHIPWRIGHT_HF_TOKEN` secret. It is never logged (the logger redacts `hf_` values).
+- Tiny Aya is gated: accept its terms on `huggingface.co/CohereLabs/tiny-aya-global` with the token's account. A
+  download before that fails with a bare 403.
 
-Store the token the same way as any other secret (see `gcp-setup.md` section 5, GCP Secret Manager) —
-never in code, never in a notebook cell, never committed.
+## Inference Providers
 
-## Accept the Tiny Aya gate before anything else
-
-Tiny Aya is a gated model. Visit `huggingface.co/CohereLabs/tiny-aya-global` (and any other Tiny Aya
-variant you use) while logged in and accept the terms. A job that downloads it before the gate is
-accepted fails with a 403, not a clear "please accept the license" message — if you hit a mysterious
-403 pulling the model, this is almost always why.
+The student (`openai/CohereLabs/tiny-aya-global:cohere`) and the user simulator
+(`openai/openai/gpt-oss-120b:deepinfra`) are called through the OpenAI-compatible router
+`https://router.huggingface.co/v1`, billed to the token's account.
 
 ## HF Jobs
 
-HF Jobs run training and gate evals; output lands on the Hub, billed from HF credits.
+GPU work runs as HF Jobs launched with `huggingface_hub.run_uv_job` (`src/shipwright/loop/jobs.py`): the target script
+is a uv script whose inline dependency block (torch, vLLM, AgentTune, AuditKIT) is installed at job start, so there is
+no custom image.
 
-- **A job stops after 30 minutes by default.** Always pass a timeout explicitly:
-  `hf jobs run --timeout 2h ...` on the CLI, or `timeout=` in the Python client. This has already cost
-  time once (see `AGENTS.md` known traps, 2026-11-08) — do not skip it.
-- A job uses the credits of the namespace it runs in (your personal namespace vs. a team namespace,
-  if one exists) — check which one before kicking off anything long.
-- Prices as of the hackathon: T4 $0.40/h, L4 $0.80/h, A10G small $1.00/h. Budget a round's train + gate
-  eval cost before starting it, the same way GCP Spot cost is budgeted in `gcp-setup.md`.
+| Job | Script | Flavor | Timeout |
+|---|---|---|---|
+| Train | `scripts/train_lora.py` | `l40sx1` ($1.80/h) | 45 minutes |
+| Gate | `scripts/gate_eval.py --in-job` | `a10g-large` ($1.50/h) | 60 minutes |
+| Candidate on train tasks | `scripts/gate_eval.py --train-eval` | `a10g-large` | 40 minutes |
+| BFCL screen | `scripts/gate_eval.py --bfcl-screen` | `a10g-large` | 30 minutes |
+| vLLM smoke test | `scripts/vllm_smoke.py` | `a10g-large` | 25 minutes |
 
-No custom Docker image: `scripts/train_job.py --launch` and `scripts/gate_job.py --launch` submit
-through `huggingface_hub.run_uv_job`, which runs the target script (`scripts/train_lora.py`,
-`scripts/gate_eval.py --in-job`) as a uv script - its own inline `# /// script` dependency block
-(torch, agenttune, etc.) is installed at job start, not baked into an image. Always a plan-only
-dry run first (the default, no `--launch`), which prints the flavor price x timeout before
-anything is billed:
+- **Always pass a timeout**: a job stops after 30 minutes by default and pushes nothing. Size a timeout to the work,
+  never to a budget; the loop's caps bound the spend.
+- A job is billed for its running seconds, not its time in the queue. The loop cancels a job queued more than 12
+  minutes and tries the next flavor in its config.
+- The repository is private, so a launch uploads a code bundle of the committed tree to the runs dataset; commit
+  before launching. Job arguments never end in `.py`, `.sh`, `.yaml`, `.yml` or `.toml`: `run_uv_job` treats those as
+  local files to upload.
+- Prices per hour are in `src/shipwright/cloud.py` (`GPU_PRICES`).
 
-```sh
-.venv/bin/python scripts/train_job.py --flavor l4x1 --timeout 2h ...       # plan only
-.venv/bin/python scripts/train_job.py --flavor l4x1 --timeout 2h --launch ...
-```
+## Hub repositories
 
-Live agent runs that collect traces (not training/gate evals) go through Cloud Run Jobs instead,
-built with Cloud Build from `infra/docker/Dockerfile` - see `docs/setup/cloud-runs.md`, not this file.
+| Repo | Type | Content |
+|---|---|---|
+| `mitushigoyal5/shipwright-lora` | model | one LoRA adapter per round, on branch `round-N`; `round-16` is deployed |
+| `mitushigoyal5/shipwright-sft` | dataset | the training data of each round, on branch `round-N`, with `sft_stats.json` |
+| `mitushigoyal5/shipwright-runs` | dataset | every gate's runs and decision, code bundles, `metrics.jsonl`, the promotion ledger |
 
-## Public artifacts: two ungated collections
-
-Everything public at the end goes into exactly two HF collections, both ungated: one for models
-(adapters, one tag per round), one for data (traces, curated datasets, benchmarks). Create them once:
-
-```sh
-# via the Hub UI: huggingface.co/collections/new
-# or programmatically:
-python -c "
-from huggingface_hub import create_collection
-create_collection(title='Shipwright models', namespace='<your-hf-username-or-org>')
-create_collection(title='Shipwright data', namespace='<your-hf-username-or-org>')
-"
-```
-
-`AuditKIT`'s `RunResult.push_to_hub(repo_id, private=False)` writes directly to the Hub with a
-provenance/dataset-card file — add the resulting repo to the right collection by hand (or via
-`add_collection_item`) after each push, it does not join a collection automatically. `sft.jsonl`
-(`scripts/build_sft.py`) and trace run dirs push the same way, by hand, for now.
-
-## Dataset downloads AuditKIT needs
-
-`ak.load_bfcl(...)` pulls `gorilla-llm/Berkeley-Function-Calling-Leaderboard` from the Hub at eval time
-— no separate setup beyond being logged in, but it is a real download each time unless cached locally
-(`HF_HOME` / `datasets` cache), worth knowing before running the gate repeatedly during debugging.
+All three are public and grouped into two ungated collections (models, data), linked from `README.md`.
+BFCL v3 is read from `gorilla-llm/Berkeley-Function-Calling-Leaderboard` at a pinned revision (`configs/gate.yaml`).

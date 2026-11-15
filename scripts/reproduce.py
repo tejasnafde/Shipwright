@@ -1,4 +1,4 @@
-"""Recompute the write-up's headline numbers from the published run files, and check each against WRITEUP.md.
+"""Recompute the write-up's headline numbers from the published run files, and check each against submission/WRITEUP.md.
 
     python scripts/reproduce.py                 # downloads about 2 MB from the public runs dataset, no token, no GPU
     python scripts/reproduce.py --offline       # only what is already in --cache-dir
@@ -39,7 +39,7 @@ RUNS_PER_SYSTEM = 60
 @dataclass
 class Claim:
     what: str            # the claim, as the write-up states it
-    written: str         # the number in WRITEUP.md
+    written: str         # the number in submission/WRITEUP.md
     recomputed: str      # the same number from the run files, rounded the same way
 
     @property
@@ -99,10 +99,10 @@ def gate_16_claims(options: argparse.Namespace) -> list[Claim]:
         Claim("task success, pass^1 (held-out)", "10% -> 15%",
               before_after(percent(base["pass_1"]), percent(student["pass_1"]))),
         Claim("pass^k, k = 3", "10% -> 10%", before_after(percent(base["pass_k"]), percent(student["pass_k"]))),
-        Claim("tool-call error rate", "44.3% -> 5.7%",
-              before_after(percent(base["tool_call_error_rate"], 1), percent(student["tool_call_error_rate"], 1))),
-        Claim("BFCL v3 points", "45.0 -> 73.3",
-              before_after(f"{base['bfcl']['accuracy_points']:.1f}", f"{student['bfcl']['accuracy_points']:.1f}")),
+        Claim("tool-call error rate", "44% -> 6%",
+              before_after(percent(base["tool_call_error_rate"]), percent(student["tool_call_error_rate"]))),
+        Claim("BFCL v3 points", "45 -> 73",
+              before_after(f"{base['bfcl']['accuracy_points']:.0f}", f"{student['bfcl']['accuracy_points']:.0f}")),
         Claim("runs that invented an order or item id", "40 -> 0",
               before_after(str(runs_with_label(base, "invented_id")), str(runs_with_label(student, "invented_id")))),
         Claim("runs handed to a human too early", "11 -> 0",
@@ -111,12 +111,6 @@ def gate_16_claims(options: argparse.Namespace) -> list[Claim]:
         Claim("runs with a made-up answer", "8 -> 0",
               before_after(str(runs_with_label(base, "invented_answer")),
                            str(runs_with_label(student, "invented_answer")))),
-        Claim("runs with a malformed or unknown tool call", "6 -> 0",
-              before_after(str(runs_with_label(base, "malformed_args") + runs_with_label(base, "unknown_tool")),
-                           str(runs_with_label(student, "malformed_args")
-                               + runs_with_label(student, "unknown_tool")))),
-        Claim("runs with the wrong tool", "11 -> 4",
-              before_after(str(runs_with_label(base, "wrong_tool")), str(runs_with_label(student, "wrong_tool")))),
         Claim("still failing: skipped a policy step", "25 -> 31",
               before_after(str(runs_with_label(base, "skipped_policy_step")),
                            str(runs_with_label(student, "skipped_policy_step")))),
@@ -152,8 +146,8 @@ def hidden_split_claims(options: argparse.Namespace) -> list[Claim]:
               f"{percent(pass_rate(base_passed))} -> {percent(pass_rate(student_passed))}"),
         Claim("hidden: paired wins / losses", "6 / 0", f"{only_student} / {only_base}"),
         Claim("hidden: exact McNemar p", "0.031", f"{exact_mcnemar_p(only_student, only_base):.3f}"),
-        Claim("hidden: tool-call error rate", "56% -> 5%",
-              f"{percent(tool_error_rate(base_summary))} -> {percent(tool_error_rate(student_summary))}"),
+        Claim("hidden: tool-call error rate", "55.7% -> 4.7%",
+              f"{percent(tool_error_rate(base_summary), 1)} -> {percent(tool_error_rate(student_summary), 1)}"),
     ]
 
 
@@ -172,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     for client_logger in ("httpx", "httpx2", "huggingface_hub"):  # one line per downloaded file would bury the table
         logging.getLogger(client_logger).setLevel(logging.WARNING)
     sections = [
-        ("Gate 16: round 16 against the base, 20 held-out tasks x 3 trials (WRITEUP.md sections 1 and 2)",
+        ("Gate 16: round 16 against the base, 20 held-out tasks x 3 trials (the write-up's opening table)",
          gate_16_claims(options)),
         ("Hidden split, opened once: round 7 adapter + guards against the base, 20 tasks x 3 trials",
          hidden_split_claims(options)),
