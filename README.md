@@ -8,10 +8,13 @@ and redeploys only when a frozen gate measures the new agent as better on tasks 
 
 [![Model](https://img.shields.io/badge/🤗_Adapters-shipwright--lora-ffcc4d?style=flat-square)](https://huggingface.co/mitushigoyal5/shipwright-lora)
 [![Data](https://img.shields.io/badge/🤗_Data-shipwright--sft_·_shipwright--runs-ffcc4d?style=flat-square)](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb)
+[![Write-up](https://img.shields.io/badge/📄_Hackathon_write--up-Lexsi_Track_3-111827?style=flat-square)](submission/WRITEUP.md)
 [![Demo video](https://img.shields.io/badge/▶_Demo_video-3_min-e11d48?style=flat-square)](https://huggingface.co/spaces/mitushigoyal5/shipwright/resolve/main/video/shipwright-demo.mp4)
 [![Space](https://img.shields.io/badge/🤗_Space-results-ff6b35?style=flat-square)](https://huggingface.co/spaces/mitushigoyal5/shipwright)
 ![Python](https://img.shields.io/badge/Python-3.12-3776ab?style=flat-square&logo=python&logoColor=white)
 ![Benchmark](https://img.shields.io/badge/Benchmark-τ²--bench_retail-2f6f9f?style=flat-square)
+
+**[Read the hackathon write-up →](submission/WRITEUP.md)** (Lexsi Labs AI Safety & Alignment Hackathon, Track 3, problem statement 8: self-healing agents)
 
 [What it does](#what-it-does) · [Results](#results) · [What makes it different](#what-makes-it-different) · [How it works](#how-it-works) · [Quickstart](#quickstart) · [Documentation](#documentation) · [Models and data](#models-and-data)
 
