@@ -82,7 +82,7 @@ def discover_rounds(runs_directory: Path) -> list[RoundEntry]:
         teacher = _existing(runs_directory, f"r{number}-teacher") or _existing(runs_directory, f"r{number}-sft")
         gate = f"gate-r{number}" if (runs_directory / f"gate-r{number}" / "gate_decision.json").exists() else None
 
-        decision = (stages.get("gate") or {}).get("decision")
+        decision = gate_stage_decision(stages)
         if decision is None and gate:
             decision = (_read_json(runs_directory / gate / "gate_decision.json") or {}).get("decision")
         outcome = {"reject": "rejected", "promote": "promoted"}.get(decision, "unfinished")
@@ -96,9 +96,30 @@ def discover_rounds(runs_directory: Path) -> list[RoundEntry]:
     return sorted(entries, key=lambda entry: -entry.number)
 
 
-def _round_note(stages: dict, is_loop_round: bool) -> str:
+def gate_stage_decision(stages: dict) -> str | None:
+    """"promote" or "reject" from a manifest's gate stage. The loop's manifests (since 2026-11-14) keep the whole
+    decision there as an object; earlier ones keep the word."""
+    decision = (stages.get("gate") or {}).get("decision")
+    if isinstance(decision, dict):
+        return decision.get("decision")
+    return decision
+
+
+def gate_stage_pass_1(stages: dict) -> dict:
+    """{"current": ..., "candidate": ...} for pass^1 from a manifest's gate stage, in either manifest shape."""
     gate = stages.get("gate") or {}
-    pass_1 = gate.get("pass_1") or {}
+    if gate.get("pass_1"):
+        return gate["pass_1"]
+    decision = gate.get("decision")
+    if isinstance(decision, dict):
+        for check in decision.get("checks") or []:
+            if check.get("name") == "pass_1":
+                return {"current": check.get("current"), "candidate": check.get("candidate")}
+    return {}
+
+
+def _round_note(stages: dict, is_loop_round: bool) -> str:
+    pass_1 = gate_stage_pass_1(stages)
     if pass_1.get("current") is not None and pass_1.get("candidate") is not None:
         return f"pass^1 {pass_1['current']:.0%} to {pass_1['candidate']:.0%}"
     if is_loop_round:
@@ -217,3 +238,51 @@ def compare_tasks(before_traces: list[dict], after_traces: list[dict], group_by_
         changes.append(TaskChange(task_id, before_passed, before_trials, after_passed, after_trials, change,
                                   (group_by_task or {}).get(task_id, "")))
     return sorted(changes, key=lambda item: CHANGE_ORDER[item.change])
+
+
+# ---------------------------------------------------------------- every gate, in order
+
+CHECK_WORDS = {
+    "comparable": "different tasks", "valid_runs": "too few valid runs", "pass_1": "task success fell",
+    "pass_k": "consistency fell", "target": "targeted failures did not fall enough",
+    "non_target": "a new kind of failure rose", "bfcl": "general tool calling fell",
+    "agenttune_gate": "AgentTune's gate saw a regression",
+}
+
+
+@dataclass
+class GateRecord:
+    round_number: int
+    decision: str
+    current_pass_1: float | None
+    candidate_pass_1: float | None
+    checks_passed: int
+    checks_total: int
+    failed_checks: list[str]
+    agenttune_approved: bool | None
+
+    @property
+    def why_refused(self) -> str:
+        return "; ".join(CHECK_WORDS.get(name, name) for name in self.failed_checks)
+
+
+def gate_history(runs_directory: Path) -> list[GateRecord]:
+    """Every gate decision on disk (runs/gate-rN/gate_decision.json), oldest first."""
+    records = []
+    for decision_path in runs_directory.glob("gate-r*/gate_decision.json"):
+        number = decision_path.parent.name.removeprefix("gate-r")
+        if not number.isdigit():
+            continue
+        decision = _read_json(decision_path) or {}
+        checks = decision.get("checks") or []
+        by_name = {check.get("name"): check for check in checks}
+        pass_1 = by_name.get("pass_1") or {}
+        agenttune = by_name.get("agenttune_gate")
+        records.append(GateRecord(
+            round_number=int(number), decision=decision.get("decision") or "unknown",
+            current_pass_1=pass_1.get("current"), candidate_pass_1=pass_1.get("candidate"),
+            checks_passed=sum(1 for check in checks if check.get("passed")), checks_total=len(checks),
+            failed_checks=[check.get("name") for check in checks if not check.get("passed")],
+            agenttune_approved=agenttune.get("passed") if agenttune else None,
+        ))
+    return sorted(records, key=lambda record: record.round_number)

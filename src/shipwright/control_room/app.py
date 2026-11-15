@@ -218,6 +218,60 @@ def _pick_dir(label: str, role: str, key: str, container=None, default_to_real_r
     return RUNS_DIR / choice
 
 
+@dataclass
+class Correction:
+    """One wrong turn of the candidate and the teacher's turn that replaced it in the training data."""
+    task_id: str
+    rule: str
+    customer_said: str
+    student_tried: str
+    teacher_said: str
+
+
+GUARD_RULE_WORDS = {
+    "repeated_call": "asked for the same thing again, with nothing changed since",
+    "lookup_streak": "kept looking things up without answering the customer",
+    "not_authenticated": "acted before identifying the customer",
+    "made_up_id": "used an id nobody had given it",
+    "wrong_order_status": "used a tool that does not fit the order's status",
+    "repeated_failed_call": "repeated a call that had already failed",
+    "no_confirmation": "made a change without the customer's explicit yes",
+    "early_transfer": "handed off to a human before trying",
+    "exchange_other_product_type": "exchanged for a different kind of product",
+    "second_change_to_one_order": "changed the same order twice",
+}
+
+
+def _paired_corrections(corrections_dir: Path, traces: list[dict]) -> list[Correction]:
+    """asked.jsonl keys each teacher answer by "<simulation id>:<message index>"; the candidate's trace holds the guard's
+    rejection at that message index."""
+    trace_by_simulation = {trace.get("simulation_id"): trace for trace in traces}
+    trained_replies = {(row.get("messages") or [{}])[-1].get("content")
+                       for row in _read_jsonl(corrections_dir / "corrections.jsonl")}
+    paired = []
+    for asked in _read_jsonl(corrections_dir / "asked.jsonl"):
+        if asked.get("reply_text") not in trained_replies:
+            continue  # asked, but not kept (a guard rejected the teacher's answer, or it was too long)
+        simulation_id, _, index = str(asked.get("key", "")).rpartition(":")
+        trace = trace_by_simulation.get(simulation_id)
+        teacher_said = asked.get("reply_text") or ""
+        if trace is None or not index.isdigit() or not teacher_said:
+            continue
+        turn = next((turn for turn in trace.get("agent_turns") or []
+                     if turn.get("message_index") == int(index) and turn.get("guard_rejections")), None)
+        if turn is None:
+            continue
+        rejection = turn["guard_rejections"][0]
+        earlier = (trace.get("messages") or [])[:int(index)]
+        customer = next((message.get("content") or "" for message in reversed(earlier)
+                         if message.get("role") == "user" and message.get("content")), "")
+        paired.append(Correction(task_id=str(trace.get("task_id")), rule=rejection.get("rule") or "",
+                                 customer_said=customer, student_tried=rejection.get("raw_text") or "",
+                                 teacher_said=teacher_said))
+    rule_counts = Counter(correction.rule for correction in paired)
+    return sorted(paired, key=lambda correction: rule_counts[correction.rule])  # the rarer kinds of mistake first
+
+
 class RoundData:
     """Everything read from disk for one round, loaded once per render."""
 
@@ -250,6 +304,13 @@ class RoundData:
 
         self.gate_decision = _read_json(gate_dir / "gate_decision.json") if gate_dir else None
         self.metrics_rows = _read_jsonl(gate_dir / "metrics.jsonl") if gate_dir else []
+
+        # On-policy corrections (scripts/build_corrections.py): the teacher's turn at each point a guard rejected the
+        # candidate. Paired with the rejected call from this run's traces, so both sides are read, never rebuilt.
+        corrections_dir = RUNS_DIR / f"r{round_num}-corrections" if round_num else None
+        self.corrections_stats = _read_json(corrections_dir / "corrections_stats.json") if corrections_dir else None
+        self.corrections = (_paired_corrections(corrections_dir, self.traces)
+                            if corrections_dir and corrections_dir.is_dir() else [])
 
     # ------------------------------------------------- derived counts
 
@@ -321,12 +382,18 @@ def _stage_status(data: RoundData) -> list[dict]:
 
     n_patches = len(data.proposed_patches)
     n_teacher = len(data.sft_kept)
-    if n_patches or n_teacher:
+    n_corrections = (data.corrections_stats or {}).get("rows") or len(data.corrections)
+    if n_corrections:
+        out.append({"state": "info", "caption": f"{n_corrections} on-policy corrections"})
+    elif n_patches or n_teacher:
         out.append({"state": "info", "caption": f"{n_patches} patches, {n_teacher} corrections"})
     else:
         out.append({"state": "pending", "caption": "none generated"})
 
-    if data.round_status is not None:
+    if data.round_status is not None and data.round_status.get("should_train") and data.gate_decision is not None:
+        examples = (data.sft_stats or {}).get("examples")
+        out.append({"state": "good", "caption": f"trained on {examples} rows" if examples else "trained"})
+    elif data.round_status is not None:
         should = data.round_status.get("should_train")
         out.append({"state": "warn" if should else "good", "caption": "training" if should else "buffer not full"})
     elif data.training_meta:
@@ -680,6 +747,55 @@ def _proposed_dates(patches: list[dict]) -> str:
     return labels[0] if labels[0] == labels[1] else f"{labels[0]} to {labels[1]}"
 
 
+def _render_agent_turn(text: str, limit: int = 1500) -> None:
+    """A tool call (a fenced JSON block) as wrapped code, anything else as the agent's message."""
+    call = re.sub(r"^```\w*\s*|\s*```$", "", text.strip())
+    if call.startswith("{") and call.endswith("}"):
+        st.code(call, language="json", wrap_lines=True)
+    else:
+        st.markdown(_markdown_safe(_truncate(text, limit)))
+
+
+def render_corrections(data: RoundData) -> None:
+    st.markdown("### On-policy corrections: the student's own mistakes, fixed by the teacher")
+    stats = data.corrections_stats or {}
+    found = stats.get("wrong_turns_found") or {}
+    accepted = stats.get("accepted") or {}
+    st.caption("The refused candidate replayed the training tasks with the guards on. Every call a guard blocked is a "
+               "wrong turn: the teacher sees exactly what the student saw at that point and gives the right next turn. "
+               "Only that turn is trained, never the student's mistake.")
+    tiles = st.columns(4)
+    tiles[0].metric("Wrong turns found", sum(found.values()) if found else len(data.corrections))
+    tiles[1].metric("Corrections kept", stats.get("rows", len(data.corrections)),
+                    help="A teacher answer the guards would block again is not kept.")
+    tiles[2].metric("Rejected by the guards", stats.get("rejected_by_the_guards", 0),
+                    help="Teacher answers that broke a policy check themselves: dropped.")
+    if stats.get("cost_usd") is not None:
+        tiles[3].metric("Teacher cost", f"${stats['cost_usd']:.2f}")
+    if accepted:
+        st.dataframe([{"what the student did": GUARD_RULE_WORDS.get(rule, rule), "guard": rule, "corrections": count}
+                      for rule, count in sorted(accepted.items(), key=lambda item: -item[1])],
+                     width="stretch", hide_index=True)
+
+    labels = [f"task {c.task_id}: {GUARD_RULE_WORDS.get(c.rule, c.rule)}" for c in data.corrections]
+    chosen = st.selectbox("Read one correction", range(len(data.corrections)), format_func=lambda i: labels[i],
+                          key="correction_choice")
+    correction = data.corrections[chosen]
+    if correction.customer_said:
+        st.markdown("**The customer had just said**")
+        quoted = "\n".join(f"> {line}" for line in _markdown_safe(_truncate(correction.customer_said, 500)).splitlines())
+        st.markdown(quoted)
+    student_column, teacher_column = st.columns(2)
+    with student_column:
+        st.markdown(f"**The student tried** &nbsp; `blocked: {correction.rule}`")
+        st.error(GUARD_RULE_WORDS.get(correction.rule, correction.rule).capitalize() + ".")
+        _render_agent_turn(correction.student_tried)
+    with teacher_column:
+        st.markdown("**The teacher's turn, trained into the next adapter**")
+        st.success("What a good agent does at this exact point.")
+        _render_agent_turn(correction.teacher_said)
+
+
 def tab_fix_train(data: RoundData) -> None:
     render_demo_banner(data.sft_dir)
     tool_column, weight_column = st.columns(2)
@@ -707,13 +823,23 @@ def tab_fix_train(data: RoundData) -> None:
                        f"{source_counts.get('llm', 0)} by LLM fallback; "
                        + ", ".join(f"{status} {count}" for status, count in status_counts.most_common()) + ".")
     with weight_column:
-        st.markdown("### Weight fix: teacher replay")
+        st.markdown("### Weight fix: teacher data")
         st.info(
-            "- **Generated by:** the teacher replays tasks the student failed; only passing runs are kept.\n"
+            "- **Generated by:** the teacher replays tasks the student failed (only passing runs are kept), and "
+            "corrects the student at each turn a guard caught it going wrong.\n"
             "- **Approved by:** the 8-check gate on held-out tasks, not a person.\n"
             "- **Undo:** the old adapter keeps serving until the gate promotes."
         )
-        if data.sft_dir is not None:
+        by_source = (data.sft_stats or {}).get("by_source") or {}
+        if by_source:
+            mix = st.columns(3)
+            mix[0].metric("Teacher conversations", by_source.get("teacher", 0),
+                          help="Whole passing conversations of the teacher on training tasks.")
+            mix[1].metric("On-policy corrections", by_source.get("correction", 0),
+                          help="The teacher's turn where this candidate, or an earlier one, went wrong.")
+            mix[2].metric("General tool calling", by_source.get("general_replay", 0),
+                          help="BFCL samples the gate never scores, so narrow training does not erase general skill.")
+        elif data.sft_dir is not None:
             st.metric("Teacher corrections kept", len(data.sft_kept))
 
     for title, patches in (("Patches proposed from this run's failures", data.proposed_patches),
@@ -726,6 +852,10 @@ def tab_fix_train(data: RoundData) -> None:
                   "after": row.get("after"), "status": row.get("status")} for row in patches],
                 width="stretch", hide_index=True,
             )
+
+    if data.corrections:
+        st.divider()
+        render_corrections(data)
 
     st.divider()
     st.markdown("### Student vs teacher, task by task")
@@ -894,6 +1024,7 @@ def tab_follow_task(data: RoundData, after_dir: Path | None, task_id: str) -> No
     before_trace = _trace_for_task(data.traces, task_id)
     before_failure = next((f for f in data.failures if str(f.get("task_id")) == task_id), None)
     teacher_trace = _trace_for_task(data.sft_kept, task_id)
+    task_corrections = [correction for correction in data.corrections if correction.task_id == task_id]
     after_traces = _read_jsonl(after_dir / "traces.jsonl") if after_dir else []
     after_trace = _trace_for_task(after_traces, task_id)
 
@@ -927,9 +1058,20 @@ def tab_follow_task(data: RoundData, after_dir: Path | None, task_id: str) -> No
                     _render_tool_call(bad_call, heading="Student called")
                 if good_call:
                     _render_tool_call(good_call, heading="Teacher called")
+            elif task_corrections:
+                st.markdown(f"**On-policy corrections:** the guards caught {len(task_corrections)} wrong "
+                            f"turn{'s' if len(task_corrections) > 1 else ''} in this conversation; the teacher "
+                            "gave the right turn at each, and only those turns were trained.")
             else:
                 st.caption("No teacher correction for this task in the selected SFT dir; its fix may "
                            "be a tool patch instead (see Fix & Train).")
+        for number, correction in enumerate(task_corrections[:3], 1):
+            st.markdown(f"**Wrong turn {number}:** {GUARD_RULE_WORDS.get(correction.rule, correction.rule)} "
+                        f"&nbsp; `{correction.rule}`")
+            _render_agent_turn(correction.student_tried)
+            st.markdown("**The teacher's turn instead:**")
+            with st.container(border=True):
+                _render_agent_turn(correction.teacher_said, limit=900)
         if teacher_trace:
             st.caption(f"from `{data.sft_dir.name}/kept.jsonl`")
             _render_task_trace(teacher_trace, key="follow_fix")
@@ -954,29 +1096,52 @@ def tab_follow_task(data: RoundData, after_dir: Path | None, task_id: str) -> No
 
 
 def tab_history(data: RoundData) -> None:
-    if not data.metrics_rows:
-        st.info("No metrics.jsonl rows: pick a gate run in the Gate & Outcome tab.")
+    history = rounds.gate_history(RUNS_DIR)
+    if not history:
+        st.info("No gate decisions on this machine yet: pull a round's gate results in the sidebar (Update runs).")
         return
+    refused = [record for record in history if record.decision == "reject"]
+    promoted = [record for record in history if record.decision == "promote"]
+    agenttune_would_approve = sum(1 for record in refused if record.agenttune_approved)
+    headline = f"**{len(history)} gates, {len(refused)} refused, {len(promoted)} promoted.**"
+    if promoted:
+        headline += f" The loop shipped only at gate {promoted[-1].round_number}, when all 8 checks passed."
+    st.success(headline)
+    if refused:
+        st.caption(f"AgentTune's DeploymentGate on its own would have approved {agenttune_would_approve} of the "
+                   f"{len(refused)} refused candidates: every refusal below is a reason the extra checks caught.")
 
-    latest = data.metrics_rows[-1]
-    st.info(f"**{len(data.metrics_rows)} round(s) recorded.** Latest: round {latest.get('round')}, "
-            f"**{latest.get('decision')}**.")
+    import altair as alt
+
     chart_rows = []
-    for row in data.metrics_rows:
-        m = row.get("metrics") or {}
-        chart_rows.append({
-            "round": row.get("round"),
-            "current pass_1": (m.get("current") or {}).get("pass_1"),
-            "candidate pass_1": (m.get("candidate") or {}).get("pass_1"),
-        })
-    if any(r.get("current pass_1") is not None or r.get("candidate pass_1") is not None for r in chart_rows):
-        st.markdown("**pass^1, live vs candidate, by round**")
-        st.line_chart({r["round"]: {"live": r["current pass_1"], "candidate": r["candidate pass_1"]}
-                       for r in chart_rows}, x_label="round")
+    for record in history:
+        for system, value in (("base (deployed)", record.current_pass_1), ("candidate", record.candidate_pass_1)):
+            if value is not None:
+                chart_rows.append({"gate": f"gate {record.round_number}", "order": record.round_number,
+                                   "system": system, "task success": value,
+                                   "decision": "promoted" if record.decision == "promote" else "refused"})
+    if chart_rows:
+        st.markdown("**Task success on the 20 held-out tasks, every gate**")
+        bars = alt.Chart(alt.Data(values=chart_rows)).mark_bar().encode(
+            x=alt.X("gate:N", sort=alt.SortField("order"), title=None, axis=alt.Axis(labelAngle=0)),
+            xOffset="system:N",
+            y=alt.Y("task success:Q", axis=alt.Axis(format="%"), title="pass^1"),
+            color=alt.Color("system:N", scale=alt.Scale(range=["#9aa5b1", "#1f7a4d"]), legend=alt.Legend(orient="top")),
+            opacity=alt.condition("datum.decision == 'promoted'", alt.value(1.0), alt.value(0.75)),
+            tooltip=["gate:N", "system:N", alt.Tooltip("task success:Q", format=".0%"), "decision:N"],
+        ).properties(height=320)
+        st.altair_chart(bars, width="stretch")
 
+    st.markdown("**Every decision, and why**")
     st.dataframe(
-        [{"round": r.get("round"), "decision": r.get("decision"), "reasons": "; ".join(r.get("reasons") or [])}
-         for r in data.metrics_rows],
+        [{"gate": record.round_number,
+          "decision": "PROMOTED" if record.decision == "promote" else "refused",
+          "checks passed": f"{record.checks_passed} of {record.checks_total}",
+          "task success": (f"{record.current_pass_1:.0%} to {record.candidate_pass_1:.0%}"
+                           if record.current_pass_1 is not None and record.candidate_pass_1 is not None else ""),
+          "why it was refused": record.why_refused or "",
+          "AgentTune alone": "approve" if record.agenttune_approved else "refuse"}
+         for record in history],
         width="stretch", hide_index=True,
     )
 
@@ -1312,6 +1477,7 @@ def select_task_id(data: RoundData, selection: RoundSelection) -> str:
     default_task_id = selection.scenario.task_id if selection.scenario else ""
     if default_task_id not in task_ids:
         candidates = [str(example.get("task_id")) for example in data.sft_kept]
+        candidates += [correction.task_id for correction in data.corrections]
         candidates += [str(failure.get("task_id")) for failure in data.failures]
         default_task_id = next((task_id for task_id in candidates if task_id in task_ids), task_ids[0])
     if st.session_state.get("task_id_choice") not in task_ids:

@@ -78,7 +78,7 @@ The full analysis, every gate and every refusal: [`submission/WRITEUP.md`](submi
   the weights; simulator faults are never trained on.
 - **The gate can say no, and did.** Eleven candidates were refused before one shipped, each for a reason traced in
   the conversations: forgetting general tool use, new failure kinds, context overflow. AgentTune's own
-  `DeploymentGate` would have approved every one of them. Missing evidence is a refusal, never an approval.
+  `DeploymentGate` alone would have approved 10 of those 11. Missing evidence is a refusal, never an approval.
 - **One command, no person in the loop.** `shipwright run --launch` runs every stage in one cloud execution, with
   per-stage and total spend caps checked before each stage starts, retries for transient faults, and resume after
   any crash. The controller that makes those decisions is pure and unit-tested on every path.

@@ -74,3 +74,27 @@ def test_a_round_that_reuses_an_earlier_train_run_takes_it_as_its_before_run(tmp
     (tmp_path / "r4-cand-train").mkdir()
     [entry] = rounds.discover_rounds(tmp_path)
     assert entry.before == "r4-cand-train" and entry.outcome == "unfinished"
+
+
+def test_a_round_written_by_the_loop_keeps_the_whole_gate_decision_in_its_manifest(tmp_path):
+    decision = {"round": 16, "decision": "promote",
+                "checks": [{"name": "pass_1", "passed": True, "current": 0.1, "candidate": 0.15}]}
+    write(tmp_path / "round-16.json", {"failures_run": "r16-cand-train",
+                                       "stages": {"candidate_train": {}, "gate": {"decision": decision}}})
+    (tmp_path / "r16-cand-train").mkdir()
+    entry = rounds.discover_rounds(tmp_path)[0]
+    assert entry.outcome == "promoted" and entry.note == "pass^1 10% to 15%"
+
+
+def test_the_gate_history_lists_every_decision_in_round_order_with_why_it_refused(tmp_path):
+    def gate(number, decision, failed):
+        names = ["pass_1", "non_target", "agenttune_gate"]
+        checks = [{"name": name, "passed": name not in failed} for name in names]
+        checks[0].update(current=0.1, candidate=0.15)
+        write(tmp_path / f"gate-r{number}" / "gate_decision.json", {"decision": decision, "checks": checks})
+    gate(16, "promote", [])
+    gate(8, "reject", ["non_target"])
+    history = rounds.gate_history(tmp_path)
+    assert [record.round_number for record in history] == [8, 16]
+    assert history[0].why_refused == "a new kind of failure rose" and history[0].agenttune_approved
+    assert history[1].checks_passed == 3 and history[1].candidate_pass_1 == 0.15
