@@ -1,24 +1,93 @@
 # Shipwright: a support agent that finds, sorts and fixes its own failures
 
-**One-line claim.** A 3.35B Tiny Aya support agent on tau2-bench retail, with a self-healing loop that sorts each failure into a tool fix, a weight fix or no fix, and only redeploys when an AuditKIT/AgentTune gate measures an improvement. Across three gates the best adapter solves 17% of held-out tasks against 10% for the base model (13 paired wins, 0 losses) and cuts tool-call errors from 60% to 8%. The gate has refused every candidate so far, each time for a reason we could trace and fix.
+**One-line claim.** A 3.35B Tiny Aya support agent that, with no person in the loop, found its own failures on tau2-bench retail, had a teacher correct them, retrained itself, and redeployed only after AuditKIT, AgentTune's `DeploymentGate` and six more checks all passed: task success 10% → 15%, invented order ids 40 → 0, wasted tool calls 69% → 21%, general tool use (BFCL) 45 → 73.
 
-> 2026-11-15.
+> 2026-11-15. Round 16, the loop's first promotion, ran from 12:15 to 14:38 UTC for $3.89.
 
 **Base model + method:** Tiny Aya Global 3.35B (CC-BY-NC-4.0) with a LoRA adapter (r 16), trained by an automatic detect → classify → route → distil → gate loop (AgentTune + AuditKIT) on DeepSeek V4.1 Flash teacher trajectories and on-policy corrections, plus runtime tool-call guards.
 
-**Headline, before → after (same 20 held-out tau2 retail tasks × 3 trials, pooled over 3 gates):** task success **10.0% → 17.2%** (13 paired wins, 0 losses); tool-call errors **60% → 8%**; BFCL **43 → 71**.
+<table>
+<tr>
+<td align="center"><h2>15%</h2>tasks solved end to end<br><sub>base 10% · teacher 32%</sub></td>
+<td align="center"><h2>40 → 0</h2>invented order ids<br><sub>per 60 conversations</sub></td>
+<td align="center"><h2>44% → 6%</h2>tool calls that error<br><sub>round 16 vs base</sub></td>
+</tr>
+<tr>
+<td align="center"><h2>69% → 21%</h2>wasted tool calls<br><sub>teacher 5%</sub></td>
+<td align="center"><h2>0 people</h2>between launch and promotion<br><sub>2 h 24 min, $3.89</sub></td>
+<td align="center"><h2>8 / 8</h2>gate checks passed<br><sub>after 6 refused candidates</sub></td>
+</tr>
+</table>
 
-**On the hidden split (20 tasks never used for any decision, opened once):** task success **0% → 10%** (6 paired wins, 0 losses, McNemar p = 0.031) against a teacher at 30%, so about a third of the gap closed; tool-call errors **56% → 5%**.
+### 1. Three models
 
-**How to read these numbers.** tau2-bench retail is a public benchmark we did not write: multi-turn, a simulated customer, a written policy, and a grader that checks the final shop database. Its tasks, grader and customer are fixed by others, so the model cannot learn the test's format from our own data. On it, the strongest teacher we tried (DeepSeek V4.1 Flash) solves 40% and base Tiny Aya 10%. The student's 17% is about a quarter of the way from base to teacher. A self-built task set, where tasks, training data and grader come from the same authors, can reach 90%+; the two kinds of number are not comparable.
+| Role | Model | What it does |
+|---|---|---|
+| **Base** | Tiny Aya Global 3.35B (Cohere Labs, CC-BY-NC-4.0), unchanged | The reference every gate compares against |
+| **Student** | Base + a LoRA adapter (r 16, about 30M parameters, under 1% of the model) | What the loop trains and deploys. Runs on one A10G with vLLM |
+| **Teacher** | DeepSeek V4.1 Flash on Vertex AI | Shows the right behaviour: full passing conversations, and the right next turn at each point where the student went wrong. Never deployed |
+| Customer and judge | gpt-oss-120b | Plays the customer in tau2-bench and judges its natural-language checks; identical in every gate |
 
-> **For judges: one minute**
-> - **What:** a 3.35B support agent that finds its own failures, decides whether each is a tool, model or environment fault, fixes it, and only redeploys if an 8-check gate measures an improvement.
-> - **Result:** task success 10% → 17% over 180 paired conversations (teacher 40%, so 24% of the gap closed), and 0% → 10% on 20 never-used tasks against a teacher at 30% (6 wins, 0 losses, p = 0.031); tool-call errors 60% → 8% (5% for the round 13 adapter); invented ids 35 → 2; BFCL 43 → 72, so no forgetting.
-> - **The gate:** AgentTune's own `DeploymentGate` approved our candidate in all four measured gates, so by AgentTune's definition the loop closed at gate 8. Our stricter 8-check gate refused every time, on a failure kind the base never shows: conversations that overflow the 8K window, because the student keeps working where the base gives up. Guards for its four causes cut those runs from 13 to 7 (gate 14); the gate allows 3.
-> - **Benchmark:** public tau2-bench retail, where the teacher itself solves only 40%.
-> - **Also found:** three bugs in the customer simulator; fixing two of them raised the teacher's own score from 32% to 40%.
-> - **Cost:** 12.2 GPU-hours (about $20) for 14 rounds; serving costs $0.13–0.75 per 1,000 replies against $1.19 for the teacher's API.
+Same harness, same 20 held-out tasks × 3 trials: **base 10%, student 15%** (round 16; the round 7 adapter pooled over three gates: 17.2%), **teacher 32–40%**.
+
+### 2. What the student stopped doing
+
+Round 16 against the base, 60 conversations each (gate 16):
+
+| | Base | Student (round 16) |
+|---|---|---|
+| Invented an order or item id | 40 | **0** |
+| Handed off to a human too early | 11 | **0** |
+| Made up an answer (judge) | 8 | **0** |
+| Malformed or unknown tool call | 6 | **0** |
+| Wrong tool | 11 | 4 |
+| Tool-call error rate | 44.3% | **5.7%** |
+| BFCL v3, general tool calling (external benchmark: no forgetting) | 45.0 | **73.3** |
+| Still failing: skipped a policy step / went in circles | 25 / 8 | 31 / 12 |
+
+**Trajectories got leaner, measured against tau2's expert path** (`scripts/trajectory_efficiency.py`, details in Results):
+
+| | Base | Round 7 + guards | Round 16 | Teacher |
+|---|---|---|---|---|
+| Wasted calls (repeated, failed or blocked by a guard) | 69% | 46% | **21%** | 5% |
+| Calls per expert call | 0.9 (gives up) | 2.8 | **1.9** | 1.05 |
+| Expert steps taken (recall) | 8% | 48% | **47%** | 52% |
+| Guard blocks per conversation | 0 | 4.3 | **1.3** | 0 |
+
+Every round of corrections made the student need its guards less (4.3 → 2.5 → 1.3 blocks per conversation): the guards' lessons moved into the weights.
+
+### 3. A full loop, with no person in it
+
+One command (`shipwright run --config configs/rounds/r16-corrections.yaml --launch`, spend cap $4) ran one Cloud Run execution end to end:
+
+| Step | What happened | Cost |
+|---|---|---|
+| Detect | The last refused candidate ran the 74 train tasks; AgentTune `FailureDetector` + tau2's grader flagged the failures | $0.53 |
+| Classify | Rules, then AgentTune `FailureClassifier`, labelled each failure and routed it (tool fix / weight fix / no fix) | $0.05 |
+| Correct | The teacher answered at every turn where the student went wrong, from the student's exact context: 235 corrections across three rounds | $0.12 |
+| Train | AgentTune `create_distill_trainer`, LoRA from the base, on the corrections + teacher passes + 300 BFCL rows (789 examples) | $1.17 |
+| Gate | Base and candidate on 20 held-out tasks × 3, BFCL, 8 checks | $2.02 |
+| Promote | Written to the promotion ledger on the Hub (`promotions/ledger.jsonl`), with one-step rollback | – |
+
+**Who approved it:** AuditKIT computed pass^1, pass^k and BFCL; tau2-bench's database grader decided each conversation; AgentTune's `DeploymentGate` gave its verdict; our checks confirmed the targeted failures fell (90% → 85% of runs, the 0.05 minimum) and no other kind rose by more than 0.05. All 8 passed. The same gate had refused six earlier candidates for traceable reasons (forgetting, new failure kinds, conversations overflowing the context), so the approval means something.
+
+### 4. Why a business would care
+
+**Running the self-hosted student instead of the teacher's API for first-line retail support costs about $22 instead of $117 per 10,000 conversations (5× less, 2.5× less per resolved ticket), with every conversation and fix on hardware the shop controls; it fully resolves 15% of tickets against the teacher's 32%, so today it fits as a first-line agent that never invents an order id and hands the rest to people, and each unattended $4 round narrows the gap.**
+
+| Per 10,000 conversations (gate 16 and the teacher on the same 20 tasks) | Base | Student (round 16) | Teacher API |
+|---|---|---|---|
+| Resolved end to end | 1,000 | **1,500** | 3,170 |
+| Serving cost | | **about $22** | about $117 (about $20 if every prompt hits the API's cache) |
+| Cost per resolved ticket | | **$0.015** | $0.037 |
+| A wrong change written to the shop | 3% | 13% | 10% |
+| Invented ids, early handoffs, made-up answers (labels in 60 conversations) | 59 | **0** | |
+
+Cost uses measured model calls per conversation (student 16.8 including guard retries, teacher 9.8) at $0.13 per 1,000 student replies on a busy A10G and $1.19 per 1,000 uncached teacher replies (cost table in Results). The honest catch: a student that acts more also makes more wrong changes than the base, at about the teacher's rate, which is why the gate tracks failure kinds and not only success.
+
+**How to read these numbers.** tau2-bench retail is a public benchmark we did not write: multi-turn, a simulated customer, a written policy, and a grader that checks the final shop database. Its tasks, grader and customer are fixed by others, so the model cannot learn the test's format from our own data. On it, the teacher solves 32–40% and base Tiny Aya 10%. A self-built task set, where tasks, training data and grader come from the same authors, can reach 90%+; the two kinds of number are not comparable.
+
+**On the hidden split (20 tasks never used for any decision, opened once, with the round 7 adapter + guards):** task success **0% → 10%** (6 paired wins, 0 losses, McNemar p = 0.031) against a teacher at 30%, so about a third of the gap closed; tool-call errors **56% → 5%**. Round 16 was promoted after the hidden split was opened and has not been run on it.
 
 ## Tracks and problem statements
 
@@ -30,21 +99,23 @@
 
 Most AI agents fail quietly: something goes wrong mid-conversation, nobody notices, and the same mistake happens tomorrow. Shipwright closes that loop for a small open-weight model instead of papering over it with a bigger one.
 
-The agent is **Tiny Aya Global (3.35B)** with a LoRA adapter. It works as a retail support agent in **tau2-bench**: a simulated customer, 16 shop tools, a written company policy, and a grader that checks whether the shop database ends up right, not whether the reply sounded right.
+The agent is **Tiny Aya Global (3.35B)** with a LoRA adapter, working as a retail support agent in **tau2-bench**: a simulated customer, 16 shop tools, a written policy, and a grader that checks whether the shop database ends up right, not whether the reply sounded right.
 
-Failures are detected and classified with AgentTune's `FailureDetector` and `FailureClassifier`, plus our own deterministic rules. A router sends each failure down one of three routes:
+AgentTune's `FailureDetector` and `FailureClassifier`, plus our deterministic rules, find and label each failure, and a router sends it down one of three routes:
 
 - **Tool fix:** rewritten tool descriptions, plus guards that check each tool call against the policy before it runs.
-- **Weight fix:** a DeepSeek V4.1 Flash teacher replays the failed tasks, and its passing conversations plus corrections of the student's own wrong turns train a new LoRA with AgentTune.
-- **No fix:** the fault lies with the environment, which is never used as training data.
+- **Weight fix:** a DeepSeek V4.1 Flash teacher replays failed tasks and corrects each of the student's wrong turns; a new LoRA trains on them with AgentTune.
+- **No fix:** the fault lies with the environment, which never becomes training data.
 
-A candidate is deployed only if it passes all 8 checks of a frozen gate: AuditKIT pass^1 and pass^k on 20 held-out tasks × 3 trials, target and non-target failure rates, BFCL, and AgentTune's `DeploymentGate`. A further 20 tasks stay hidden for the final report. A gate that can say no is the point: a system that always approves its own updates isn't self-healing, it's retraining on a schedule.
+A candidate is deployed only if it passes all 8 checks of a frozen gate: AuditKIT pass^1 and pass^k on 20 held-out tasks × 3 trials, target and non-target failure rates, BFCL, and AgentTune's `DeploymentGate`. A gate that can say no is the point: a system that always approves its own updates isn't self-healing, it's retraining on a schedule.
 
-**Headline (the round 7 adapter + guards, gates 8, 11 and 12, 180 paired held-out conversations):** task success **10.0% to 17.2%**. The candidate solved 13 conversations the base failed and lost none (McNemar p = 0.0002, optimistic: the pairs share 20 tasks). Tool-call errors fell **60% to 8%** and BFCL rose 43 to 71. The teacher passes 40% in the same harness, so the student closes about **24%** of the gap. On 20 hidden tasks opened once at the end: **0% → 10%**, teacher 30% (6 wins, 0 losses, p = 0.031).
+**The first unattended promotion (round 16).** One command, a $4 cap and no person after launch: the last refused candidate ran the train tasks, its failures were classified, the teacher corrected each wrong turn (235 corrections over three rounds), a new adapter trained, and it passed all 8 checks: task success 10% → 15%, invented ids 40 → 0, early handoffs 11 → 0, made-up answers 8 → 0, tool-call errors 44% → 6%, BFCL 45 → 73. It is now the deployed system in the promotion ledger.
 
-**On-policy corrections (round 13):** training on the teacher's fix for each of the student's own wrong turns cut invented ids from 35 failure labels to 2, early transfers from 18 to 0 and judge-flagged made-up answers from 8 to 0, and pass^k beat the base for the first time (15% vs 10%).
+**The gate earned that approval.** AgentTune's `DeploymentGate` approved every candidate we measured; our checks refused six, each for a traceable reason: forgetting general tool use, new failure kinds, and conversations overflowing the 8,192-token window because the student kept working where the base gives up. We traced the overflow to lookup streaks, repeated calls and a customer simulator that answers as the agent, and fixed each.
 
-**AgentTune's gate said yes; ours said no.** AgentTune's `DeploymentGate` approved our candidate in all four measured gates, so by AgentTune's definition the loop closed at gate 8. Our stricter gate refused every time on one failure the base never shows: conversations overflowing Tiny Aya's 8,192-token window, because the student keeps working where the base gives up. We traced them to lookup streaks, repeated and failed calls, and a customer simulator that answers as the agent. Guards for these cut overflowing runs from 13 to 7 (gate 14); the gate allows 3.
+**A new metric, trajectory efficiency,** compares each conversation with tau2's expert path. Wasted tool calls fell from 69% (base) and 46% (round 7 + guards) to 21% in round 16 (teacher 5%), and the student needed its guards a third as often: the guards' lessons moved into the weights.
+
+**Pooled and hidden checks.** The round 7 adapter + guards solved 17.2% vs 10.0% over 180 paired held-out conversations (13 wins, 0 losses), and 10% vs 0% on 20 hidden tasks opened once (teacher 30%, p = 0.031). The student closes a quarter to a third of the gap to the teacher.
 
 The loop also caught faults in its own environment: fixing two simulator bugs raised the teacher from 31.7% to 40%.
 
@@ -188,7 +259,7 @@ Every trajectory is saved: messages, the raw output per turn, parse status, guar
 | Tool-call error rate | lower | Reliable tool calling (PS1) |
 | Failure-label rates (target / non-target) | lower | Did the fix remove what it targeted without adding new failure kinds? |
 | BFCL (simple, multiple, irrelevance) | higher | General tool use, an external benchmark: catches catastrophic forgetting |
-| Avg agent steps | lower | Trajectory efficiency and context use |
+| **Trajectory efficiency** (`scripts/trajectory_efficiency.py`): calls per expert call, wasted share (repeated, failed or guard-blocked calls), expert steps taken (recall), prompt tokens per solved task | lower waste, recall up | A support agent that solves a ticket in 30 calls costs more, is slower and overflows its context. Measured against tau2's gold action list, so it compares to an expert path, not to another model |
 | Latency per agent reply, and per conversation | lower | Cost and user experience of serving |
 | **Gap closed** = (student − base) / (teacher − base) | higher | Distillation progress against the teacher run in the identical harness |
 
@@ -233,7 +304,7 @@ AgentTune's `FailureDetector`, `FailureClassifier` (gpt-oss-120b), `RetrainingTr
 
 **Tool-fix round 1 (no training).** 35 tool-description patches, all from the deterministic regex. Failures from copying example ids out of a tool's description fell from 13 to 2, and tool-call errors fell 50%. The pass rate didn't move: the 10 remaining failures were the model picking the wrong tool, which no rewording fixes. The classifier routed those 10 to the weight fix, which is the tool-fix vs weight-fix split working as designed.
 
-**Gated rounds.** Every round was refused, and each refusal taught something:
+**Gated rounds.** Six candidates were refused, each for a reason we could trace and fix, before round 16 passed:
 
 | Gate | Change | pass^1 (base to candidate) | Why refused / what it taught |
 |---|---|---|---|
@@ -248,6 +319,7 @@ AgentTune's `FailureDetector`, `FailureClassifier` (gpt-oss-120b), `RetrainingTr
 | 12 | Gate 11's candidate again, on the fixed gate | 10 to 15% | 7 of 8 passed; 5 runs out of context against 0 (allowed: 3) |
 | 13 | Round 7's recipe + 176 on-policy corrections of the round 7 adapter's own wrong turns | 10 to 15%, pass^k 10 to 15% | 7 of 8 passed; 13 runs out of context against 0 |
 | 14 | Round 13's adapter + guards against what filled the context (no training) | 10 to 13%, pass^k 10 to 10% | 6 of 8 passed. Overflowing runs 13 to 7 (allowed: 3); targeted labels fell 0.033 (needs 0.05; gate 13: 0.05, one run apart) |
+| **16** | Unattended corrections round from gate 14's refusal: the round 13 adapter + guards ran the train tasks, the teacher corrected its wrong turns, a fresh adapter trained on all 235 corrections | **10 to 15%**, pass^k 10 to 10% | **Promoted, 8 of 8.** Targeted labels 90% → 85% of runs; overflow 4 runs (base 2); BFCL 45 → 73 |
 
 **AgentTune's gate vs ours.** AgentTune's `DeploymentGate` is one of our 8 checks. Read alone, it would have deployed:
 
@@ -257,8 +329,9 @@ AgentTune's `FailureDetector`, `FailureClassifier` (gpt-oss-120b), `RetrainingTr
 | 12 | Round 7 + guards | 10 → 15% | **approve** | refuse (7 of 8) | 5 runs overflow, base 0 |
 | 13 | Round 13 | 10 → 15% | **approve** | refuse (7 of 8) | 13 runs overflow, base 0 |
 | 14 | Round 13 + overflow guards | 10 → 13% | **approve** | refuse (6 of 8) | 7 runs overflow; targeted labels fell less than 0.05 |
+| 16 | Round 16 (third corrections round) | 10 → 15% | **approve** | **approve (8 of 8)** | Nothing: promoted |
 
-By AgentTune's own gate, the loop closed at gate 8: detect, classify, retrain and an approved redeploy. Our gate held the deploy back because a stuck conversation that ends in overflow is worse for a customer than the base model's early handoff to a human, and because promoting would make overflow the new baseline for every later gate.
+By AgentTune's own gate, the loop closed at gate 8. Our gate held the deploy back until round 16 because a stuck conversation that ends in overflow is worse for a customer than the base model's early handoff to a human, and because promoting would make overflow the new baseline for every later gate.
 
 ## Results
 
@@ -338,6 +411,27 @@ Offline, the four new guards fire before the history is lost in 12 of the 13 run
 
 The adapter's mean latency is higher because a guard that rejects a call asks the model again within the same turn, and its conversations are longer because it keeps working where the base gives up. No system solves a task that needs two or more changes.
 
+**Trajectory efficiency: is the agent getting leaner?** tau2 stores, for every task, the calls an expert agent makes (lookups and writes, about 4 per held-out task). `scripts/trajectory_efficiency.py` compares each conversation with that path: which calls were on it (same tool, same arguments), which repeated an earlier call with no change in between, which the shop rejected, and which our guards blocked before they ran (they still cost a model call). Same 20 held-out tasks × 3 trials in every row; the teacher row is its held-out ceiling run.
+
+| System (gate) | pass^1 | Calls per expert call | On the expert path (precision) | Expert steps taken (recall) | Wasted (repeat + failed + blocked) | Guard blocks per conversation | Prompt tokens per solved task |
+|---|---|---|---|---|---|---|---|
+| Base (16) | 10.0% | 0.93 | 15% | 8% | 69% | 0 | 386K |
+| Round 7 + guards (12) | 15.0% | 2.80 | 34% | 48% | 46% | 4.27 | 423K |
+| Round 13 (13) | 15.0% | 2.85 | 32% | 47% | 26% | 2.50 | 627K |
+| Round 13 + overflow guards (14) | 13.3% | 2.44 | 33% | 44% | 29% | 2.58 | 556K |
+| **Round 16 (16), promoted** | **15.0%** | **1.87** | **36%** | **47%** | **21%** | **1.27** | 490K |
+| Teacher | 31.7% | 1.05 | 52% | 52% | 5% | 0 | 100K |
+
+Task bootstrap (5,000 resamples of the 20 tasks), 95% intervals: wasted share base → round 16 down 48 points (38–56); round 7 + guards → round 16 down 26 points (17–35); guard blocks per conversation down 3.0 (2.0–4.2). On the hidden split the same pattern holds: base 68% wasted, round 7 + guards 39%, teacher 7%.
+
+What it shows:
+- **The base looks frugal because it gives up:** under one call per expert call, but 44% of them fail and it takes 8% of the expert's steps.
+- **Training taught the right steps fast; the waste came down round by round.** Recall reached the teacher's level by round 7 (48% vs 52%) and stayed there. What the correction rounds removed was the waste around those steps: 46% → 26% → 21%.
+- **The guards' lessons moved into the weights.** Round 7 needed a guard to block 4.3 calls per conversation; round 16, trained on the teacher's corrections of exactly those turns, needs 1.3. This is the self-healing loop working at the level of single turns, and it fits overflowing runs falling from 13 (round 13) to 4.
+- **Still twice the expert's calls and five times its context per solved task** (490K vs 100K prompt tokens). That is the gap to close next: fewer calls is cheaper, faster and leaves room in the 8K window.
+
+The metric is evaluation only: it never feeds training or the gate. Making "wasted share must not rise" a ninth gate check is a one-line config change we did not make mid-hackathon, since the thresholds were frozen on 2026-11-11.
+
 **Sample (gate 13, task 9, trial 2; this run passed).** The customer asked to exchange a desk lamp. The adapter wrote the exchange before the customer had said yes:
 
 > ```json
@@ -399,7 +493,8 @@ A full round (baseline, classify, teacher, data, train, gate) runs unattended in
 - Eleven gates looked at the same held-out tasks, which means selection on them, and the gate 14 guards were written from gate 13's runs. The hidden split (opened once, after all decisions) is the check on that: 0% → 10%, but the gains sit on 3 of its 20 tasks, so it is small-sample evidence. It ran with today's code, so it also includes the gate 14 guards, a combination never gated on its own.
 - Gates 10 and 11 did not measure their label checks (the classifier's token expired inside the job). Their pass rates are valid; their label numbers are not.
 - The customer simulator and judge are an LLM. We found and fixed three failure modes, and there may be others.
-- No candidate passed our 8-check gate (AgentTune's own gate approved four), so "deployment" is a promotion ledger, not a live endpoint.
+- One candidate (round 16) passed our 8-check gate, by the minimum margin on targeted labels (a 0.05 drop) and with pass^k unchanged; 3 more passing runs out of 60 is not significant on its own. "Deployment" is a promotion ledger, not a live endpoint. Round 16 has not been run on the hidden split, which was opened before it existed.
+- A student that acts more makes more wrong changes: 13% of round 16's conversations wrote a wrong change to the shop, against 3% for the base (which mostly gives up) and 10% for the teacher.
 - The guards and simulator repairs were written by us after reading the failures. The loop detected and routed them (context overflow routes to "fix the harness"), but its automatic tool-fix proposer did not write them.
 
 ## With more credits
@@ -427,7 +522,7 @@ What 14 rounds taught us decides the order: the gate is too noisy to see a 5-poi
 | Extension | Cost | Metric now | Expected after |
 |---|---|---|---|
 | k-fold gate (5 folds, 94 tasks) | ~$10 per decision | pass^1 moves ±10 pts between gates of the same model | ±4–5 pts, so a 5–7 pt gain is detectable |
-| Gate 14's guards + one more on-policy correction round + "stop and answer" examples | ~$5 | Context overflow 7 of 60 runs | 3 or fewer, and the first promotion |
+| Gate 14's guards + one more on-policy correction round (done: round 16) | $3.89 | Context overflow 7 of 60 runs | Measured: 4 of 60, promoted |
 | 2–3 more on-policy correction rounds | ~$3 per round | pass^1 15%, invented ids 2 | pass^1 20–25%; skipped policy steps down a third |
 | Condensed policy (1,500 → 500 tokens) + retrain | ~$3 | 36% of the window is fixed prompt | Under 25%, overflow near 0 without guards |
 | Reply-text grounding guard | free + one gate | Made-up facts in 7–13 failed runs per gate | Near 0 (the teacher has none) |
@@ -435,7 +530,7 @@ What 14 rounds taught us decides the order: the gate is too noisy to see a 5-poi
 
 ## Artifacts
 
-- **HF models collection:** https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6 (adapters `mitushigoyal5/shipwright-lora`, a branch per round; best: `round-7`, and `round-13` with on-policy corrections)
+- **HF models collection:** https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6 (adapters `mitushigoyal5/shipwright-lora`, a branch per round; deployed: `round-16`, the first promoted; `round-7`, best pooled; `round-13`, first on-policy corrections)
 - **HF datasets collection:** https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb (`mitushigoyal5/shipwright-sft`, and `mitushigoyal5/shipwright-runs` with all gate traces and decisions)
 - **GitHub:** TODO public link
 - **Demo:** control-room, a read-only replay of a real round's artifacts step by step, including a genuine gate refusal. It never calls a model; it only reads what the pipeline wrote. It runs locally (`streamlit run src/shipwright/control_room/app.py`). A public Space is ready in `infra/space/`, but a live-server Space needs an HF PRO account.
@@ -497,4 +592,5 @@ Lexsi Labs for the hackathon and the kits (AgentTune, AuditKIT); Cohere Labs for
 
 ## Changelog
 
+- 2026-11-15: round 16, the first unattended promotion; trajectory efficiency metric; opening restructured.
 - 2026-11-15: first submission.
