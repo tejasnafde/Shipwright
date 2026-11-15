@@ -34,6 +34,8 @@ Task ids (train split only):
   --ceiling            the teacher on the 20 held-out tasks (test split): its pass rate is the ceiling the
                        student is compared with. Evaluation only: no kept.jsonl, and build_sft.py refuses
                        a test-split run
+  --hidden-ceiling     the same on the 20 hidden tasks (opened once, for the final report): the teacher's
+                       pass rate there, to read the student's hidden-split result against. Evaluation only
 
 Writes the normal baseline outputs (traces.jsonl, summary.json, prompts.json, ...) plus
   kept.jsonl           the traces with reward == 1 (the only ones used for training)
@@ -118,6 +120,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--skip-unsolved-from", type=Path, nargs="*", default=[], help="earlier teacher run dirs")
     parser.add_argument("--ceiling", action="store_true", help="the teacher on the held-out tasks (evaluation only)")
+    parser.add_argument("--hidden-ceiling", action="store_true",
+                        help="the teacher on the hidden tasks, opened once for the final report (evaluation only)")
     parser.add_argument("--min-teacher-rate", type=float, default=0.0, help="with --only-solved-from")
     parser.add_argument("--only-solved-from", type=Path, nargs="*", default=[], help="earlier teacher run dirs")
     parser.add_argument("--skip-solved-from", type=Path, nargs="*", default=[], help="earlier teacher run dirs")
@@ -161,6 +165,10 @@ def resolve_task_ids(teacher_options: argparse.Namespace) -> list[str] | None:
         from shipwright.heal import splits
 
         return splits.heldout_ids()
+    if teacher_options.hidden_ceiling:
+        from shipwright.heal import splits
+
+        return splits.hidden_ids()
     if teacher_options.all_train:
         return None
 
@@ -202,7 +210,7 @@ def resolve_task_ids(teacher_options: argparse.Namespace) -> list[str] | None:
 def build_baseline_argv(teacher_options: argparse.Namespace, task_ids: list[str] | None) -> list[str]:
     """The baseline.py command line for a teacher run (always the train split)."""
     baseline_argv = [
-        "--task-split", "test" if teacher_options.ceiling else "train",  # train, except the held-out ceiling run
+        "--task-split", "test" if is_ceiling_run(teacher_options) else "train",  # train, except the ceiling runs
         "--trials", str(teacher_options.trials),
         "--agent-model", teacher_options.teacher_model,
         "--user-model", teacher_options.user_model,
@@ -219,9 +227,16 @@ def build_baseline_argv(teacher_options: argparse.Namespace, task_ids: list[str]
         baseline_argv += ["--output-dir", str(teacher_options.output_dir)]
     if teacher_options.max_cost_usd is not None:
         baseline_argv += ["--max-cost-usd", str(teacher_options.max_cost_usd)]
+    if teacher_options.hidden_ceiling:
+        baseline_argv.append("--open-hidden")
     if teacher_options.dry_run:
         baseline_argv.append("--dry-run")
     return baseline_argv
+
+
+def is_ceiling_run(teacher_options: argparse.Namespace) -> bool:
+    """The teacher on test tasks (held-out or hidden): evaluation only, never training data."""
+    return bool(teacher_options.ceiling or getattr(teacher_options, "hidden_ceiling", False))
 
 
 def count_kept_per_task(kept_traces: list[dict]) -> dict[str, int]:
@@ -254,8 +269,9 @@ def main(argv: list[str] | None = None) -> int:
 
     from shipwright.heal.traces import write_jsonl
 
-    if teacher_options.ceiling:
-        print(f"Teacher ceiling on the held-out tasks: pass rate {result.summary.get('pass_rate')}")
+    if is_ceiling_run(teacher_options):
+        which_tasks = "hidden" if teacher_options.hidden_ceiling else "held-out"
+        print(f"Teacher ceiling on the {which_tasks} tasks: pass rate {result.summary.get('pass_rate')}")
         print(f"\nWrote {result.run_directory}")
         return 0
 
