@@ -220,6 +220,18 @@ def _mean(values: list[float]) -> float | None:
     return None
 
 
+def exact_mcnemar_p(only_first_passed: int, only_second_passed: int) -> float:
+    """Two-sided exact McNemar p-value: on the paired runs where exactly one system passed, how likely a split this
+    uneven is if both systems were equally good (a binomial test at 0.5)."""
+    from math import comb
+
+    discordant = only_first_passed + only_second_passed
+    if discordant == 0:
+        return 1.0
+    smaller = min(only_first_passed, only_second_passed)
+    return min(1.0, 2 * sum(comb(discordant, index) for index in range(smaller + 1)) / 2 ** discordant)
+
+
 def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float] | None:
     """Wilson score interval for a binomial proportion (default: 95%).
 

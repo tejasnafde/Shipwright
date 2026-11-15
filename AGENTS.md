@@ -546,6 +546,10 @@ What changed, so nobody rebuilds what was removed or repeats what it fixed:
   adapter + guards (`gate_job.py` hidden mode): base 0% to 10% (6 paired wins, 0 losses, p = 0.031), tool-call errors 56%
   to 5%; teacher on the same tasks 30% (`teacher_runs.py --hidden-ceiling`). Round 16 has not been run on it. Do not run
   anything else on the hidden ids: a later check needs new tasks (another tau2 domain), not the hidden split again.
+- 2026-11-15 (Ishank): `scripts/reproduce.py` recomputes the write-up's headline numbers (gate 16, hidden split) from
+  the public runs dataset and checks each against `WRITEUP.md` (exit 1 on a mismatch). If you change a headline number in
+  the write-up, change its expected value there too. `train_lora.py` now writes AgentTune's `lexsi_provenance.json` into
+  each adapter (a failure only warns; it needs torch, so it is a no-op on a Mac). Adapters up to round 16 have none.
 - 2026-11-15 (Ishank): the harness serving round 16 is the one it was gated with. Two later harness changes that were
   always on are now switches, off by default: `identity_note` (`context.still_true_note`, `baseline --identity-note`,
   `build_sft --identity-note`) and `agent_voice_check` (`patches.is_agent_voiced_reply` on top of Mitushi's always-on

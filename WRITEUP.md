@@ -547,8 +547,9 @@ What 14 rounds taught us decides the order: the gate is too noisy to see a 5-poi
   - `configs/`: frozen splits and gate, systems, rounds;
   - `docs/`: setup, pipeline, ops;
   - `docs/system-design.html`: the full design.
-- **Setup and runs:** `docs/setup/*.md`, `docs/pipeline/*.md`. The loop, unattended: `shipwright run --config configs/rounds/<name>.yaml --launch`. Offline: `--dry-run`. Tests: `pytest` (355 pass).
+- **Setup and runs:** `docs/setup/*.md`, `docs/pipeline/*.md`. The loop, unattended: `shipwright run --config configs/rounds/<name>.yaml --launch`. Offline: `--dry-run`. Tests: `pytest` (372 pass).
 - **Reproducibility:** every run writes `run_config.json` (models, seeds, code sha, observation version) and `repro.json`, and every gate records the sha256 of the frozen configs.
+- **Check our numbers:** `python scripts/reproduce.py` recomputes the headline numbers (gate 16 and the hidden split, 19 claims) from the public run files on the Hub and prints MATCH or MISMATCH for each against this write-up; no GPU, no token, about 2 MB. Each adapter from here on also carries AgentTune's lineage record (`lexsi_provenance.json`).
 - **Declaration of work done outside the hackathon:** none. All code, data and models were produced between Nov 1 and Nov 15, 2026.
 
 ## Teammates
