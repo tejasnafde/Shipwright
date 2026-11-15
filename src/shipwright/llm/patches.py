@@ -157,6 +157,30 @@ def is_unexplained_stop(response: Any) -> bool:
     return bool(reasoning) and not STOP_INTENT.search(reasoning)
 
 
+# The user simulator sometimes answers as the store's agent ("I'm sorry, but I can't verify your account without ...",
+# "I understand this is frustrating. I'll transfer you to a supervisor"), and the conversation goes round in circles
+# until it overflows or hits the step limit. Found by Mitushi on gate 13 (2026-11-15). Recorded runs: 4 candidate runs
+# of gate 13, 3 teacher runs, 0 base runs; no customer message in any recorded run matched that speaks for the customer
+# ("I'm sorry, but I can't share my credit-card details" is kept by CUSTOMER_VOICE). Such a reply is asked again.
+AGENT_VOICE = re.compile(
+    r"^(i'?m sorry, but i (can'?t|cannot|am not able|'m not able)|i understand (this is|that this is|your) frustrat|"
+    r"unfortunately, i (can'?t|cannot|am unable)|thank you for your patience|"
+    r"i apologi[sz]e for (the|any) (inconvenience|confusion)|how (can|may) i (help|assist) you|"
+    r"is there anything else i can (help|assist))",
+    re.IGNORECASE,
+)
+CUSTOMER_VOICE = re.compile(r"\b(my|mine|i have|i don'?t have|i'?d like|i want|i need)\b", re.IGNORECASE)
+
+
+def is_agent_voiced_reply(response: Any) -> bool:
+    """A user-simulator reply that speaks as the agent and not as the customer."""
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return False
+    content = (getattr(choices[0].message, "content", None) or "").strip().replace("\u2019", "'")
+    return bool(AGENT_VOICE.search(content)) and not CUSTOMER_VOICE.search(content)
+
+
 def is_json_reply(response: Any) -> bool:
     """True when every choice's content parses as JSON (what tau2's NL judge expects)."""
 
@@ -389,7 +413,9 @@ def install(
                         break
                 elif is_user_simulator_call:
                     cut_leaked_turn(response)
-                    if not is_empty_reply(response) and not is_unexplained_stop(response):
+                    usable = not (is_empty_reply(response) or is_unexplained_stop(response)
+                                  or is_agent_voiced_reply(response))
+                    if usable:
                         break
                 else:
                     break

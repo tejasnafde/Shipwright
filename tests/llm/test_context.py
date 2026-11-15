@@ -101,3 +101,28 @@ def test_is_json_reply():
     assert not is_json_reply(reply(""))
     assert not is_json_reply(reply("I think the agent did well."))
     assert not is_json_reply(NS(choices=[]))
+
+
+def test_dropped_turns_leave_a_note_with_the_authenticated_user_and_their_orders():
+    """Round 13: once the find_user_id result was dropped, the agent asked an identified customer to authenticate again."""
+    from shipwright.llm.context import OMITTED_NOTE, fit_messages
+
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "I want to return my lamp."},
+        {"role": "assistant", "content": '```json\n{"name": "find_user_id_by_name_zip"}\n```'},
+        {"role": "user", "content": 'Tool result for find_user_id_by_name_zip: "noah_ito_3850"'},
+        {"role": "assistant", "content": '```json\n{"name": "get_user_details"}\n```'},
+        {"role": "user", "content": 'Tool result for get_user_details: {"user_id":"noah_ito_3850","orders":["#W1","#W2"]}'},
+        {"role": "assistant", "content": "x " * 300},
+        {"role": "user", "content": "y " * 300},
+        {"role": "assistant", "content": "Which order?"},
+        {"role": "user", "content": "The first one."},
+    ]
+    fitted, info = fit_messages(messages, budget=400)
+    assert info["dropped_messages"] > 0
+    note = next(message["content"] for message in fitted if OMITTED_NOTE in message["content"])
+    assert "authenticated as user id noah_ito_3850" in note and "#W1, #W2" in note
+    unauthenticated = messages[:2] + messages[6:]
+    fitted, _ = fit_messages(unauthenticated, budget=400)
+    assert not any("authenticated as user id" in message["content"] for message in fitted)

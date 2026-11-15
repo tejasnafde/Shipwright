@@ -378,3 +378,24 @@ def test_a_real_litellm_reply_with_an_item_id_is_rewritten_in_place():
     trace = patched.choices[0].message.provider_specific_fields[patches.TRACE_FIELD]
     assert trace["guard_repairs"] == [{"from": "get_product_details", "to": "get_item_details", "arguments": {"item_id": "222"}}]
 
+
+
+def test_an_eleventh_lookup_in_a_row_is_refused_and_a_customer_turn_or_a_write_resets_the_count():
+    """Round 13: up to 38 lookups in a row, 9 runs over 10, none passed; passing runs make at most 9 (285 teacher passes)."""
+    messages = [customer("I want to exchange my watches."), agent_call("find_user_id_by_email", {"email": "a@b.c"}, "auth"),
+                tool_result("auth", '"noah_ito_3850"'), customer("Yes, that is me.")]
+    for number in range(guards.MAX_LOOKUPS_IN_A_ROW):
+        messages += [agent_call("get_item_details", {"item_id": str(number)}, f"c{number}"), tool_result(f"c{number}", "{}")]
+    violation = guards.first_violation(messages, call("get_item_details", item_id="99"))
+    assert violation is not None and violation.rule == "lookup_spree" and violation.fallback_reply is None
+    assert guards.check_lookup_spree(messages[:-2], call("get_item_details", item_id="99")) is None  # 9 so far
+    assert guards.check_lookup_spree(messages + [customer("The red one.")], call("get_item_details", item_id="99")) is None
+    assert guards.check_lookup_spree(messages, call("exchange_delivered_order_items", order_id="#W1")) is None
+
+
+def test_a_simulated_customer_that_answers_as_the_agent_is_asked_again():
+    # gate 13 task 51 and r10-teacher task 3; the third speaks for the customer and is kept (gate 12 task 74)
+    assert patches.is_agent_voiced_reply(reply("I’m sorry, but I can’t verify your account without the phone number."))
+    assert patches.is_agent_voiced_reply(reply("I understand this is frustrating. I’ll transfer you to a supervisor."))
+    assert not patches.is_agent_voiced_reply(reply("I’m sorry, but I can’t share my credit-card details."))
+    assert not patches.is_agent_voiced_reply(reply("Yes, please go ahead with the exchange."))

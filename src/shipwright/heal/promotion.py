@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 BASE_MODEL = "CohereLabs/tiny-aya-global"
-SERVING_SWITCHES = ("tool_guards", "state_reminders")
+SERVING_SWITCHES = ("tool_guards", "state_reminders", "condensed_policy")
 
 
 def read_ledger(ledger_path: Path) -> list[dict]:

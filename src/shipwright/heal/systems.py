@@ -12,6 +12,8 @@ One YAML file per system (see ``configs/systems/``):
       ids: applied                 # or an explicit list of patch ids
     tool_guards: true              # optional (tool fix): policy checks before a tool call runs
     state_reminders: true          # optional (tool fix): a status note before each agent turn (reminders.py)
+    condensed_policy: true         # optional: the retail policy in fewer words (prompted_tools.CONDENSED_POLICY);
+                                   # an adapter trained on rows rendered with it (build_sft --condensed-policy)
     route: tool_fix                # none | tool_fix | weight_fix (for the record)
     targets: [tool_example_copied] # failure labels this candidate should lower
 
@@ -54,6 +56,7 @@ def validate_system(system_config: dict, root: Path | None = None) -> dict:
         "tool_patches": None,
         "tool_guards": bool(system_config.get("tool_guards", False)),
         "state_reminders": bool(system_config.get("state_reminders", False)),
+        "condensed_policy": bool(system_config.get("condensed_policy", False)),
         "route": system_config.get("route", "none"),
         "targets": list(system_config.get("targets") or []),
     }
@@ -123,6 +126,8 @@ def baseline_args(system: dict, patch_ids: list[str], root: Path) -> list[str]:
         extra_arguments.append("--tool-guards")
     if system.get("state_reminders"):
         extra_arguments.append("--state-reminders")
+    if system.get("condensed_policy"):
+        extra_arguments.append("--condensed-policy")
     return extra_arguments
 
 

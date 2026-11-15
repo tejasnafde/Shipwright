@@ -129,6 +129,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="a short status note before each agent turn (src/shipwright/llm/reminders.py)",
     )
+    parser.add_argument(
+        "--condensed-policy",
+        action="store_true",
+        help="the student reads the retail policy in fewer words (prompted_tools.CONDENSED_POLICY, about 950 tokens less)",
+    )
     return parser
 
 
@@ -340,6 +345,7 @@ def write_run_config(
 
     run_config["tool_list_version"] = prompted_tools.TOOL_LIST_VERSION
     run_config["observation_version"] = prompted_tools.OBSERVATION_VERSION
+    run_config["condensed_policy"] = prompted_tools.condensed_policy_enabled()
     (run_directory / "run_config.json").write_text(json.dumps(run_config, indent=2))
 
 
@@ -392,6 +398,9 @@ def prepare(
     reminders.set_enabled(bool(getattr(run_options, "state_reminders", False)))
     if reminders.is_enabled():
         logger.info("state reminders active")
+    from shipwright.llm import prompted_tools
+
+    prompted_tools.set_condensed_policy(bool(getattr(run_options, "condensed_policy", False)))
     log.note_repro(tool_patch_ids_active=active_patches)
     write_run_config(run_options, run_directory, active_patches)
     return RunSetup(
@@ -479,6 +488,7 @@ def finish_run(
     summary["active_tool_patches"] = run_setup.active_patches
     summary["tool_guards"] = bool(getattr(run_options, "tool_guards", False))
     summary["state_reminders"] = bool(getattr(run_options, "state_reminders", False))
+    summary["condensed_policy"] = bool(getattr(run_options, "condensed_policy", False))
     (run_directory / "summary.json").write_text(json.dumps(summary, indent=2))
 
     recorded_prompts = prompted_tools.recorded_prompts()

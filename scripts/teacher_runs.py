@@ -151,6 +151,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=100)
     parser.add_argument("--seed", type=int, default=300)
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--condensed-policy", action="store_true",
+                        help="the teacher reads the short policy the student will train and serve with")
     parser.add_argument("--dry-run", action="store_true", help="fake LLM, no network")
     return parser.parse_args(argv)
 
@@ -219,6 +221,8 @@ def build_baseline_argv(teacher_options: argparse.Namespace, task_ids: list[str]
         baseline_argv += ["--output-dir", str(teacher_options.output_dir)]
     if teacher_options.max_cost_usd is not None:
         baseline_argv += ["--max-cost-usd", str(teacher_options.max_cost_usd)]
+    if teacher_options.condensed_policy:
+        baseline_argv.append("--condensed-policy")
     if teacher_options.dry_run:
         baseline_argv.append("--dry-run")
     return baseline_argv

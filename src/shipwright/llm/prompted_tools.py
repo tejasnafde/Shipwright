@@ -40,6 +40,61 @@ TOOL_LIST_VERSION = 2
 # (gate 8: order details were 40% of the tool-result text in the runs that lost history).
 OBSERVATION_VERSION = 3
 
+# The retail policy in fewer words (2026-11-15), for a system with ``condensed_policy: true``. tau2's own policy is about
+# 1,500 tokens of the 8,192-token window on every turn; this keeps every rule (who may be helped, authentication, explicit
+# yes, the one-call-per-order limits, the status each action needs, refund routes, cancel reasons, the exact transfer
+# message) and drops the descriptions of what a user, product and order are (the tool results show that). It replaces the
+# text between <policy> and </policy> in the student's system prompt, for live requests and training rows alike (both go
+# through convert_messages), and leaves tau2's closing language line. Off by default; the base system never uses it.
+CONDENSED_POLICY = """# Retail agent policy (short)
+You can: cancel or modify pending orders; return or exchange delivered orders; change a user's default address; give
+information about the user's own profile, orders and products. Help only the authenticated user; refuse requests about
+anyone else, and anything against this policy. Never make up information, procedures or recommendations.
+
+- Authenticate first: find the user id by email, or by first name + last name + zip, even if the user gives a user id.
+- Before any change (cancel, modify, return, exchange, address), list the exact details and get an explicit "yes".
+- One tool call per turn, and no message to the user in the same turn.
+- Transfer only if no tool can handle the request: call transfer_to_human_agents, then say exactly
+  'YOU ARE BEING TRANSFERRED TO A HUMAN AGENT. PLEASE HOLD ON.'
+- Product ids and item ids are different things. Times are EST, 24 hour.
+
+Cancel: only a 'pending' order (check its status). Reason must be 'no longer needed' or 'ordered by mistake'. Refund goes
+to the original payment method (gift card at once, otherwise 5 to 7 business days).
+Modify a pending order: only its shipping address, its payment method, or its items' options. Payment: one method
+different from the original; a gift card must cover the total. Items: only once per order (status becomes 'pending (items
+modified)', no later change or cancel), so first ask the customer to confirm they listed every item; each item becomes an
+available item of the same product with different options (never another product type); the user gives a payment method
+for the price difference (a gift card must cover it).
+Return: only a 'delivered' order (check its status). The user confirms the order id and the items. The refund goes to the
+original payment method or an existing gift card. Status becomes 'return requested'.
+Exchange: only a 'delivered' order (check its status), only once per order, so first ask the customer to confirm they listed
+every item; each item becomes an available item of the same product with different options; the user gives a payment
+method for the price difference (a gift card must cover it). Status becomes 'exchange requested'; no new order is needed.
+Exchange or modify-items tools take every item to change in one call: collect the full list first."""
+# The block starts at a line that is only "<policy>": tau2's instructions also say "according to the <policy> provided below".
+POLICY_BLOCK = re.compile(r"(^<policy>[ \t]*\n)(.*?)(\n\n\S[^\n]*\n</policy>|</policy>)", re.DOTALL | re.MULTILINE)
+
+_condensed_policy = False
+
+
+def set_condensed_policy(enabled: bool) -> None:
+    global _condensed_policy
+    _condensed_policy = enabled
+
+
+def condensed_policy_enabled() -> bool:
+    return _condensed_policy
+
+
+def condensed_system(system_text: str) -> str:
+    """The system prompt with tau2's policy replaced by CONDENSED_POLICY. tau2's closing line inside the policy block
+    (the language clause it appends at run time) is kept. A prompt with no <policy> block comes back unchanged."""
+    match = POLICY_BLOCK.search(system_text)
+    if not match:
+        return system_text
+    closing = match.group(3)
+    return system_text[:match.start()] + match.group(1) + CONDENSED_POLICY + closing + system_text[match.end():]
+
 INSTRUCTION = """You can use these tools (name(arguments) - what it does; ? marks an optional argument):
 {tools}
 
@@ -287,6 +342,8 @@ def convert_messages(messages: list[dict], tools: list[dict]) -> list[dict]:
         role = message.get("role")
         content = message.get("content") or ""
         if role == "system":
+            if _condensed_policy:
+                content = condensed_system(content)
             if not tool_prompt_added:
                 content = f"{content}\n\n{tool_prompt}" if content else tool_prompt
                 tool_prompt_added = True

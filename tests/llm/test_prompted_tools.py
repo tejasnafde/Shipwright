@@ -159,3 +159,24 @@ def test_order_and_user_records_arrive_compact():
     # other results are only minified
     assert pt.observation_text("calculate", '{"result": 2}') == '{"result":2}'
     assert pt.observation_text("transfer_to_human_agents", "Transfer successful") == "Transfer successful"
+
+
+def test_the_condensed_policy_replaces_only_the_policy_and_keeps_the_rules_that_decide_a_task():
+    from shipwright.llm import prompted_tools
+
+    system = ("<instructions>\nFollow the <policy> provided below.\nBe helpful.\n</instructions>\n<policy>\n# Retail agent policy\n\nLong text.\n\n"
+              "## Cancel\n\nMore text.\n\n\nRespond in English using Latin script.\n</policy>")
+    short = prompted_tools.condensed_system(system)
+    assert short.startswith("<instructions>\nFollow the <policy> provided below.\nBe helpful.\n</instructions>\n<policy>\n#")
+    assert "Long text" not in short
+    assert short.endswith("Respond in English using Latin script.\n</policy>")
+    for rule in ("'no longer needed' or 'ordered by mistake'", "YOU ARE BEING TRANSFERRED TO A HUMAN AGENT. PLEASE HOLD ON.",
+                 "explicit \"yes\"", "'pending'", "'delivered'", "existing gift card", "same product"):
+        assert rule in short
+    assert prompted_tools.condensed_system("no policy here") == "no policy here"
+    prompted_tools.set_condensed_policy(True)
+    try:
+        converted = prompted_tools.convert_messages([{"role": "system", "content": system}], [])
+    finally:
+        prompted_tools.set_condensed_policy(False)
+    assert "Long text" not in converted[0]["content"] and "Retail agent policy (short)" in converted[0]["content"]

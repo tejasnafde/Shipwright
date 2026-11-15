@@ -371,6 +371,40 @@ def check_repeated_call(messages: list[dict], call: ToolCall) -> GuardViolation 
     return None
 
 
+MAX_LOOKUPS_IN_A_ROW = 10
+
+
+def lookups_since_customer_spoke(messages: list[dict]) -> int:
+    """How many read-only calls the agent made in a row since the customer's last message (a write call resets it)."""
+    streak = 0
+    for message in messages:
+        role = message.get("role")
+        if role == "user":
+            streak = 0
+        elif role == "assistant":
+            for tool_call in message.get("tool_calls") or []:
+                name = tool_call_from_message(tool_call).name
+                streak = 0 if is_write_tool(name) or name == TRANSFER_TOOL else streak + 1
+    return streak
+
+
+def check_lookup_spree(messages: list[dict], call: ToolCall) -> GuardViolation | None:
+    """An 11th lookup in a row with no word to the customer. Round 13 (2026-11-15): the candidate fetched every product
+    and every item of a customer's orders (up to 38 lookups in a row) and ran out of context in 9 of 60 gate runs, none
+    passed. The longest run of lookups in 285 passing teacher runs, and in every passing candidate run, is 9; the
+    2026-11-13 trial of a limit of 6 or 7 cut passing runs, so the limit sits above all of them. No fallback reply: after
+    MAX_GUARD_RETRIES the call runs."""
+    if is_write_tool(call.name) or call.name == TRANSFER_TOOL:
+        return None
+    if lookups_since_customer_spoke(messages) < MAX_LOOKUPS_IN_A_ROW:
+        return None
+    return GuardViolation(
+        rule="lookup_spree",
+        message=(f"You have made {MAX_LOOKUPS_IN_A_ROW} lookups in a row without replying to the customer. Stop looking "
+                 f"things up: tell the customer what you found and what you can do, or ask them which item they mean."),
+    )
+
+
 LOOKUP_TOOL = re.compile(r"^get_(\w+)_details$")
 
 
@@ -438,6 +472,7 @@ GUARDS = [
     check_authentication_first,
     check_repeated_failure,
     check_repeated_call,
+    check_lookup_spree,
     check_made_up_ids,
     check_order_status_fits_tool,
     check_same_product_type,

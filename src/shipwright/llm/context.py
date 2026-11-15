@@ -154,6 +154,40 @@ def shorten_old_replies(messages: list[dict], budget: int) -> tuple[list[dict], 
     return messages, shortened_count
 
 
+AUTHENTICATION_RESULT = re.compile(r"Tool result for find_user_id_by_\w+: \"?([A-Za-z0-9_]+)\"?")
+
+
+def still_true_note(dropped: list[dict]) -> str:
+    """What the agent must not lose when old turns are dropped: the authenticated user id and that user's order ids.
+
+    Round 13 (2026-11-15): once the turn holding the find_user_id result was dropped, the agent asked a customer it had
+    already identified for their identity again (16 of 60 gate runs; 13 of 15 runs that lost history ended with the
+    customer quitting), and 52 of the 176 correction rows taught that, because the teacher answered the same trimmed
+    view. The note goes after OMITTED_NOTE, in live requests and training windows alike (both use fit_messages)."""
+    user_id = None
+    order_ids: list[str] = []
+    for message in dropped:
+        if message["role"] != "user":
+            continue
+        for match in AUTHENTICATION_RESULT.finditer(message["content"]):
+            user_id = match.group(1)
+        for match in TOOL_RESULT.finditer(message["content"]):
+            if match.group(1) != "get_user_details":
+                continue
+            try:
+                record = json.loads(match.group(2))
+            except ValueError:
+                continue
+            if isinstance(record, dict) and isinstance(record.get("orders"), list):
+                order_ids = [str(order_id) for order_id in record["orders"]]
+    if not user_id:
+        return ""
+    note = f" Still true: the customer is already authenticated as user id {user_id}"
+    if order_ids:
+        note += f" (orders {', '.join(order_ids)})"
+    return note + "; do not ask for their identity again."
+
+
 def fit_messages(messages: list[dict], budget: int | None = None) -> tuple[list[dict], dict]:
     """Return (messages that fit the budget, info about what was trimmed)."""
     budget = prompt_budget() if budget is None else budget
@@ -176,9 +210,12 @@ def fit_messages(messages: list[dict], budget: int | None = None) -> tuple[list[
         head += 1
     pinned, middle = messages[:head], list(messages[head:])
 
+    all_middle = list(middle)
+
     def assemble(rest: list[dict], dropped: int) -> list[dict]:
         if dropped and rest:
-            rest = [{**rest[0], "content": f"{OMITTED_NOTE}\n{rest[0]['content']}"}] + rest[1:]
+            note = OMITTED_NOTE + still_true_note(all_middle[:len(all_middle) - len(rest)])
+            rest = [{**rest[0], "content": f"{note}\n{rest[0]['content']}"}] + rest[1:]
         return _merge_same_role(pinned + rest)
 
     last_pinned_role = pinned[-1]["role"] if pinned else None
