@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "shipwright"
-version = "0.1.0"
-description = "Self-healing tool-calling agent on Tiny Aya (Lexsi hackathon, Track 3)"
+version = "1.0.0"
+description = "Self-healing service for a tool-calling support agent: detect, classify, route, fix, gate, promote"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     # tau2 is installed by scripts/setup_tau2.sh (pinned commit, editable).
