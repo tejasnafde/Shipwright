@@ -547,7 +547,8 @@ What 14 rounds taught us decides the order: the gate is too noisy to see a 5-poi
   - `configs/`: frozen splits and gate, systems, round configs;
   - `docs/`: system design, evaluation protocol, pipeline, setup and operations;
   - `submission/`: this write-up, the blog post, charts and the Space page.
-- **Setup and runs:** `README.md`, then `docs/`. The loop, unattended: `shipwright run --config configs/rounds/<name>.yaml --launch`. Offline: `--dry-run`. Tests: `pytest` (371 pass).
+- **One command:** `git clone https://github.com/tejasnafde/Shipwright && cd Shipwright && make demo` installs everything, runs the tests, a whole round with fake models and `scripts/reproduce.py`, then opens the control room on round 16; free, no token, no GPU, about 2 minutes. `make check` stops before the control room.
+- **Setup and runs:** `README.md`, then `docs/`. The loop, unattended: `shipwright run --config configs/rounds/<name>.yaml --launch`. Offline: `--dry-run`. Tests: `pytest` (374 pass).
 - **Reproducibility:** every run writes `run_config.json` (models, seeds, code sha, observation version) and `repro.json`; every round manifest records the image and the hashes of the frozen configs, and every gate decision the gate's `config_sha`.
 - **Check our numbers:** `python scripts/reproduce.py` recomputes the headline numbers (gate 16 and the hidden split, 17 claims) from the public run files on the Hub and prints MATCH or MISMATCH for each against this write-up; no GPU, no token, about 2 MB.
 - **Declaration of work done outside the hackathon:** none. All code, data and models were produced between Nov 1 and Nov 15, 2026.

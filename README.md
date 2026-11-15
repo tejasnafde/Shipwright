@@ -109,15 +109,26 @@ The architecture, decision points, deployment and failure handling are in the
 
 ## Quickstart
 
-Requires Python 3.12 and git. Everything below is free and offline.
+**One command.** Needs only Python 3.12, git and make; free, no tokens, no GPU, about 2 minutes:
 
 ```sh
-git clone <this repository> && cd Shipwright
+git clone https://github.com/tejasnafde/Shipwright && cd Shipwright && make demo
+```
+
+It installs everything (`uv` too, if missing), runs the test suite, runs a whole round with fake models, recomputes
+every headline number of the write-up from the public run files (17 claims, each must print `MATCH`), downloads round
+16's gate results from the Hub and opens the control room on http://localhost:8501. `make check` does the same without
+opening the control room.
+
+The same steps one by one:
+
+```sh
 ./scripts/setup_tau2.sh                                                   # .venv with τ²-bench, AgentTune, AuditKIT, shipwright
 .venv/bin/python -m pytest -q                                             # the test suite
 .venv/bin/shipwright run --config configs/rounds/default.yaml --dry-run   # a whole round with fake models
 .venv/bin/python scripts/reproduce.py                                     # check the published numbers
-.venv/bin/streamlit run src/shipwright/control_room/app.py                # replay a round
+make pull-round-16                                                        # round 16's gate results into runs/gate-r16
+make control-room                                                         # replay a round (installs streamlit)
 ```
 
 Running for real needs a Hugging Face token with Jobs access, a GCP project with Vertex AI and Cloud Run, and a

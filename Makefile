@@ -8,9 +8,9 @@ RUN ?= runs/dry
 # uv installs itself into ~/.local/bin; put it on the PATH for every recipe below.
 export PATH := $(HOME)/.local/bin:$(PATH)
 
-.PHONY: demo check uv setup test dry-run dry-round reproduce pull-round-16 baseline classify control-room
+.PHONY: demo check uv setup test dry-run dry-round reproduce pull-round-16 control-room-deps baseline classify control-room
 
-demo: check pull-round-16
+demo: check pull-round-16 control-room-deps
 	@echo "Opening the control room on http://localhost:8501 (Ctrl-C to stop)."
 	$(PY) -m streamlit run src/shipwright/control_room/app.py
 
@@ -38,6 +38,10 @@ reproduce:
 pull-round-16:
 	$(PY) -c "from pathlib import Path; from shipwright.control_room import hub_runs; print(hub_runs.pull_gate_results(16, Path('runs')))"
 
+# The control room's one extra dependency (streamlit), kept out of the harness install.
+control-room-deps:
+	uv pip install -q --python $(PY) -e ".[space]"
+
 dry-run:
 	$(PY) scripts/baseline.py --dry-run --num-tasks 2 --output-dir $(RUN)
 
@@ -47,5 +51,5 @@ baseline:
 classify:
 	$(PY) scripts/classify.py $(RUN)
 
-control-room:
+control-room: control-room-deps
 	$(PY) -m streamlit run src/shipwright/control_room/app.py
