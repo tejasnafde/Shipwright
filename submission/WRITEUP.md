@@ -4,7 +4,7 @@
 
 **Base model + method:** Tiny Aya Global 3.35B (CC-BY-NC-4.0) + a LoRA adapter (r 16), trained by an automatic detect → classify → route → distil → gate loop (AgentTune + AuditKIT) on DeepSeek V4.1 Flash teacher corrections, plus runtime tool-call guards.
 
-**See it in one page:** [HF Space](https://huggingface.co/spaces/mitushigoyal5/shipwright) · [blog post](blog.md) · [models](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6) · [data and every gate trace](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb)
+**See it in one page:** [HF Space](https://huggingface.co/spaces/mitushigoyal5/shipwright) · [demo video, 3 min](https://huggingface.co/spaces/mitushigoyal5/shipwright/resolve/main/video/shipwright-demo.mp4) · [blog post](blog.md) · [models](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6) · [data and every gate trace](https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb)
 
 <table>
 <tr>
