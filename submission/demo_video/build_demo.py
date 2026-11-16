@@ -225,7 +225,7 @@ class Director:
         time.sleep(2.5)
 
 
-SCROLL_LEAD = 1.4  # a scroll starts this much before its sentence, so the page has settled when the words begin
+SCROLL_LEAD = 2.3  # a scroll starts this much before its sentence, so the page has settled when the words begin
 
 _clock = {"start": 0.0, "spans": [], "scene": "", "log": []}
 
