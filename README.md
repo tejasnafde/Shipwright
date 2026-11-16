@@ -177,9 +177,6 @@ Teacher: DeepSeek V4.1 Flash on Vertex AI. Customer simulator and classifier: gp
 - 60 runs per system per gate: two tasks flipping move task success by 10 points, so single-gate gains are read with
   their intervals. The hidden split, the independent check, has been used once.
 - Long lookup chains still overflow Tiny Aya's 8,192-token window; guards and compaction reduce it.
-- The tool-fix proposer rewrites descriptions only; the guards that moved the numbers were written from the loop's
-  traces.
-- "Deployed" means promoted in the ledger that every later run serves; there is no live customer endpoint.
 
 ## Team
 
