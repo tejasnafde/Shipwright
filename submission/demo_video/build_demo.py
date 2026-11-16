@@ -9,9 +9,11 @@
     uv run submission/demo_video/build_demo.py --voice "Ava (Premium)" --music bed.mp3
     uv run submission/demo_video/build_demo.py --voiceover-dir out/voice/  # takes per sentence: <scene>-<n>.wav
 
-Before the first run: `uv run --with playwright==1.65.2 playwright install chromium`, and the round 16 run dirs in
-runs/ (scripts/pull_runs.py --owner mitushi; the control room's sidebar pulls gate results). Nothing is staged: every
-screen is the control room reading the service's own run files.
+Before the first run: `uv run --with playwright==1.65.2 playwright install chromium`, and round 16 in runs/:
+`scripts/pull_runs.py --owner mitushi --run <dir>` for r16-cand-train, r16-sft, r16-corrections, r16-round and
+chain-r16, `make pull-round-16` for the gate results, then `cp runs/r16-round/round.json runs/round-16.json` (the
+control room lists a round only when runs/round-N.json exists). Keep no dry-run rounds in runs/, or the control room
+may open one of those instead. Nothing is staged: every screen is the control room reading the service's own files.
 
 Steps:
   1. narration.md -> one audio clip per sentence (macOS `say`, or make_voiceover.py takes), joined with a fixed gap,
