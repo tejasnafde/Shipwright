@@ -7,19 +7,24 @@
     uv run submission/demo_video/build_demo.py                     # control room already on :8501, voice "Samantha"
     uv run submission/demo_video/build_demo.py --start-app         # start the control room itself
     uv run submission/demo_video/build_demo.py --voice "Ava (Premium)" --music bed.mp3
-    uv run submission/demo_video/build_demo.py --voiceover-dir my_takes/   # your own <scene>.wav or .mp3 per scene
+    uv run submission/demo_video/build_demo.py --voiceover-dir out/voice/  # takes per sentence: <scene>-<n>.wav
 
-Before the first run: `uv run --with playwright==1.65.2 playwright install chromium`, and the round 16 run dirs in
-runs/ (scripts/pull_runs.py --owner mitushi; the control room's sidebar pulls gate results). Nothing is staged: every
-screen is the control room reading the service's own run files.
+Before the first run: `uv run --with playwright==1.65.2 playwright install chromium`, and round 16 in runs/:
+`scripts/pull_runs.py --owner mitushi --run <dir>` for r16-cand-train, r16-sft, r16-corrections, r16-round and
+chain-r16, every gate's results from the Hub (`hub_runs.pull_gate_results(n, runs, candidate)` for gates 3 to 16;
+the History scene needs all twelve), then `cp runs/r16-round/round.json runs/round-16.json` (the
+control room lists a round only when runs/round-N.json exists). Keep no dry-run rounds in runs/, or the control room
+may open one of those instead. Nothing is staged: every screen is the control room reading the service's own files.
 
 Steps:
-  1. narration.md -> one audio file per scene (macOS `say`, or your own takes); each scene lasts as long as its words.
+  1. narration.md -> one audio clip per sentence (macOS `say`, or make_voiceover.py takes), joined with a fixed gap,
+     so every sentence's start and end is measured. Captions, highlights and subtitles are placed on those times.
   2. Title and closing cards are rendered from HTML at 1920x1080 and given a slow push-in.
   3. Each control-room scene is recorded by Playwright at 1920x1080 (one browser context per scene), with captions and
      highlights drawn into the page, then trimmed to the narration.
-  4. ffmpeg encodes every segment with its audio and fades, concatenates them, and writes final_video.mp4 plus
-     final_video.srt (subtitles from the same narration).
+  4. ffmpeg encodes every segment with its audio and fades, concatenates them, and writes final_video.mp4,
+     final_video.srt / .vtt (one cue per sentence, at its measured time) and final_video.sync.txt (each on-screen
+     caption against the sentence being spoken; the build fails if one is more than 0.5 s off).
 Output: submission/demo_video/out/ (git-ignored).
 """
 
@@ -78,19 +83,64 @@ def media_seconds(path: Path) -> float:
     return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
 
 
-def make_voice(scene: str, text: str, options: argparse.Namespace, work: Path) -> Path:
-    """The scene's narration as 48 kHz stereo WAV: a take from --voiceover-dir, else macOS `say`."""
-    wav = work / f"{scene}.wav"
+SENTENCE_GAP = 0.35  # seconds of silence between two sentences of a scene
+
+
+def split_sentences(text: str) -> list[str]:
+    """A scene's narration as sentences. Subtitles, captions and audio all use this one split."""
+    return [part.strip() for part in re.split(r"(?<=[.?!])\s+", text) if part.strip()]
+
+
+@dataclass
+class Voice:
+    """A scene's narration: one WAV, and when each sentence starts and ends in it (seconds from the voice's start)."""
+    wav: Path
+    sentences: list[str]
+    spans: list[tuple[float, float]]
+
+    @property
+    def duration(self) -> float:
+        return self.spans[-1][1]
+
+
+def sentence_take(scene: str, index: int, sentence: str, options: argparse.Namespace, work: Path) -> Path:
+    """One sentence as 48 kHz stereo WAV: <scene>-<n>.wav from --voiceover-dir (make_voiceover.py), else `say`."""
+    wav = work / f"{scene}-{index}.wav"
     if options.voiceover_dir:
         for suffix in (".wav", ".mp3", ".m4a", ".aiff"):
-            take = Path(options.voiceover_dir) / f"{scene}{suffix}"
+            take = Path(options.voiceover_dir) / f"{scene}-{index}{suffix}"
             if take.exists():
-                run_ffmpeg("-i", str(take), "-ar", "48000", "-ac", "2", "-af", "loudnorm=I=-16:TP=-1.5", str(wav))
+                run_ffmpeg("-i", str(take), "-ar", "48000", "-ac", "2", str(wav))
                 return wav
-    aiff = work / f"{scene}.aiff"
-    subprocess.run(["say", "-v", options.voice, "-r", str(options.rate), "-o", str(aiff), text], check=True)
-    run_ffmpeg("-i", str(aiff), "-ar", "48000", "-ac", "2", "-af", "loudnorm=I=-16:TP=-1.5", str(wav))
+        raise SystemExit(f"--voiceover-dir has no take for {scene} sentence {index}: run make_voiceover.py again "
+                         f"(narration.md changed?)")
+    aiff = work / f"{scene}-{index}.aiff"
+    subprocess.run(["say", "-v", options.voice, "-r", str(options.rate), "-o", str(aiff), sentence], check=True)
+    run_ffmpeg("-i", str(aiff), "-ar", "48000", "-ac", "2", str(wav))
     return wav
+
+
+def make_voice(scene: str, text: str, options: argparse.Namespace, work: Path) -> Voice:
+    """The scene's narration, voiced one sentence at a time and joined with a fixed gap, so every sentence's start and
+    end is measured, not estimated. Captions, highlights and subtitles are all placed on these times."""
+    sentences = split_sentences(text)
+    takes = [sentence_take(scene, index, sentence, options, work) for index, sentence in enumerate(sentences)]
+    spans, cursor = [], 0.0
+    for take in takes:
+        length = media_seconds(take)
+        spans.append((cursor, cursor + length))
+        cursor += length + SENTENCE_GAP
+    gap = work / "gap.wav"
+    if not gap.exists():
+        run_ffmpeg("-f", "lavfi", "-i", f"anullsrc=r=48000:cl=stereo", "-t", f"{SENTENCE_GAP}", str(gap))
+    pieces = [piece for take in takes for piece in (take, gap)][:-1]
+    listing = work / f"{scene}-voice.txt"
+    listing.write_text("".join(f"file '{piece}'\n" for piece in pieces))
+    wav = work / f"{scene}.wav"
+    # loudness is normalised once over the whole scene, so sentences keep their natural level relative to each other
+    run_ffmpeg("-f", "concat", "-safe", "0", "-i", str(listing), "-af", "loudnorm=I=-16:TP=-1.5",
+               "-ar", "48000", "-ac", "2", str(wav))
+    return Voice(wav, sentences, spans)
 
 
 # ---------------------------------------------------------------- page helpers (drawn into the control room)
@@ -138,6 +188,8 @@ class Director:
 
     def caption(self, text: str) -> None:
         self.page.evaluate("text => window.__demo.caption(text)", text)
+        if text:  # for the sync report: when each caption appeared, against the sentence it belongs to
+            _clock["log"].append((_clock["scene"], time.monotonic() - _clock["start"], text))
 
     def scroll_to(self, text: str, block: str = "start", nth: int = 0) -> None:
         target = self.page.get_by_text(text, exact=False).nth(nth)
@@ -173,104 +225,135 @@ class Director:
         time.sleep(2.5)
 
 
-_clock = {"cursor": 0.0}
+SCROLL_LEAD = 2.3  # a scroll starts this much before its sentence, so the page has settled when the words begin
+
+_clock = {"start": 0.0, "spans": [], "scene": "", "log": []}
 
 
-def start_clock() -> None:
-    _clock["cursor"] = time.monotonic()
+def start_clock(scene: str, voice: Voice) -> None:
+    """Time zero is the moment the voice starts (after LEAD_IN): every beat is placed on a sentence of this voice."""
+    _clock.update(start=time.monotonic(), spans=voice.spans, scene=scene)
 
 
-def pace(seconds: float) -> None:
-    """Hold until this beat's slot ends. Beats run on a fixed clock from the scene's start, so a slow scroll or click
-    eats into its own beat instead of pushing every later caption behind the narration."""
-    _clock["cursor"] += seconds
-    time.sleep(max(_clock["cursor"] - time.monotonic(), 0.3))
+def at(sentence: int, lead: float = 0.0) -> None:
+    """Wait until sentence `sentence` of the scene's narration starts (minus `lead` seconds for a scroll)."""
+    target = _clock["start"] + _clock["spans"][sentence][0] - lead
+    time.sleep(max(target - time.monotonic(), 0.0))
+
+
+def until_end() -> None:
+    """Hold to the end of the narration, so the last caption stays up while its words are said."""
+    time.sleep(max(_clock["start"] + _clock["spans"][-1][1] - time.monotonic(), 0.0))
 
 
 # ---------------------------------------------------------------- the scenes in the control room
 
-def scene_control_room(director: Director, duration: float) -> None:
+# Every beat waits for the sentence it illustrates: `at(n)` is sentence n of the scene in narration.md (from 0). A
+# scroll starts SCROLL_LEAD seconds early so the page has settled when the words begin; captions and highlights land
+# on the sentence's first word. Change narration.md and these numbers together (the sync report shows both).
+
+def scene_control_room(director: Director) -> None:
+    # 0 This is the control room. 1 It replays a real round ... 2 Round sixteen ran ... 3 Across the top ...
+    at(0)
     director.caption("The control room: a replay of a real round, read from the service's own files")
-    pace(duration * 0.30)
+    at(2)
     director.highlight("GATE SAID YES")
     director.caption("Round 16 ran unattended for $3.89, and the gate said yes: 8 of 8 checks")
-    pace(duration * 0.30)
+    at(3)
     director.clear()
     director.highlight("Fix / Generate", container=".cr-pipeline")
     director.caption("Run, detect, classify, route, fix, train, gate, promote")
-    pace(duration * 0.40)
+    until_end()
     director.clear()
 
 
-def scene_what_changed(director: Director, duration: float) -> None:
-    director.scroll_to("Round 16: the gate said yes")
+def scene_what_changed(director: Director) -> None:
+    # 0 What changed? 1 Its tool calls fail ... 2 Made-up ids ... 3 It is honest about the cost ... 4 Here is one
+    # held-out task ... 5 The base model invents ... 6 The healed student verifies ...
+    at(0)
     director.highlight("Tasks passed on a single try")
-    director.caption("7\u00d7 fewer failing tool calls (44% to 6%); tickets resolved 10% to 15%")
-    pace(duration * 0.22)
+    director.caption("7× fewer failing tool calls (44% to 6%); tickets resolved 10% to 15%")
+    at(2)
+    director.caption("Made-up order and item ids: gone")
+    at(3)
     director.clear()
     director.highlight("Runs that failed by skipping a step")
-    director.caption("And what got worse, said just as plainly")
-    pace(duration * 0.14)
+    director.caption("And what got worse: more skipped policy steps, longer conversations")
+    at(4, lead=SCROLL_LEAD)
     director.clear()
     director.scroll_to("Read one task side by side")
+    at(4)
     director.caption("One held-out task, base model against the healed student")
-    pace(duration * 0.14)
+    at(5, lead=SCROLL_LEAD)
     director.scroll_to("Error: Order not found", block="center")
+    at(5)
     director.highlight("Error: Order not found")
     director.caption("The base model invents order #W123456: “Order not found”")
-    pace(duration * 0.22)
+    at(6)
     director.clear()
     director.highlight("but first I need to verify your identity")
     director.caption("The healed student verifies the customer, looks up the real orders, and passes")
-    pace(duration * 0.28)
+    until_end()
     director.clear()
 
 
-def scene_corrections(director: Director, duration: float) -> None:
-    director.scroll_to("On-policy corrections")
-    director.caption("Every call a policy guard blocked became a lesson")
-    pace(duration * 0.22)
+def scene_corrections(director: Director) -> None:
+    # 0 Where did that come from? 1 The previous candidate replayed ... 2 Every call a guard blocked ... 3 Here, the
+    # student made up ... 4 The teacher, seeing exactly ... 5 Fifty-nine new corrections ...
+    at(1)
+    director.caption("The last candidate replayed the training tasks with its policy guards on")
+    at(2)
+    director.caption("Every call a guard blocked became a lesson")
+    at(3, lead=SCROLL_LEAD)
     director.scroll_to("Read one correction")
+    at(3)
     director.highlight("The student tried")
     director.caption("Here the student made up an order id: #W1234567")
-    pace(duration * 0.24)
+    at(4)
     director.clear()
     director.highlight("The teacher's turn, trained into the next adapter")
     director.caption("The teacher, seeing exactly what the student saw, looks up the real customer")
-    pace(duration * 0.27)
+    at(5, lead=SCROLL_LEAD)
     director.clear()
     director.scroll_to("On-policy corrections")
+    at(5)
     director.highlight("Corrections kept")
     director.caption("59 new corrections this round ($0.12), 235 across all three rounds; only the corrected turn is trained")
-    pace(duration * 0.27)
+    until_end()
     director.clear()
 
 
-def scene_gate(director: Director, duration: float) -> None:
-    director.scroll_to("PROMOTED")
+def scene_gate(director: Director) -> None:
+    # 0 Then the gate. 1 Both systems play ... 2 Task success, consistency ... 3 All eight checks must pass.
+    at(1)
     director.caption("Both systems, the same 20 held-out tasks, 3 times each")
-    pace(duration * 0.35)
+    at(2, lead=SCROLL_LEAD)
     director.scroll_to("Measured deltas")
+    at(2)
     director.highlight("BFCL tool-calling score")
     director.caption("Task success up, targeted failures down, general tool calling 45 to 73")
-    pace(duration * 0.40)
+    at(3, lead=SCROLL_LEAD)
     director.clear()
     director.scroll_to("The gate's tests, in plain words")
+    at(3)
     director.caption("All eight checks must pass")
-    pace(duration * 0.25)
+    until_end()
 
 
-def scene_history(director: Director, duration: float) -> None:
-    director.scroll_to("gates,")
-    director.caption("12 gates: 11 refused, then one promotion")
-    pace(duration * 0.40)
+def scene_history(director: Director) -> None:
+    # 0 And the gate means it. 1 Twelve gates, eleven refused ... 2 AgentTune's own deployment check ... 3 The loop
+    # shipped only when everything held.
+    at(1)
+    director.caption("12 gates: 11 refused, each for a reason the traces explain")
+    at(2)
     director.highlight("AgentTune's DeploymentGate on its own")
     director.caption("AgentTune's own check alone would have approved 10 of the 11")
-    pace(duration * 0.30)
+    at(3, lead=SCROLL_LEAD)
     director.clear()
     director.scroll_to("Every decision, and why")
-    director.caption("Every refusal has a reason the traces explain")
-    pace(duration * 0.30)
+    at(3)
+    director.caption("It shipped only when every check held")
+    until_end()
 
 
 APP_SCENES = {"control_room": scene_control_room, "what_changed": scene_what_changed,
@@ -279,7 +362,7 @@ CARD_SCENES = ("title", "loop", "outro")
 ORDER = ("title", "loop", "control_room", "what_changed", "corrections", "gate", "history", "outro")
 
 
-def record_app_scene(browser, scene: str, duration: float, url: str, work: Path) -> Path:
+def record_app_scene(browser, scene: str, voice: Voice, url: str, work: Path) -> Path:
     """Record one scene; return a clip trimmed to the moment the scene was ready, LEAD_IN + duration + TAIL long."""
     video_dir = work / f"rec-{scene}"
     context = browser.new_context(viewport={"width": APP_WIDTH, "height": APP_HEIGHT}, device_scale_factor=1,
@@ -306,25 +389,27 @@ def record_app_scene(browser, scene: str, duration: float, url: str, work: Path)
         time.sleep(2.0)  # let Streamlit finish the rerun, so no fading stale element is recorded
     ready = time.monotonic() - created
     time.sleep(LEAD_IN)
-    start_clock()
-    APP_SCENES[scene](director, duration)
+    start_clock(scene, voice)
+    APP_SCENES[scene](director)
     time.sleep(TAIL)
     director.caption("")
     page.close()
     context.close()
     raw = next(video_dir.glob("*.webm"))
     clip = work / f"{scene}-clip.mp4"
-    run_ffmpeg("-ss", f"{ready:.2f}", "-i", str(raw), "-t", f"{LEAD_IN + duration + TAIL:.2f}",
+    run_ffmpeg("-ss", f"{ready:.2f}", "-i", str(raw), "-t", f"{LEAD_IN + voice.duration + TAIL:.2f}",
                "-vf", f"fps={FPS},scale={WIDTH}:{HEIGHT}:flags=lanczos", "-an", "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                "-pix_fmt", "yuv420p", str(clip))
     return clip
 
 
+# Before the clock starts: open the scene's tab and scroll to its first view, so the scene opens on the right screen
+# instead of spending its first sentence scrolling.
 APP_SCENES_SETUP = {
-    "what_changed": lambda director: director.tab("What changed?"),
-    "corrections": lambda director: director.tab("Fix & Train"),
-    "gate": lambda director: director.tab("Gate & Outcome"),
-    "history": lambda director: director.tab("History"),
+    "what_changed": lambda director: (director.tab("What changed?"), director.scroll_to("Round 16: the gate said yes")),
+    "corrections": lambda director: (director.tab("Fix & Train"), director.scroll_to("On-policy corrections")),
+    "gate": lambda director: (director.tab("Gate & Outcome"), director.scroll_to("PROMOTED")),
+    "history": lambda director: (director.tab("History"), director.scroll_to("gates,")),
 }
 
 
@@ -418,20 +503,64 @@ def srt_time(seconds: float) -> str:
     return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
 
 
-def write_subtitles(narration: dict[str, str], durations: dict[str, float], path: Path) -> None:
-    """One cue per sentence, spread over the scene's spoken time in proportion to its length."""
-    cues, start_of_scene, index = [], 0.0, 1
+MAX_CUE_CHARACTERS = 84  # longer sentences are shown in parts, split at a comma, colon or semicolon
+
+
+def sentence_parts(sentence: str) -> list[str]:
+    """A long sentence as readable parts (one or two lines each), split at clause punctuation."""
+    if len(sentence) <= MAX_CUE_CHARACTERS:
+        return [sentence]
+    clauses = re.split(r"(?<=[,;:])\s+", sentence)
+    parts, current = [], ""
+    for clause in clauses:
+        if current and len(current) + 1 + len(clause) > MAX_CUE_CHARACTERS:
+            parts.append(current)
+            current = clause
+        else:
+            current = f"{current} {clause}".strip()
+    return parts + [current]
+
+
+def subtitle_cues(voices: dict[str, Voice]) -> list[tuple[float, float, str]]:
+    """Cues at the times each sentence is actually spoken in the final video. A long sentence is split into parts,
+    timed by their share of its characters inside the sentence's own measured span, so a part can never drift into
+    the next sentence."""
+    cues, start_of_scene = [], 0.0
     for scene in ORDER:
-        sentences = [part.strip() for part in re.split(r"(?<=[.?!])\s+", narration[scene]) if part.strip()]
-        total_characters = sum(len(sentence) for sentence in sentences)
-        cursor = start_of_scene + LEAD_IN
-        for sentence in sentences:
-            length = durations[scene] * len(sentence) / total_characters
-            cues.append(f"{index}\n{srt_time(cursor)} --> {srt_time(cursor + length)}\n{sentence}\n")
-            cursor += length
-            index += 1
-        start_of_scene += LEAD_IN + durations[scene] + TAIL
-    path.write_text("\n".join(cues))
+        voice = voices[scene]
+        for sentence, (begin, end) in zip(voice.sentences, voice.spans):
+            parts = sentence_parts(sentence)
+            total, cursor = sum(len(part) for part in parts), begin
+            for part in parts:
+                length = (end - begin) * len(part) / total
+                cues.append((start_of_scene + LEAD_IN + cursor, start_of_scene + LEAD_IN + cursor + length, part))
+                cursor += length
+        start_of_scene += LEAD_IN + voice.duration + TAIL
+    return cues
+
+
+def write_subtitles(cues: list[tuple[float, float, str]], srt_path: Path, vtt_path: Path) -> None:
+    srt_path.write_text("\n".join(f"{n}\n{srt_time(a)} --> {srt_time(b)}\n{text}\n"
+                                   for n, (a, b, text) in enumerate(cues, 1)))
+    vtt_path.write_text("WEBVTT\n\n" + "\n".join(f"{srt_time(a).replace(',', '.')} --> {srt_time(b).replace(',', '.')}\n"
+                                                  f"{text}\n" for a, b, text in cues))
+
+
+def write_sync_report(voices: dict[str, Voice], path: Path) -> list[str]:
+    """Every on-screen caption against the sentence being spoken when it appeared. A caption that lands more than
+    0.5 s from the start of a sentence is flagged: that is a beat out of sync with the voice."""
+    lines, problems = [], []
+    for scene, shown_at, caption in _clock["log"]:
+        voice = voices[scene]
+        nearest = min(range(len(voice.spans)), key=lambda n: abs(voice.spans[n][0] - shown_at))
+        offset = shown_at - voice.spans[nearest][0]
+        flag = "" if abs(offset) <= 0.5 else "   <-- OFF"
+        if flag:
+            problems.append(f"{scene}: '{caption}' is {offset:+.1f} s from sentence {nearest}")
+        lines.append(f"{scene:13s} {shown_at:6.2f}s  sentence {nearest} ({offset:+.2f}s){flag}\n"
+                     f"    caption: {caption}\n    voice:   {voice.sentences[nearest]}")
+    path.write_text("\n".join(lines) + "\n")
+    return problems
 
 
 def assemble(segments: list[Path], music: Path | None, output: Path, work: Path) -> None:
@@ -495,26 +624,31 @@ def main(argv: list[str] | None = None) -> int:
         with tempfile.TemporaryDirectory() as scratch, sync_playwright() as playwright:
             work = Path(scratch)
             browser = playwright.chromium.launch()
-            durations, segments = {}, []
+            voices, segments = {}, []
             for scene in scenes:
-                voice = make_voice(scene, narration[scene], options, work)
-                durations[scene] = media_seconds(voice)
-                print(f"{scene:13s} {durations[scene]:5.1f} s of narration", flush=True)
+                voice = voices[scene] = make_voice(scene, narration[scene], options, work)
+                print(f"{scene:13s} {voice.duration:5.1f} s of narration, {len(voice.sentences)} sentences", flush=True)
                 if scene in CARD_SCENES:
-                    clip = render_card(browser, scene, durations[scene], work)
+                    clip = render_card(browser, scene, voice.duration, work)
                 else:
-                    clip = record_app_scene(browser, scene, durations[scene], options.url, work)
-                segments.append(finish_segment(scene, clip, voice, durations[scene], work))
+                    clip = record_app_scene(browser, scene, voice, options.url, work)
+                segments.append(finish_segment(scene, clip, voice.wav, voice.duration, work))
             browser.close()
             name = "final_video" if not options.only else "preview_" + "_".join(scenes)
             output = OUT / f"{name}.mp4"
             assemble(segments, options.music, output, work)
             if not options.only:
-                write_subtitles(narration, durations, OUT / "final_video.srt")
+                write_subtitles(subtitle_cues(voices), OUT / "final_video.srt", OUT / "final_video.vtt")
+            problems = write_sync_report(voices, OUT / f"{name}.sync.txt")
             (OUT / f"{name}.json").write_text(json.dumps(
-                {"scenes": scenes, "narration_seconds": durations, "total_seconds": round(media_seconds(output), 1),
+                {"scenes": scenes, "narration_seconds": {k: round(v.duration, 2) for k, v in voices.items()},
+                 "total_seconds": round(media_seconds(output), 1),
                  "voice": str(options.voiceover_dir or options.voice)}, indent=2))
-            print(f"wrote {output} ({media_seconds(output):.0f} s)")
+            print(f"wrote {output} ({media_seconds(output):.0f} s); sync report {OUT / (name + '.sync.txt')}")
+            for problem in problems:
+                print("OUT OF SYNC:", problem)
+            if problems:
+                return 1
     finally:
         if app is not None:
             app.terminate()
