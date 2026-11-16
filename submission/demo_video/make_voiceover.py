@@ -2,7 +2,7 @@
 # requires-python = ">=3.12"
 # dependencies = []
 # ///
-"""Narration takes from Google Cloud Text-to-Speech (Chirp 3 HD voices), one WAV per scene of narration.md.
+"""Narration takes from Google Cloud Text-to-Speech (Chirp 3 HD voices), one WAV per sentence of narration.md.
 
     uv run submission/demo_video/make_voiceover.py                                  # voice en-US-Chirp3-HD-Charon
     uv run submission/demo_video/make_voiceover.py --voice en-US-Chirp3-HD-Aoede
@@ -39,6 +39,11 @@ def read_narration() -> dict[str, str]:
         elif current and line.strip():
             sections[current] = (sections[current] + " " + line.strip()).strip()
     return sections
+
+
+def split_sentences(text: str) -> list[str]:
+    """The same split as build_demo.split_sentences (kept here so this script runs on its own)."""
+    return [part.strip() for part in re.split(r"(?<=[.?!])\s+", text) if part.strip()]
 
 
 def access_token(gcloud_config: str) -> str:
@@ -85,14 +90,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     options.output_dir.mkdir(parents=True, exist_ok=True)
+    for stale in options.output_dir.glob("*.wav"):  # takes of an older narration must not be picked up
+        stale.unlink()
     voice = full_voice_name(options.voice)
-    characters = 0
+    characters = takes = 0
     for scene, text in narration.items():
-        (options.output_dir / f"{scene}.wav").write_bytes(
-            synthesize(text, voice, token, options.project, options.speaking_rate))
-        characters += len(text)
-        print(f"{scene:13s} {len(text):4d} characters", flush=True)
-    print(f"wrote {len(narration)} takes in {voice} to {options.output_dir} ({characters} characters)")
+        # One take per sentence (<scene>-<n>.wav, n from 0), split exactly as build_demo.py splits: the build joins
+        # them with a fixed gap, so it knows when every sentence is spoken and syncs captions and subtitles to it.
+        for index, sentence in enumerate(split_sentences(text)):
+            (options.output_dir / f"{scene}-{index}.wav").write_bytes(
+                synthesize(sentence, voice, token, options.project, options.speaking_rate))
+            characters += len(sentence)
+            takes += 1
+        print(f"{scene:13s} {len(text):4d} characters, {len(split_sentences(text))} sentences", flush=True)
+    print(f"wrote {takes} sentence takes in {voice} to {options.output_dir} ({characters} characters)")
     return 0
 
 

@@ -18,7 +18,7 @@ eight-check gate decides whether the new version may replace the old one.
 ## control_room
 This is the control room. It replays a real round from the files the service wrote; nothing here is simulated. Round
 sixteen ran with no person in the loop, for three dollars and eighty-nine cents, and the gate said yes, eight checks out
-of eight.
+of eight. Across the top are the steps every round walks through, from run to promote.
 
 ## what_changed
 What changed? Its tool calls fail seven times less often, forty-four percent down to six, and tickets resolved rose
