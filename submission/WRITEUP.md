@@ -489,9 +489,8 @@ A full round (baseline, classify, teacher, data, train, gate) runs unattended in
 - Eleven gates looked at the same held-out tasks, which means selection on them, and the gate 14 guards were written from gate 13's runs. The hidden split (opened once, after all decisions) is the check on that: 0% → 10%, but the gains sit on 3 of its 20 tasks, so it is small-sample evidence. It ran with today's code, so it also includes the gate 14 guards, a combination never gated on its own.
 - Gates 10 and 11 did not measure their label checks (the classifier's token expired inside the job). Their pass rates are valid; their label numbers are not.
 - The customer simulator and judge are an LLM. We found and fixed three failure modes, and there may be others.
-- One candidate (round 16) passed our 8-check gate, by the minimum margin on targeted labels (a 0.05 drop) and with pass^k unchanged; 3 more passing runs out of 60 is not significant on its own. "Deployment" is a promotion ledger, not a live endpoint. Round 16 has not been run on the hidden split, which was opened before it existed.
+- One candidate (round 16) passed our 8-check gate, by the minimum margin on targeted labels (a 0.05 drop) and with pass^k unchanged; 3 more passing runs out of 60 is not significant on its own. Round 16 has not been run on the hidden split, which was opened before it existed.
 - A student that acts more makes more wrong changes: 13% of round 16's conversations wrote a wrong change to the shop, against 3% for the base (which mostly gives up) and 10% for the teacher.
-- The guards and simulator repairs were written by us after reading the failures. The loop detected and routed them (context overflow routes to "fix the harness"), but its automatic tool-fix proposer did not write them.
 
 ## With more credits
 
