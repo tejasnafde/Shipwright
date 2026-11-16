@@ -11,7 +11,8 @@
 
 Before the first run: `uv run --with playwright==1.65.2 playwright install chromium`, and round 16 in runs/:
 `scripts/pull_runs.py --owner mitushi --run <dir>` for r16-cand-train, r16-sft, r16-corrections, r16-round and
-chain-r16, `make pull-round-16` for the gate results, then `cp runs/r16-round/round.json runs/round-16.json` (the
+chain-r16, every gate's results from the Hub (`hub_runs.pull_gate_results(n, runs, candidate)` for gates 3 to 16;
+the History scene needs all twelve), then `cp runs/r16-round/round.json runs/round-16.json` (the
 control room lists a round only when runs/round-N.json exists). Keep no dry-run rounds in runs/, or the control room
 may open one of those instead. Nothing is staged: every screen is the control room reading the service's own files.
 
