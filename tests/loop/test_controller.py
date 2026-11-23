@@ -307,6 +307,19 @@ def test_a_corrections_start_stops_at_the_limit():
     assert result.status == controller.EXHAUSTED and fakes.calls == []
 
 
+def test_a_retrain_start_trains_the_same_recipe_on_a_larger_pool_without_corrections():
+    """start.retrain: data, train and gate only (no candidate run, no new corrections), the recipe unchanged."""
+    chain_config = roomy_config()
+    chain_config["gate"]["screen_bfcl"] = False
+    chain_config.update(start={"from_round": 17, "candidate": "configs/systems/r16-weight.yaml", "retrain": True},
+                        recipe={"tool_guards": True, "general_replay": 100, "corrections_rounds": 4})
+    fakes = Fakes(gate_decisions=[decision(True)])
+    result = run(fakes, rounds=1, chain_config=chain_config, start_decision=decision(True), start_adapter_round=17)
+    assert result.status == controller.PROMOTED
+    assert stages_of(fakes, 10) == ["data", "train", "gate"]
+    assert fakes.states[0]["recipe"].corrections_rounds == 4
+
+
 def test_the_r12_config_reaches_its_last_gate_inside_the_cap_at_realistic_costs():
     """Round 12 gate $1.42 (gate 10's real cost), then a corrections round at past real costs: the final gate must still
     be allowed to start, or the money would be spent on a round that never gets its verdict."""
