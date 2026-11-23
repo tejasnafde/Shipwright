@@ -21,7 +21,7 @@ has no further remedy. Nothing in it needs a person: every way it can end is one
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 from shipwright.loop import recipe as recipe_module
@@ -259,10 +259,12 @@ def run_chain(config: dict, rounds: int, hooks: Hooks, resolved_config: dict,
     Config ``start``: continue from a refused candidate instead of a fresh round. ``start_decision`` is its gate
     decision, ``start_adapter_round`` the round whose adapter it serves. With ``start.regate`` the first round only gates
     that candidate again (its old decision was measured on an older harness or a broken gate) and the remedy is chosen
-    from the new decision."""
+    from the new decision. With ``start.corrections`` the first round is a corrections round whatever the start decision
+    says: used to keep improving an adapter the gate already promoted (a promotion alone changes no recipe)."""
     state = ChainState(recipe=starting_recipe(config))
     start = config.get("start") or {}
     regate = bool(start.get("regate"))
+    another_corrections_round = bool(start.get("corrections"))
     if start:
         state.adapter_round = start_adapter_round
         state.candidate_system = start["candidate"]
@@ -277,6 +279,13 @@ def run_chain(config: dict, rounds: int, hooks: Hooks, resolved_config: dict,
         previous = state.recipe
         if round_index == 0 and regate:
             pass  # re-measure the start candidate on today's harness and gate before anything is trained
+        elif round_index == 0 and another_corrections_round:
+            if previous.corrections_rounds >= recipe_module.MAX_CORRECTION_ROUNDS:
+                return ChainResult(EXHAUSTED, f"start.corrections: {recipe_module.MAX_CORRECTION_ROUNDS} correction "
+                                   f"rounds are the limit", 0.0, results)
+            state.recipe = replace(previous, corrections=True, corrections_rounds=previous.corrections_rounds + 1,
+                                   reasons=[f"corrections round {previous.corrections_rounds + 1}, asked for by "
+                                            f"start.corrections: the start adapter's own failures become corrections"])
         elif not fresh:
             earlier = state.decisions[-2] if len(state.decisions) > 1 else None
             state.recipe = recipe_module.next_recipe(state.decisions[-1], previous, earlier)
