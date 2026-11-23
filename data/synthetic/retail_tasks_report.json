@@ -1,0 +1,33 @@
+{
+ "tried": 4310,
+ "no_fit": 2184,
+ "failed_verification": 10,
+ "leaked": 86,
+ "failures": {
+  "modify_pending_order_items failed": 3,
+  "exchange_delivered_order_items failed": 7
+ },
+ "kept": 600,
+ "kinds": {
+  "refuse_return": 52,
+  "exchange": 59,
+  "return": 71,
+  "refuse_cancel": 81,
+  "multi": 126,
+  "modify_items": 58,
+  "modify_address": 44,
+  "cancel": 57,
+  "user_address": 52
+ },
+ "writes": {
+  "0": 133,
+  "1": 341,
+  "2": 119,
+  "3": 6
+ },
+ "forbidden": {
+  "users": 31,
+  "orders": 96,
+  "items": 77
+ }
+}

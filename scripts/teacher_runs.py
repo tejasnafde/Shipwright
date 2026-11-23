@@ -114,6 +114,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Which tasks the teacher plays.
     parser.add_argument("--from-run", type=Path, default=None, help="run dir with failures.jsonl")
     parser.add_argument("--task-ids", nargs="*", default=None)
+    parser.add_argument("--task-split", default="train", choices=["train", "synthetic"],
+                        help="train (the official 74) or synthetic (data/synthetic/retail_tasks.json, training only)")
     parser.add_argument("--all-train", action="store_true", help="run every train task")
     parser.add_argument(
         "--routes", default=",".join(DEFAULT_ROUTES), help="with --from-run: the failure routes to replay"
@@ -212,7 +214,7 @@ def resolve_task_ids(teacher_options: argparse.Namespace) -> list[str] | None:
 def build_baseline_argv(teacher_options: argparse.Namespace, task_ids: list[str] | None) -> list[str]:
     """The baseline.py command line for a teacher run (always the train split)."""
     baseline_argv = [
-        "--task-split", "test" if is_ceiling_run(teacher_options) else "train",  # train, except the ceiling runs
+        "--task-split", "test" if is_ceiling_run(teacher_options) else teacher_options.task_split,  # never the test split
         "--trials", str(teacher_options.trials),
         "--agent-model", teacher_options.teacher_model,
         "--user-model", teacher_options.user_model,
