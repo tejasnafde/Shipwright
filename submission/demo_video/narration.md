@@ -41,6 +41,12 @@ points. All eight checks must pass.
 And the gate means it. Twelve gates, eleven refused, each for a reason the traces explain. AgentTune's own deployment
 check would have approved ten of those eleven. The loop shipped only when everything held.
 
+## update
+Then we kept going. Three more unattended rounds trained on synthetic tasks, each one replayed on the shop's database
+before it was kept, and none touching a held-out customer. The first batch taught the agent to guess order ids, and the
+gate refused it. Fixed, round nineteen solved thirteen percent against round sixteen's ten, held tool errors at eight
+percent, and is deployed now, under a revised gate where noisy checks advise and tool errors block.
+
 ## outro
 Shipwright. One command, an unattended round, a gate that can say no, and every number recomputed from public run
 files. Built on AgentTune and AuditKIT for the Lexsi Labs hackathon.

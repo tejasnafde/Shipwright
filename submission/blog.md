@@ -81,6 +81,7 @@ Running the self-healed student instead of the teacher's API for first-line reta
 - **The 8K window is the wall.** Tasks needing two or more changes stay unsolved; long conversations overflow. Compressing the history harder barely helped (15 → 13 overflowing runs offline); the overflow is a symptom of a stuck conversation, not its cause.
 - **The student acts more, so it also errs more:** 13% of its conversations made a wrong change, against 3% for the base (which mostly gives up) and 10% for the teacher.
 - **Small samples.** 3 extra passes in 60 is not significant on its own. Pooled over three gates, the round 7 adapter solved 17.2% vs 10% (13 paired wins, 0 losses), and 10% vs 0% on 20 hidden tasks opened once.
+- **Synthetic tasks help, if they look like the real ones (rounds 17–19).** A fourth correction round made things worse. Verified synthetic train tasks first taught the student that customers always know their order id, and its tool errors went from 6% to 34%; once the tasks described orders the way real customers do, round 19 reached 13.3% vs 10.0% with errors at 8%, and is now deployed. We also made the two noisiest gate checks advisory and added a blocking check on tool-call errors.
 - **Next, with more credit:** the same loop on **Aya Expanse 32B** (128K context), with Tiny Aya kept as the cheap first tier; a k-fold gate over 94 tasks instead of 20; and a teacher bake-off, since a student rarely passes its teacher.
 
 ## Links

@@ -144,6 +144,20 @@ footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line);
     <tr><td>BFCL, general tool calling</td><td>45</td><td><strong>73</strong></td></tr>
   </table></div>
 
+  <h2>Update, 25 Nov: rounds 17 to 19</h2>
+  <p>Three more unattended rounds, each gated on the same 20 held-out tasks × 3 against the deployed adapter. The new ingredient: verified <b>synthetic training tasks</b> built from the train tasks and the retail database, each replayed on the database before it is kept, with a tested guard that drops anything naming a held-out or hidden customer, order or item.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Round</th><th>What changed</th><th>pass^1 vs deployed</th><th>Tool-call errors</th><th>Decision</th></tr>
+    <tr><td>17</td><td>a 4th on-policy correction round</td><td>11.7% vs 18.3%</td><td>5.2% vs 4.0%</td><td>refused</td></tr>
+    <tr><td>18</td><td>+ 341 synthetic tasks</td><td>10.0% vs 10.0%</td><td>33.8% vs 6.3%</td><td>refused</td></tr>
+    <tr><td>19</td><td>synthetic tasks fixed (orders described, not given by id)</td><td><strong>13.3% vs 10.0%</strong></td><td>7.9% vs 6.3%</td><td><strong>promoted</strong></td></tr>
+  </table></div>
+  <ul>
+    <li><b>Round 18's lesson:</b> 548 of 600 synthetic tasks handed the agent the order id (8 of 74 real ones do), so it learned to guess ids; errors rose to 34%. Describing orders the way customers do fixed it.</li>
+    <li><b>A revised gate:</b> the targeted-labels and pass^1 checks are now advisory (the same adapter scored 18.3% and 10.0% in two gates), and a new check blocks any rise in tool-call errors above 5 points. AgentTune's gate, pass^k, BFCL and the rest still block.</li>
+    <li><b>Caveat:</b> +2 passing runs of 60 is not significant alone, round 19 was promoted under the revised rule, and it has not been run on the hidden split.</li>
+  </ul>
+
   <h2>Round 16's biggest jump: it uses tools like the teacher</h2>
   <p>Pass rates on 20 tasks are noisy, so we also measure how the agent works. tau2 stores the calls an expert makes for every task; we compare each conversation with that path and count the wasted calls (repeats with nothing changed in between, calls the shop rejected, calls our guards had to block) and the expert's steps the agent also took.</p>
   <figure>
@@ -179,7 +193,7 @@ footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line);
 
   <h2>Links</h2>
   <ul>
-    <li><a href="https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6">Models</a>: the adapter per round; <code>round-16</code> is the promoted one.</li>
+    <li><a href="https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-models-6af95bf1307f37a24ad807c6">Models</a>: the adapter per round; <code>round-19</code> is deployed (since 25 Nov); <code>round-16</code> was the first promoted.</li>
     <li><a href="https://huggingface.co/collections/mitushigoyal5/shipwright-self-healing-tiny-aya-datasets-6af95bf29994d1dfbba71cbb">Datasets</a>: training data, and every gate's traces and decision.</li>
     <li><a href="https://github.com/tejasnafde/Shipwright">Code on GitHub</a>, with the full write-up in <a href="https://github.com/tejasnafde/Shipwright/blob/main/submission/WRITEUP.md"><code>submission/WRITEUP.md</code></a>.</li>
     <li><a href="https://huggingface.co/spaces/mitushigoyal5/shipwright/resolve/main/video/shipwright-demo.mp4">Demo video</a> (3 min), also embedded above.</li>
