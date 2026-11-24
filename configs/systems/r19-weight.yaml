@@ -1,0 +1,23 @@
+# Written by shipwright.loop: round 19 candidate. Why: retrain asked for by start.retrain: the same recipe on a larger data.pool (new teacher runs)
+name: r19-weight
+model: CohereLabs/tiny-aya-global
+adapter:
+  repo: mitushigoyal5/shipwright-lora
+  revision: round-19
+route: weight_fix
+targets:
+- invented_id
+- tool_example_copied
+- loop
+- tool_error_ignored
+- unknown_tool
+- malformed_args
+- wrong_tool
+- bad_arguments
+- wrong_order
+- skipped_policy_step
+- invented_answer
+- premature_transfer
+tool_guards: true
+condensed_policy: false
+identity_note: false

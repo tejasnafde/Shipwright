@@ -124,3 +124,11 @@ def test_a_hidden_run_opens_the_hidden_tasks_on_both_systems_and_makes_no_decisi
     task_ids = command[command.index("--task-ids") + 1:command.index("--trials")]
     assert task_ids == splits.hidden_ids() and "--open-hidden" in command
     assert not set(task_ids) & set(splits.heldout_ids())
+
+
+def test_a_candidate_only_gate_job_passes_the_flag():
+    job = jobs.GateJob(round_number=19, current=ROOT / "configs" / "systems" / "base.yaml",
+                       candidate=ROOT / "configs" / "systems" / "r11-r7-fixes.yaml", user_model="u",
+                       runs_only=True, candidate_only=True)
+    arguments = jobs.gate_script_arguments(job, "gate/round-19/code/x.tar.gz")
+    assert "--runs-only" in arguments and "--candidate-only" in arguments

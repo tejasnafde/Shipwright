@@ -261,3 +261,25 @@ def test_a_runs_only_job_then_a_decision_outside_it(tmp_path):
     decision = json.loads((out / "gate_decision.json").read_text())
     assert code == 1 and decision["decision"] == "reject"  # too few runs: the gate never approves by default
     assert decision["systems"]["candidate"]["adapter"]["revision"] == "round-7" and decision["targets"]
+
+
+def test_a_candidate_only_job_reuses_the_current_systems_earlier_run(tmp_path):
+    """--candidate-only: the job runs only the candidate; the current system's run from an earlier gate is reused."""
+    earlier, out = tmp_path / "earlier", tmp_path / "gate"
+    assert gate_eval.main(["--round", "97", "--local-dry-run", "--runs-only", "--current", "configs/systems/base.yaml",
+                           "--candidate", "configs/systems/r11-r7-fixes.yaml", "--num-tasks", "1",
+                           "--output-dir", str(earlier)]) == 0
+    assert gate_eval.main(["--round", "98", "--local-dry-run", "--runs-only", "--candidate-only",
+                           "--current", "configs/systems/base.yaml", "--candidate", "configs/systems/r11-r7-fixes.yaml",
+                           "--num-tasks", "1", "--output-dir", str(out)]) == 0
+    assert (out / "r11-r7-fixes" / "traces.jsonl").exists() and not (out / "base").exists()
+    code = gate_eval.main(["--round", "98", "--current-run", str(earlier / "base"),
+                           "--candidate-run", str(out / "r11-r7-fixes"), "--reclassify", "--no-llm",
+                           "--systems-from", str(out / "gate_inputs.json"), "--output-dir", str(out)])
+    assert code in (0, 1) and (out / "gate_decision.json").exists()
+
+
+def test_candidate_only_needs_runs_only():
+    with pytest.raises(SystemExit):
+        gate_eval.parse_args(["--round", "1", "--local-dry-run", "--candidate-only", "--current",
+                              "configs/systems/base.yaml", "--candidate", "configs/systems/r11-r7-fixes.yaml"])

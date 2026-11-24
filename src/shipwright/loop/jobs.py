@@ -75,6 +75,7 @@ class GateJob:
     serve_mode: str | None = None
     namespace: str | None = None
     runs_only: bool = False             # gate: push the runs, classify and decide outside the job (the loop does)
+    candidate_only: bool = False        # with runs_only: run only the candidate (the current system's runs are reused)
 
     def results_prefix(self, candidate_name: str) -> str:
         """Where gate_eval.py pushes the results in the runs dataset."""
@@ -141,6 +142,8 @@ def gate_script_arguments(job: GateJob, code_bundle_path: str) -> list[str]:
         arguments.append("--hidden")
     if job.mode == "gate" and job.runs_only:
         arguments.append("--runs-only")
+        if job.candidate_only:
+            arguments.append("--candidate-only")
     return arguments
 
 
