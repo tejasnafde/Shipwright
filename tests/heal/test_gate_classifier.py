@@ -94,4 +94,6 @@ def test_frozen_thresholds_are_unchanged():
         "min_valid_runs": 54, "min_valid_run_fraction": 0.9, "min_complete_tasks": 18,
         "pass_1_max_drop": 0.0, "pass_k_max_drop": 0.0, "target_label_min_drop": 0.05,
         "non_target_max_increase": 0.05, "bfcl_max_drop_points": 2.0,
+        "tool_error_max_increase": 0.05,  # 2026-11-25, docs/evaluation.md
     }
+    assert GATE_CONFIG["advisory_checks"] == ["target", "pass_1"]  # 2026-11-25, docs/evaluation.md

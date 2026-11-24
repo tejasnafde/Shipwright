@@ -79,6 +79,7 @@ and judge models. A frozen value changes only with a dated entry here, written b
 | 2026-11-12 | the rule classifier also finds `premature_transfer` (a transfer before any attempt to authenticate); the label list is unchanged | the most common round 1 failure (37 of 59 valid runs) was counted by no rule, so no candidate could target it |
 | 2026-11-13 | `classify.classifier_model`: AgentTune's `FailureClassifier` labels every failed run of both systems | with rules only, 28 of a candidate's 46 failures were unlabelled and counted as a new kind; the base had the same failure hidden under tool-error labels. Gates before this change are not comparable on `target` / `non_target` |
 | 2026-11-14 | classification moved out of the GPU job into Cloud Run (no config change) | the Vertex token minted at job launch expired before classification in two gates, so their label checks were not measurements |
+| 2026-11-25 | `advisory_checks: [target, pass_1]` (reported, no longer blocking); new blocking check `tool_errors`: tool-call error rate may rise by at most 5 points | on 20 tasks x 3 these two checks are mostly noise (round 16 scored pass^1 0.183 and 0.100 in two gates); a tool-calling regression (round 18: 34% vs 6% errors at equal pass rate) was caught only by `target` |
 
 Every decision records the gate's `config_sha` (a hash of its parsed values): `c807805003a25bcc` for gates 3 to 8,
 `9e811350bc846a6d` for gates 10 to 16 (after the classifier change). Comments in the file do not change it.

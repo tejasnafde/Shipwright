@@ -1,0 +1,21 @@
+# Written by shipwright.loop: round 16 candidate. Why: corrections round 3: the checks still fail and the gate improved (first comparison to (6, 0.13333333333333333)); the adapter's own failures become the next corrections
+name: r16-weight
+model: CohereLabs/tiny-aya-global
+adapter:
+  repo: mitushigoyal5/shipwright-lora
+  revision: round-16
+route: weight_fix
+targets:
+- invented_id
+- tool_example_copied
+- loop
+- tool_error_ignored
+- unknown_tool
+- malformed_args
+- wrong_tool
+- bad_arguments
+- wrong_order
+- skipped_policy_step
+- invented_answer
+- premature_transfer
+tool_guards: true

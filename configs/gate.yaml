@@ -33,6 +33,12 @@ thresholds:
   target_label_min_drop: 0.05     # target-label failure rate must drop by >= 5 points (3 of 60 runs); a tie rejects
   non_target_max_increase: 0.05   # other failure labels may rise by at most 5 points, 3 of 60 runs (null: off)
   bfcl_max_drop_points: 2.0       # BFCL accuracy may drop by at most 2 points
+  tool_error_max_increase: 0.05   # since 2026-11-25: tool-call error rate may rise by at most 5 points (null: off)
+
+# Since 2026-11-25 (docs/evaluation.md): these checks are reported but do not block a promotion. On 20 tasks x 3 they
+# are mostly noise (the same round 16 adapter scored pass^1 0.183 and 0.100 in two gates); AgentTune's gate, pass^k,
+# BFCL, non_target and tool_errors still block.
+advisory_checks: [target, pass_1]
 
 agenttune_gate:           # AgentTune DeploymentGate.evaluate_decision, an extra AND check (docs/pipeline/gate.md)
   task_regression_tol: 0.0  # pass rate on paired held-out runs may not drop; min_test_samples = the valid_runs floor

@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 DEFAULT_EPOCHS = 3.0
 DEFAULT_LEARNING_RATE = 2e-4
 DEFAULT_BOOST = 1
-MAX_CORRECTION_ROUNDS = 3  # the loop's own limit on correction rounds, so spend is bounded without anyone watching
+MAX_CORRECTION_ROUNDS = 4  # the loop's own limit on correction rounds, so spend is bounded without anyone watching
 REPLAY_STEP = 100  # general examples per BFCL category added each time the BFCL check fails
 SCENE_LABELS = ("loop", "context_overflow", "tool_error_ignored")  # a candidate that gets stuck in a conversation
 

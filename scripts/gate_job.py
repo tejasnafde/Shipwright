@@ -45,6 +45,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--runs-only", action="store_true",
                         help="the job runs both systems and pushes the runs; decide afterwards where Vertex tokens refresh"
                         " (gate_eval.py --current-run ... --reclassify --systems-from .../gate_inputs.json --push)")
+    parser.add_argument("--candidate-only", action="store_true",
+                        help="with --runs-only: run only the candidate. Reuse the current system's runs from an earlier"
+                        " gate on the same tasks (it did not change) and decide with --current-run/--candidate-run")
     parser.add_argument("--hidden", action="store_true",
                         help="no gate: both systems on the hidden tasks (opened once, for the final report)")
     parser.add_argument("--task-ids", nargs="*", default=None, help="with --train-eval")
@@ -74,7 +77,7 @@ def job_from_options(options: argparse.Namespace) -> jobs.GateJob:
                         timeout=options.timeout, mode=mode, task_ids=list(options.task_ids or []), trials=options.trials,
                         runs_repo=options.runs_repo, config=options.config.resolve(),
                         target_labels=options.target_label, serve_mode=options.serve_mode, namespace=options.namespace,
-                        runs_only=options.runs_only)
+                        runs_only=options.runs_only, candidate_only=options.candidate_only)
 
 
 def print_plan(job: jobs.GateJob, options: argparse.Namespace) -> bool:

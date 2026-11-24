@@ -115,6 +115,11 @@ def build_parser() -> argparse.ArgumentParser:
         " outside the job, where its Vertex token refreshes: a token minted at launch was dead by the time the job"
         " classified (gates 10 and 11: every classifier call answered 401, so non_target counted 'unclassified')",
     )
+    parser.add_argument(
+        "--candidate-only", action="store_true",
+        help="with --runs-only: serve and run only the candidate (tau2 and BFCL). The current system's runs from an"
+        " earlier gate on the same tasks are reused: decide with --current-run/--candidate-run",
+    )
     parser.add_argument("--systems-from", type=Path, default=None,
                         help="with --current-run: the job's gate_inputs.json, for the systems and targets recorded")
     parser.add_argument("--push", action="store_true",
@@ -145,6 +150,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     selected_mode_count = sum([gate_options.in_job, gate_options.local_dry_run, decide_only])
     if selected_mode_count != 1:
         parser.error("choose one mode: --in-job, --local-dry-run, or --current-run/--candidate-run")
+    if gate_options.candidate_only and not gate_options.runs_only:
+        parser.error("--candidate-only needs --runs-only (decide afterwards with --current-run/--candidate-run)")
     if not decide_only and not (gate_options.current and gate_options.candidate):
         parser.error("--current and --candidate system configs are required")
     if gate_options.in_job and not gate_options.user_model:
@@ -572,8 +579,8 @@ def serve_and_run(
     from shipwright.heal.systems import serve_plan
 
     serve_mode = (gate_config.get("serve") or {}).get("mode", "lora")
-    if gate_options.train_eval or gate_options.bfcl_screen:
-        systems = {"candidate": systems["candidate"]}  # no current system: there is no comparison
+    if gate_options.train_eval or gate_options.bfcl_screen or gate_options.candidate_only:
+        systems = {"candidate": systems["candidate"]}  # no current system run here: none, or an earlier run is reused
     system_by_name = {system["name"]: (role, system) for role, system in systems.items()}
     all_systems = list(systems.values())
     status_by_system: dict[str, dict] = {}
@@ -801,6 +808,8 @@ def evaluate_systems(gate_options: argparse.Namespace) -> int:
     if gate_options.local_dry_run:
         status_by_system = {}
         for role, system in systems.items():
+            if gate_options.candidate_only and role != "candidate":
+                continue
             run_directory = output_directory / system["name"]
             run_directory.mkdir(parents=True, exist_ok=True)
             baseline_exit_code = None

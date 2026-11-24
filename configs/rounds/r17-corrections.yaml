@@ -1,0 +1,103 @@
+# Round 17 (2026-11-24): a fourth round of on-policy corrections, continuing from round 16, the promoted adapter.
+#   shipwright run --config configs/rounds/r17-corrections.yaml --launch
+# Round 16 is deployed (promotions/ledger.jsonl). A promotion changes no recipe, so start.corrections asks for one more
+# corrections round: the round 16 adapter runs the train tasks with the guards on, the teacher answers at every turn
+# where it went wrong, and a fresh adapter trains on all four rounds' corrections. The gate compares it with the
+# deployed round 16 system, so it must beat round 16, not the base model. MAX_CORRECTION_ROUNDS is 4 for this round.
+round: 17
+rounds: 1                 # one remedy round, then stop
+owner: mitushi
+git_sha: null             # null: the image's commit, recorded. Set it to reproduce a run: the run refuses another commit.
+seed: 300
+
+frozen:
+  splits: configs/splits.yaml
+  gate: configs/gate.yaml
+
+start:                    # continue from round 16, the promoted adapter
+  from_round: 16
+  candidate: configs/systems/r16-weight.yaml
+  regate: false
+  corrections: true       # one more corrections round although round 16 was promoted
+
+recipe:                   # how the round 7 adapter was made (gates 5 to 7, docs/pipeline/loop.md)
+  tool_guards: true       # gate 6 on
+  general_replay: 100     # general function-calling examples per BFCL category (BFCL 35 to 72, gate 5)
+  boost: 1
+  corrections_rounds: 3   # rounds 9, 13 and 16 so far: start.corrections makes this round the 4th
+
+models:
+  agent: openai/CohereLabs/tiny-aya-global:cohere            # Tiny Aya Global on the HF router
+  user: openai/openai/gpt-oss-120b:deepinfra                 # user simulator and tau2 judge (the gate uses the same)
+  teacher: vertex/deepseek-ai/deepseek-v4.1-flash-maas
+  classifier: vertex/openai/gpt-oss-120b-maas                # AgentTune FailureClassifier
+
+baseline:                 # not run here (no fresh round); the config keeps the full shape
+  num_tasks: 0
+  trials: 1
+  max_concurrency: 10
+
+teacher:                  # not run here: the pool below is the teacher data
+  trials: 3
+  max_concurrency: 10
+
+candidate_train:          # the refused candidate on the train tasks the teacher can solve: its own failures
+  flavors: [a10g-large]   # one flavor per GPU stage: a fallback's dearer worst case would not leave room for the gate
+  timeout: 40m
+  trials: 1
+
+data:
+  repo: mitushigoyal5/shipwright-sft
+  pool:                   # teacher runs whose passes are training data (all DeepSeek V4.1 Flash, train split)
+    - tejas/r1-teacher-t1
+    - tejas/r1-teacher-all-t2
+    - tejas/r1-teacher-ds-a
+    - tejas/r1-teacher-ds-b
+    - tejas/r1-teacher-ds-c
+    - tejas/bake-dsv41flash
+    - ishank/r2-teacher
+    - ishank/r3-teacher
+    - tejas/r9-teacher
+    - mitushi/r10-teacher  # made after the user-simulator leak fix
+  corrections_pool:       # on-policy corrections of the round 8 candidate (the round 7 adapter with guards)
+    - tejas/r9-corrections
+    - ishank/r13-corrections   # corrections of the round 7 adapter + guards (round 13 trained on them)
+    - mitushi/r16-corrections  # corrections of the round 13 adapter + guards (round 16 trained on them)
+
+train:
+  output_repo: mitushigoyal5/shipwright-lora
+  flavors: [l40sx1]
+  timeout: 45m
+  epochs: 2               # round 9: 2 epochs at 1e-4 from the base model
+  learning_rate: 0.0001
+  extra_args: []
+  require_trigger: true
+
+gate:
+  runs_repo: mitushigoyal5/shipwright-runs
+  candidate_template: configs/systems/r11-r7-fixes.yaml       # targets of a trained candidate; name, adapter, guards set
+  flavors: [a10g-large]   # a queued job is not billed: waiting for an A10G costs time, not money
+  timeout: 60m
+  screen_bfcl: false      # BFCL held at 71 to 73 in gates 8 to 11; its $0.90 worst case does not fit the cap
+  screen_timeout: 30m
+  api_usd: 0.6
+
+stop:
+  max_infra_error_rate: 0.25
+  min_sft_examples: 40
+  retries: 1
+
+spend:                    # USD caps; a stage starts only if its cap plus what is spent fits in total
+  baseline: 2.0           # not run
+  candidate_train: 1.0    # worst case a10g-large $1.50/h x 40m
+  classify: 0.3
+  teacher: 2.0            # not run
+  corrections: 0.4
+  data: 0.0
+  train: 1.4              # worst case l40sx1 $1.80/h x 45m = $1.35
+  bfcl_screen: 1.0        # not run
+  gate: 2.1               # worst case a10g-large $1.50/h x 1h + $0.60 of simulator (gate 10 really cost $1.42)
+  total: 5.0             # approved 2026-11-24: one corrections round from round 16 (round 16 cost $3.89)
+
+cloud:
+  task_timeout: 8h

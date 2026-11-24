@@ -275,8 +275,8 @@ def scene_history(director: Director, duration: float) -> None:
 
 APP_SCENES = {"control_room": scene_control_room, "what_changed": scene_what_changed,
               "corrections": scene_corrections, "gate": scene_gate, "history": scene_history}
-CARD_SCENES = ("title", "loop", "outro")
-ORDER = ("title", "loop", "control_room", "what_changed", "corrections", "gate", "history", "outro")
+CARD_SCENES = ("title", "loop", "update", "outro")
+ORDER = ("title", "loop", "control_room", "what_changed", "corrections", "gate", "history", "update", "outro")
 
 
 def record_app_scene(browser, scene: str, duration: float, url: str, work: Path) -> Path:
@@ -363,6 +363,14 @@ def card_html(scene: str) -> str:
         body = f"""<div class="wrap" style="padding-top:80px"><div class="eyebrow">How a round works</div>
 <h2>Run &rarr; detect &rarr; classify &rarr; route by cause &rarr; fix &rarr; gate &rarr; promote or refuse</h2>
 <img class="loop" src="{diagram}"></div>"""
+    elif scene == "update":
+        body = """<div class="wrap"><div class="eyebrow">Update &middot; 25 Nov &middot; rounds 17&ndash;19</div>
+<h2>Synthetic training tasks,<br>each verified before it is used</h2>
+<div class="stats"><div class="stat"><div class="num">600</div><div class="cap">tasks replayed on the shop's database</div></div>
+<div class="stat"><div class="num">34% &rarr; 8%</div><div class="cap">tool errors, once orders were described</div></div>
+<div class="stat"><div class="num">13.3% vs 10%</div><div class="cap">round 19 vs round 16, now deployed</div></div></div>
+<p style="margin-top:56px;font-size:32px">Promoted under a revised gate: noisy checks advise, tool-call errors block.</p></div>
+<div class="foot"><span>Held-out tasks only; the hidden split stays closed</span><span>AgentTune &middot; AuditKIT</span></div>"""
     else:
         body = """<div class="wrap"><div class="eyebrow">Shipwright</div>
 <h2>One command. An unattended round.<br>A gate that can say no.</h2>

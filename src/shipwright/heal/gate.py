@@ -79,6 +79,13 @@ def validate_config(gate_config: dict) -> dict:
     if not 0 < thresholds["min_valid_run_fraction"] <= 1:
         raise ValueError("thresholds.min_valid_run_fraction must be in (0, 1]")
 
+    advisory = gate_config.get("advisory_checks") or []
+    if not isinstance(advisory, list) or {"comparable", "valid_runs", "agenttune_gate"} & set(advisory):
+        raise ValueError("advisory_checks must be a list and may not include comparable, valid_runs or agenttune_gate")
+    tool_error_max = thresholds.get("tool_error_max_increase")
+    if tool_error_max is not None and (not isinstance(tool_error_max, (int, float)) or tool_error_max < 0):
+        raise ValueError("thresholds.tool_error_max_increase must be a number >= 0 or null")
+
     task_tolerance = agenttune_task_tol(gate_config)
     if not isinstance(task_tolerance, (int, float)) or task_tolerance < 0:
         raise ValueError("agenttune_gate.task_regression_tol must be a number >= 0")
@@ -267,6 +274,19 @@ def check_bfcl(current: dict, candidate: dict, gate_config: dict) -> dict:
     )
 
 
+def check_tool_errors(current: dict, candidate: dict, max_increase: float) -> dict:
+    """The candidate's tool-call error rate may rise by at most ``max_increase``: a pass rate on 20 tasks cannot see a
+    broken tool-calling habit (round 18: 34% vs 6% at an equal pass rate)."""
+    current_rate, candidate_rate = current.get("tool_call_error_rate"), candidate.get("tool_call_error_rate")
+    if not (_is_number(current_rate) and _is_number(candidate_rate)):
+        return _check("tool_errors", False, "tool-call error rate missing")
+    increase = candidate_rate - current_rate
+    passed = increase <= max_increase + 1e-9
+    detail = (f"tool-call error rate {candidate_rate:.4f} vs {current_rate:.4f}: "
+              f"{'+' if increase >= 0 else ''}{increase:.4f} (max increase {max_increase})")
+    return _check("tool_errors", passed, detail, current=current_rate, candidate=candidate_rate)
+
+
 def check_agenttune(current: dict, candidate: dict, gate_config: dict) -> dict:
     from shipwright.heal.agenttune_bridge import agenttune_gate_check
 
@@ -303,16 +323,23 @@ def decide(
         check_target(current, candidate, targets, thresholds["target_label_min_drop"]),
         check_non_target(current, candidate, targets, thresholds["non_target_max_increase"]),
         check_bfcl(current, candidate, gate_config),
-        check_agenttune(current, candidate, gate_config),
     ]
-    failed_checks = [check for check in checks if not check["passed"]]
+    if thresholds.get("tool_error_max_increase") is not None:
+        checks.append(check_tool_errors(current, candidate, thresholds["tool_error_max_increase"]))
+    checks.append(check_agenttune(current, candidate, gate_config))
+    advisory = set(gate_config.get("advisory_checks") or [])
+    for check in checks:
+        if check["name"] in advisory:
+            check["advisory"] = True
+    failed_checks = [check for check in checks if not check["passed"] and not check.get("advisory")]
 
-    warnings = []
+    warnings = [f"advisory check {check['name']} failed (it does not block): {check['detail']}"
+                for check in checks if check.get("advisory") and not check["passed"]]
     if gate_config.get("status") != "frozen":
         warnings.append("gate config status is 'proposed': the team has not frozen it yet")
 
     agenttune_check = checks[-1]
-    failed_threshold_checks = [check for check in checks[:-1] if not check["passed"]]
+    failed_threshold_checks = [check for check in checks[:-1] if not check["passed"] and not check.get("advisory")]
     if failed_checks:
         decision = "reject"
         reasons = [check["detail"] for check in failed_checks]

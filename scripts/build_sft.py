@@ -107,9 +107,10 @@ def read_json_lines(path: Path) -> list[dict]:
 
 
 def check_train_split(run_directory: Path, task_split: str | None, allow_split: bool) -> None:
-    if task_split != "train" and not allow_split:
+    # "synthetic" tasks are generated from the train split and checked to share nothing with held-out or hidden tasks
+    if task_split not in ("train", "synthetic") and not allow_split:
         raise SystemExit(
-            f"{run_directory}: task_split is {task_split!r}, not 'train'. Never train on held-out tasks."
+            f"{run_directory}: task_split is {task_split!r}, not 'train' or 'synthetic'. Never train on held-out tasks."
         )
 
 

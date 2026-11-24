@@ -376,6 +376,10 @@ def prepare(
     from shipwright.observability import repro
 
     check_task_split(run_options)
+    if run_options.task_split == "synthetic":  # Shipwright's verified training tasks (scripts/make_synthetic_tasks.py)
+        from shipwright.heal import synthetic_tasks
+
+        synthetic_tasks.register_split()
     log.note_repro(**repro.models_from_args(run_options), dry_run=run_options.dry_run)
     logger.info(
         "run start",

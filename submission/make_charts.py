@@ -83,21 +83,25 @@ def wasted_calls(t):
 
 def gates(t):
     # Gate decisions (configs/gate.yaml): candidate pass^1 per gate; the base scored 10% in all but gate 4 (12%).
-    numbers = [3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16]
-    candidate = [15, 7, 13, 13, 13, 23.3, 12, 13.3, 15, 15, 13.3, 15]
-    why = {3: "forgot tools", 4: "worse", 8: "overflow", 12: "overflow", 13: "overflow", 14: "overflow"}
+    numbers = [3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 17, 18, 19]
+    candidate = [15, 7, 13, 13, 13, 23.3, 12, 13.3, 15, 15, 13.3, 15, 11.7, 10, 13.3]  # 17-19: gated vs the deployed adapter
+    why = {3: "forgot tools", 4: "worse", 8: "overflow", 12: "overflow", 13: "overflow", 14: "overflow", 17: "worse", 18: "tool errors"}
     fig, ax = plt.subplots(figsize=(10, 4.4), facecolor=t["surface"])
     style(ax, t)
     x = list(range(len(numbers)))
     ax.axhline(10, color=t["muted"], linewidth=1.2, linestyle=(0, (4, 3)))
-    ax.text(len(x) - 0.55, 10.6, "base 10%", color=t["muted"], fontsize=9, ha="right")
+    ax.text(-0.45, 8.4, "base 10%", color=t["muted"], fontsize=9, ha="left")
     for i, (gate, value) in enumerate(zip(numbers, candidate)):
-        promoted = gate == 16
+        promoted = gate in (16, 19)
         ax.plot([i], [value], marker="o", markersize=11 if promoted else 9,
                 color=t["accent"] if promoted else t["surface"],
                 markeredgecolor=t["accent"] if promoted else t["context"], markeredgewidth=2, linestyle="none")
-        if promoted:
-            ax.annotate("promoted: 8 of 8 checks,\nno person in the loop", (i, value), xytext=(i - 0.1, 26.5),
+        if gate == 19:
+            ax.annotate("promoted under the\nrevised gate (25 Nov)", (i, value), xytext=(i - 0.3, 25.5),
+                        textcoords="data", ha="right", va="center", fontsize=9, color=t["text"],
+                        arrowprops={"arrowstyle": "-", "color": t["muted"], "linewidth": 1})
+        elif promoted:
+            ax.annotate("promoted: 8 of 8 checks,\nno person in the loop", (i, value), xytext=(i - 1.6, 27.5),
                         textcoords="data", ha="right", va="center", fontsize=10, color=t["text"], fontweight="bold",
                         arrowprops={"arrowstyle": "-", "color": t["muted"], "linewidth": 1})
         elif gate in why:
@@ -106,8 +110,8 @@ def gates(t):
     ax.set_xticks(x, [f"gate {g}" for g in numbers], fontsize=9)
     ax.set_ylim(0, 30)
     ax.set_yticks([0, 10, 20, 30], ["0", "10", "20", "30%"])
-    title(fig, t, "Eleven refusals, then an unattended promotion",
-          "Candidate task success per gate. Hollow: refused by our 8-check gate (AgentTune's gate alone would have approved 10 of the 11).")
+    title(fig, t, "Eleven refusals, an unattended promotion, then three more rounds",
+          "Candidate task success per gate; hollow = refused. Gates 17-19 were gated against the deployed adapter.")
     fig.subplots_adjust(left=0.06, right=0.98, top=0.78, bottom=0.12)
     return fig
 

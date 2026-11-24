@@ -9,6 +9,7 @@ import yaml
 from shipwright.heal import promotion
 from shipwright.loop import config as config_module
 from shipwright.loop import controller
+from shipwright.loop import recipe as recipe_module
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -283,6 +284,40 @@ def test_a_regate_start_measures_the_candidate_again_then_picks_the_remedy_from_
     assert stages_of(fakes, 10) == ["gate"] and fakes.states[0]["adapter_round"] == 7
     assert stages_of(fakes, 11) == controller.CORRECTION_STAGES
     assert fakes.states[1]["recipe"].corrections_rounds == 2 and fakes.states[1]["adapter_round"] == 11
+
+
+def test_a_corrections_start_keeps_improving_a_promoted_adapter():
+    """A promotion changes no recipe, so start.corrections asks for one more corrections round from the promoted one."""
+    chain_config = roomy_config()
+    chain_config.update(start={"from_round": 16, "candidate": "configs/systems/r16-weight.yaml", "corrections": True},
+                        recipe={"tool_guards": True, "general_replay": 100, "corrections_rounds": 3})
+    fakes = Fakes(gate_decisions=[decision(True)])
+    result = run(fakes, rounds=1, chain_config=chain_config, start_decision=decision(True), start_adapter_round=16)
+    assert result.status == controller.PROMOTED
+    assert stages_of(fakes, 10) == controller.CORRECTION_STAGES
+    assert fakes.states[0]["recipe"].corrections_rounds == 4  # and the round trains its own adapter (round 10 here)
+
+
+def test_a_corrections_start_stops_at_the_limit():
+    chain_config = roomy_config()
+    chain_config.update(start={"from_round": 16, "candidate": "configs/systems/r16-weight.yaml", "corrections": True},
+                        recipe={"tool_guards": True, "corrections_rounds": recipe_module.MAX_CORRECTION_ROUNDS})
+    fakes = Fakes()
+    result = run(fakes, rounds=1, chain_config=chain_config, start_decision=decision(True), start_adapter_round=16)
+    assert result.status == controller.EXHAUSTED and fakes.calls == []
+
+
+def test_a_retrain_start_trains_the_same_recipe_on_a_larger_pool_without_corrections():
+    """start.retrain: data, train and gate only (no candidate run, no new corrections), the recipe unchanged."""
+    chain_config = roomy_config()
+    chain_config["gate"]["screen_bfcl"] = False
+    chain_config.update(start={"from_round": 17, "candidate": "configs/systems/r16-weight.yaml", "retrain": True},
+                        recipe={"tool_guards": True, "general_replay": 100, "corrections_rounds": 4})
+    fakes = Fakes(gate_decisions=[decision(True)])
+    result = run(fakes, rounds=1, chain_config=chain_config, start_decision=decision(True), start_adapter_round=17)
+    assert result.status == controller.PROMOTED
+    assert stages_of(fakes, 10) == ["data", "train", "gate"]
+    assert fakes.states[0]["recipe"].corrections_rounds == 4
 
 
 def test_the_r12_config_reaches_its_last_gate_inside_the_cap_at_realistic_costs():

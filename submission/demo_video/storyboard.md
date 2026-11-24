@@ -13,7 +13,8 @@ own run files; nothing is staged. The words are in `narration.md`; `build_demo.p
 | 5 | `corrections` | Fix & Train tab: on-policy corrections, the guard table, task 28's correction side by side | every call a guard blocked became a lesson: the student's made-up `#W1234567` against the teacher's lookup of the real customer; 59 new corrections this round for $0.12, 235 across all three rounds |
 | 6 | `gate` | Gate & Outcome tab: PROMOTED, the eight tests in plain words, the measured deltas | same 20 held-out tasks, 3 trials each, all eight checks must pass; BFCL 45 to 73 |
 | 7 | `history` | History tab: every gate, base against candidate, why each refusal happened | 12 gates, 11 refused; AgentTune's own check alone would have approved 10 of those 11 |
-| 8 | `outro` | Closing card: $3.89, 11 refusals first, hidden split 0% to 10%, `python scripts/reproduce.py`, team | one command, a gate that can say no, numbers anyone can recompute |
+| 8 | `update` | Card: rounds 17–19, 600 verified synthetic tasks, tool errors 34% → 8% once orders were described, round 19 13.3% vs round 16 10.0%, now deployed under the revised gate | synthetic data helps when it looks like the real tasks; the gate still decides |
+| 9 | `outro` | Closing card: $3.89, 11 refusals first, hidden split 0% to 10%, `python scripts/reproduce.py`, team | one command, a gate that can say no, numbers anyone can recompute |
 
 ## Production notes
 
