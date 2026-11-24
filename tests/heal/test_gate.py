@@ -298,3 +298,35 @@ def test_paired_test_set_counts_only_shared_decided_trials():
                                       {"1": {"n_success": 1, "n_decided": 2}, "3": {"n_success": 3, "n_decided": 3}})
     assert [c["pipeline_id"] for c in cases] == ["1#0", "1#1"]
     assert old == {"1#0": "PASS", "1#1": "PASS"} and new == {"1#0": "PASS", "1#1": "FAIL"}
+
+
+def looser_cfg():
+    c = cfg(tool_error_max_increase=0.05)
+    c["advisory_checks"] = ["target", "pass_1"]
+    return c
+
+
+def test_advisory_checks_warn_but_do_not_block():
+    """Round 19's shape: a tie on the target labels and on pass^1 no longer blocks; AgentTune and the rest decide."""
+    current = metrics(pass_1=0.3, n_target=30, tool_call_error_rate=0.063)
+    candidate = metrics(pass_1=0.3, n_target=29, tool_call_error_rate=0.079)
+    d = g.decide(current, candidate, looser_cfg(), ["tool_example_copied"])
+    assert d["decision"] == "promote", d["reasons"]
+    assert not check(d, "target")["passed"] and check(d, "target")["advisory"]
+    assert any("advisory check target failed" in w for w in d["warnings"])
+    assert d["verdicts"]["auditkit_thresholds"]["passed"]
+
+
+def test_a_tool_error_rise_blocks():
+    """Round 18's shape: equal pass rate, tool-call errors 34% vs 6%."""
+    current = metrics(n_target=30, tool_call_error_rate=0.063)
+    candidate = metrics(n_target=10, tool_call_error_rate=0.338)
+    d = g.decide(current, candidate, looser_cfg(), ["tool_example_copied"])
+    assert d["decision"] == "reject" and not check(d, "tool_errors")["passed"]
+
+
+def test_the_agenttune_gate_cannot_be_made_advisory():
+    c = looser_cfg()
+    c["advisory_checks"] = ["agenttune_gate"]
+    with pytest.raises(ValueError):
+        g.validate_config(c)

@@ -1,8 +1,8 @@
 # Written by shipwright.loop: the deployed system, from the promotion ledger. Do not edit.
-name: promoted-r16
+name: promoted-r19
 model: CohereLabs/tiny-aya-global
 adapter:
   repo: mitushigoyal5/shipwright-lora
-  revision: round-16
+  revision: round-19
 route: weight_fix
 tool_guards: true
