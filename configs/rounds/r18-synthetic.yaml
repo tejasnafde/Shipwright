@@ -19,6 +19,7 @@ start:                    # continue from round 16, the promoted adapter
   candidate: configs/systems/r16-weight.yaml
   regate: false
   retrain: true           # same recipe, larger data.pool: no candidate run, no new corrections
+  failures_run: mitushi/r17-cand-train  # round 16's adapter on the train tasks, classified (round 17): the trigger's input
 
 recipe:                   # how the round 7 adapter was made (gates 5 to 7, docs/pipeline/loop.md)
   tool_guards: true       # gate 6 on
