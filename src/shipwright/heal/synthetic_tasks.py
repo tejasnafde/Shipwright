@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[3]
 RETAIL_DATA = ROOT / "third_party" / "tau2-bench" / "data" / "tau2" / "domains" / "retail"
 SYNTHETIC_PATH = ROOT / "data" / "synthetic" / "retail_tasks.json"
 SPLIT_NAME = "synthetic"
+ORDER_ID_SHARE = 0.15  # share of order mentions that give the id (official train tasks: 8 of 74)
 WRITE_TOOLS = ("cancel_pending_order", "modify_pending_order_address", "modify_pending_order_items",
                "return_delivered_order_items", "exchange_delivered_order_items", "modify_user_address")
 ORDER_ID = re.compile(r"#W\d{7}")
@@ -100,22 +101,22 @@ STYLES = ["You are polite but in a hurry.", "You are detail-oriented and want ev
           "You are a bit frustrated but cooperative.", "You are friendly and chatty.",
           "You are cautious and ask the agent to confirm before anything changes.",
           "You keep answers short and only share details when asked."]
-CANCEL = ["You want to cancel order {order} because {why}.", "Please cancel your order {order}: {why}.",
-          "You placed order {order} and now want it cancelled, since {why}."]
+CANCEL = ["You want to cancel {order} because {why}.", "Please cancel {order}: {why}.",
+          "You placed {order} and now want it cancelled, since {why}."]
 REASONS = {"no longer needed": "you no longer need it", "ordered by mistake": "you ordered it by mistake"}
-RETURN = ["You received order {order} and want to return the {items}. Refund it to {pay}.",
-          "You'd like to send back the {items} from order {order}; the refund should go to {pay}."]
-EXCHANGE = ["You received order {order} and want to exchange the {old} for one with {new}.",
-            "In order {order}, swap the {old} for the version with {new}."]
-MODIFY = ["Your order {order} hasn't shipped yet; change the {old} to the one with {new}.",
-          "Before order {order} ships, you want the {old} switched to {new}."]
-ADDRESS = ["You moved: send order {order} to {address} instead.",
-           "Please update the shipping address of order {order} to {address}."]
+RETURN = ["You received {order} and want to return the {items}. Refund it to {pay}.",
+          "You'd like to send back the {items} from {order}; the refund should go to {pay}."]
+EXCHANGE = ["You received {order} and want to exchange the {old} for one with {new}.",
+            "In {order}, swap the {old} for the version with {new}."]
+MODIFY = ["{order} hasn't shipped yet; change the {old} to the one with {new}.",
+          "Before {order} ships, you want the {old} switched to {new}."]
+ADDRESS = ["You moved: send {order} to {address} instead.",
+           "Please update the shipping address of {order} to {address}."]
 USER_ADDRESS = ["You moved and want your account's default address changed to {address}.",
                 "Update the address on your profile to {address}."]
-REFUSE = {"refuse_cancel": "You want to cancel order {order} (it has already been {status}). If the agent says it "
+REFUSE = {"refuse_cancel": "You want to cancel {order} (it has already been {status}). If the agent says it "
                            "cannot, accept that and end the conversation.",
-          "refuse_return": "You want to return the {items} from order {order}, which has not been delivered yet. If the "
+          "refuse_return": "You want to return the {items} from {order}, which has not been delivered yet. If the "
                            "agent says it cannot, accept that and end the conversation."}
 NEW_ADDRESSES = [("17 Elm Street", "Apt 4", "Austin", "TX", "USA", "78701"),
                  ("902 Lakeview Drive", "", "Columbus", "OH", "USA", "43004"),
@@ -169,6 +170,18 @@ class Builder:
                    and v["item_id"] not in self.forbidden.item_ids]
         return self.rng.choice(choices) if choices else None
 
+    def order_ref(self, order: dict) -> str:
+        """How the customer names the order. Official train tasks give the id in 8 of 74; customers mostly describe
+        the order, so the agent must list the user's orders and find it. A description names a product that no other
+        order of the user contains; without one the id is given."""
+        if self.rng.random() >= ORDER_ID_SHARE:
+            others = {item["name"] for o in self.db["users"][order["user_id"]]["orders"] if o != order["order_id"]
+                      for item in self.db["orders"].get(o, {}).get("items", [])}
+            only_here = sorted({item["name"] for item in order["items"]} - others)
+            if only_here:
+                return f"the order with the {self.rng.choice(only_here)}"
+        return f"order {order['order_id']}"
+
     def lookups(self, order: dict) -> list[dict]:
         return [action("get_order_details", order_id=order["order_id"])]
 
@@ -177,7 +190,7 @@ class Builder:
         if not order:
             return None
         reason = self.rng.choice(list(REASONS))
-        text = self.rng.choice(CANCEL).format(order=order["order_id"], why=REASONS[reason])
+        text = self.rng.choice(CANCEL).format(order=self.order_ref(order), why=REASONS[reason])
         return Draft("cancel", user_id, [text], self.lookups(order) + [
             action("cancel_pending_order", order_id=order["order_id"], reason=reason)], 1)
 
@@ -186,7 +199,7 @@ class Builder:
         if not order:
             return None
         new = self.rng.choice(NEW_ADDRESSES)
-        text = self.rng.choice(ADDRESS).format(order=order["order_id"], address=address_text(new))
+        text = self.rng.choice(ADDRESS).format(order=self.order_ref(order), address=address_text(new))
         return Draft("modify_address", user_id, [text], self.lookups(order) + [
             action("modify_pending_order_address", order_id=order["order_id"], **address_arguments(new))], 1)
 
@@ -199,7 +212,7 @@ class Builder:
         if not pairs:
             return None
         pairs = self.rng.sample(pairs, k=min(len(pairs), self.rng.choice([1, 1, 2])))
-        texts = [self.rng.choice(templates).format(order=order["order_id"], old=f"{old['name']} ({describe(old['options'])})",
+        texts = [self.rng.choice(templates).format(order=self.order_ref(order), old=f"{old['name']} ({describe(old['options'])})",
                                                    new=option_change(old["options"], new["options"])) for old, new in pairs]
         products = [action("get_product_details", product_id=old["product_id"]) for old, _ in pairs]
         return Draft(kind, user_id, [" ".join(texts) + " Keep the same payment method."],
@@ -213,7 +226,7 @@ class Builder:
         if not order:
             return None
         items = self.rng.sample(order["items"], k=min(len(order["items"]), self.rng.choice([1, 1, 2])))
-        text = self.rng.choice(RETURN).format(order=order["order_id"], items=" and the ".join(i["name"] for i in items),
+        text = self.rng.choice(RETURN).format(order=self.order_ref(order), items=" and the ".join(i["name"] for i in items),
                                               pay="the original payment method")
         return Draft("return", user_id, [text], self.lookups(order) + [
             action("return_delivered_order_items", order_id=order["order_id"], item_ids=[i["item_id"] for i in items],
@@ -231,12 +244,12 @@ class Builder:
             order = self.pick(self.usable_orders(user_id, "delivered") + self.usable_orders(user_id, "processed"))
             if not order:
                 return None
-            text = REFUSE["refuse_cancel"].format(order=order["order_id"], status=order["status"])
+            text = REFUSE["refuse_cancel"].format(order=self.order_ref(order), status=order["status"])
             return Draft("refuse_cancel", user_id, [text], self.lookups(order), 0)
         order = self.pick(self.usable_orders(user_id, "pending"))
         if not order:
             return None
-        text = REFUSE["refuse_return"].format(order=order["order_id"], items=order["items"][0]["name"])
+        text = REFUSE["refuse_return"].format(order=self.order_ref(order), items=order["items"][0]["name"])
         return Draft("refuse_return", user_id, [text], self.lookups(order), 0)
 
     def multi(self, user_id):
@@ -274,6 +287,11 @@ def action(name: str, **arguments) -> dict:
     return {"name": name, "arguments": arguments}
 
 
+def join_requests(requests: list[str]) -> str:
+    requests = [r[0].upper() + r[1:] for r in requests]
+    return " ".join([requests[0]] + [f"Separately, {r[0].lower()}{r[1:]}" for r in requests[1:]])
+
+
 def to_task(draft: Draft, number: int, db: dict, rng: random.Random) -> dict:
     user = db["users"][draft.user_id]
     if rng.random() < 0.5:
@@ -284,6 +302,8 @@ def to_task(draft: Draft, number: int, db: dict, rng: random.Random) -> dict:
     else:
         known, unknown = f"Your email is {user['email']}.", "You do not know your user id."
         auth = action("find_user_id_by_email", email=user["email"])
+    if not any(ORDER_ID.search(r) for r in draft.requests):
+        unknown += " You do not remember any order ids."
     actions = [auth] + draft.actions
     task_id = f"syn-{number:04d}"
     return {
@@ -292,7 +312,7 @@ def to_task(draft: Draft, number: int, db: dict, rng: random.Random) -> dict:
                         "notes": "Shipwright synthetic training task (scripts/make_synthetic_tasks.py)"},
         "user_scenario": {"persona": None, "instructions": {
             "task_instructions": rng.choice(STYLES), "domain": "retail",
-            "reason_for_call": " Also, ".join(draft.requests), "known_info": known, "unknown_info": unknown}},
+            "reason_for_call": join_requests(draft.requests), "known_info": known, "unknown_info": unknown}},
         "initial_state": None,
         "evaluation_criteria": {"actions": [dict(a, action_id=f"{task_id}_{n}", info=None) for n, a in enumerate(actions)],
                                 "communicate_info": [], "nl_assertions": None, "reward_basis": ["DB"]},
@@ -336,7 +356,11 @@ def writes_of(task: dict) -> int:
 def refusal_holds(task: dict, tools) -> str | None:
     """The write a refusal task asks for must be one the tools reject (so refusing is the policy-correct answer)."""
     kind = kind_of(task)
-    order_id = ORDER_ID.search(task["user_scenario"]["instructions"]["reason_for_call"]).group(0)
+    lookups = [a["arguments"]["order_id"] for a in task["evaluation_criteria"]["actions"]
+               if a["name"] == "get_order_details"]
+    if not lookups:
+        return "a refusal task needs the order lookup"
+    order_id = lookups[0]
     order = tools.db.orders[order_id]
     try:
         if kind == "refuse_cancel":

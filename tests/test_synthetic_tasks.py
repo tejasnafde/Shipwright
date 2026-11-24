@@ -75,3 +75,12 @@ def test_the_synthetic_split_loads_through_tau2(generated, tmp_path):
         assert len(registry.get_tasks_loader("retail")("train")) == 74  # the official splits are unchanged
     finally:
         registry._tasks["retail"], registry._task_splits["retail"] = saved_tasks, saved_splits
+
+
+def test_most_tasks_describe_the_order_instead_of_giving_its_id(generated):
+    """Official train tasks give an order id in 8 of 74: the agent must learn to find the order itself."""
+    tasks, _ = generated
+    giving_id = [t for t in tasks if st.ORDER_ID.search(t["user_scenario"]["instructions"]["reason_for_call"])]
+    assert len(giving_id) <= 0.35 * len(tasks)
+    described = [t for t in tasks if t not in giving_id]
+    assert all("do not remember any order ids" in t["user_scenario"]["instructions"]["unknown_info"] for t in described)

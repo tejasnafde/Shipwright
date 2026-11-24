@@ -1,28 +1,28 @@
 {
- "tried": 4310,
- "no_fit": 2184,
- "failed_verification": 10,
- "leaked": 86,
+ "tried": 4381,
+ "no_fit": 2236,
+ "failed_verification": 8,
+ "leaked": 91,
  "failures": {
-  "modify_pending_order_items failed": 3,
-  "exchange_delivered_order_items failed": 7
+  "modify_pending_order_items failed": 6,
+  "exchange_delivered_order_items failed": 2
  },
  "kept": 600,
  "kinds": {
-  "refuse_return": 52,
-  "exchange": 59,
-  "return": 71,
-  "refuse_cancel": 81,
-  "multi": 126,
-  "modify_items": 58,
-  "modify_address": 44,
-  "cancel": 57,
-  "user_address": 52
+  "return": 90,
+  "user_address": 46,
+  "refuse_return": 58,
+  "refuse_cancel": 79,
+  "cancel": 67,
+  "multi": 110,
+  "exchange": 54,
+  "modify_address": 48,
+  "modify_items": 48
  },
  "writes": {
-  "0": 133,
-  "1": 341,
-  "2": 119,
+  "0": 137,
+  "1": 353,
+  "2": 104,
   "3": 6
  },
  "forbidden": {
